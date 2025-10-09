@@ -11,5 +11,6 @@ FROM alpine:3.18
 WORKDIR /app
 COPY --from=builder /app/go-llama-backend .
 COPY --from=builder /app/frontend ./frontend
+COPY --from=builder /app/static ./static
 EXPOSE 8070
 CMD ["./go-llama-backend"]
