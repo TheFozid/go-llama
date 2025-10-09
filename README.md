@@ -56,18 +56,18 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
 To expose Go-LLama securely or behind a custom domain, use Nginx with a location block:
 
 ```nginx
-location /go-llama/ {
-    proxy_pass         http://localhost:8070/go-llama/;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+location /go-llama {
+    proxy_pass http://localhost:8070/go-llama;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_http_version 1.1;
-    proxy_set_header   Upgrade $http_upgrade;
-    proxy_set_header   Connection "upgrade";
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
 }
 ```
-- Place this inside your `server { ... }` block.
-- Adjust `proxy_pass` if Go-LLama runs on a different port or host.
+- This will proxy all requests to `/go-llama` and its subpaths (e.g., `/go-llama/login`, `/go-llama/static/...`) to your backend.
 - For HTTPS, also set up SSL/TLS as usual.
 
 ---
@@ -95,7 +95,7 @@ location /go-llama/ {
 ## Troubleshooting
 
 - **Frontend not loading?**  
-  Make sure `frontend/` is included in your Docker image (see Dockerfile).
+  Make sure `frontend/` and `static/` are included in your Docker image (see Dockerfile).
 - **Database/Redis errors?**  
   Use `host=postgres`, `addr=redis:6379` in your config when running via Docker Compose.
 - **Check logs:**  
