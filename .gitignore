@@ -1,4 +1,5 @@
 config.json
+docker-compose.yml
 coverage.out
 go-llama-backend
 *.log
