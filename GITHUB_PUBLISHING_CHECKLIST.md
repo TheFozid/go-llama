@@ -17,6 +17,7 @@ Update with notes, links, and status as you go._
 **Notes:**  
 - Used `config.sample.json` with sample values, but included actual LLM/SearxNG endpoints for reference/adaptation.
 - Verified no personal info or secrets in the repo.
+- Confirmed Docker build context includes `frontend/` and static assets.
 
 ---
 
@@ -42,10 +43,12 @@ Update with notes, links, and status as you go._
 - [x] Committed: `git commit -m "Initial commit: Go-LLama source code, config, docs, assets"`
 - [x] Pushed: `git push -u origin main`
 - [x] Resolved branch and email privacy issues (used GitHub no-reply email, force push)
+- [x] Dockerfile and config updated for backend, frontend inclusion, and Compose networking
 
 **Notes:**  
 - `.gitignore` verified before pushing.
 - No secrets, compiled binaries, or personal info pushed.
+- Docker Compose networking uses service names (`postgres`, `redis`) in `config.json`.
 
 ---
 
@@ -53,13 +56,13 @@ Update with notes, links, and status as you go._
 
 - [x] Project description
 - [x] Features
-- [x] Quickstart/Setup instructions
+- [x] Quickstart/Setup (Dockerized workflow)
 - [x] Docs/config links
 - [x] License info (MIT recommended)
 - [x] Screenshots, badges (logo included)
 
 **Notes:**  
-- README includes project logo and credits Copilot.
+- README includes Docker Compose and config guidance.
 - README is up to date with latest code and docs.
 
 ---
@@ -100,9 +103,10 @@ Update with notes, links, and status as you go._
 
 ## **9. Deployment (From GitHub)**
 
-- [ ] Clone repo on target machine
-- [ ] Follow `SETUP.md`/`MANUAL_TESTING.md`
-- [ ] Confirm services run and app works
+- [x] Clone repo on target machine
+- [x] Follow `SETUP.md`/`MANUAL_TESTING.md`
+- [x] Confirm services run (backend, postgres, redis) with Docker Compose
+- [x] Confirm frontend/UI loads in browser at configured subpath
 
 ---
 
@@ -118,7 +122,8 @@ Update with notes, links, and status as you go._
 - 2025-10-09: Checklist started. Local files ready. README and .gitignore drafted.
 - 2025-10-09: GitHub repo created, all files committed and pushed. Privacy/auth/email issues resolved.
 - 2025-10-09: README updated with logo and credits. All docs and configs current.
-- Next: Add LICENSE file, optionally set up GitHub Pages, verify deployment from repo.
+- 2025-10-09: Docker build and deployment verified, frontend included in container. Networking/config fixed.
+- Next: Add LICENSE file, optionally set up GitHub Pages, open issues/discussions for collaboration.
 
 ---
 
