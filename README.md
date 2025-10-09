@@ -21,16 +21,16 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
 - **User management:** Admins can add/edit/delete users; users manage their own accounts.
 - **Responsive front-end:** Bootstrap UI, mobile-friendly, tooltips, icons, transitions.
 - **Configurable subpath:** Deploy under any subpath (default: `/go-llama`).
-- **Dockerized database & cache:** PostgreSQL, Redis via Docker Compose.
+- **Dockerized database & cache:** PostgreSQL, Redis, and backend via Docker Compose.
 - **OpenAPI spec:** See [openapi/openapi.yaml](openapi/openapi.yaml) for full API documentation.
 
 ---
 
-## Quickstart
+## Quickstart (Dockerized Deployment)
 
 1. **Clone this repo:**
     ```sh
-    git clone https://github.com/YOUR_USERNAME/go-llama.git
+    git clone https://github.com/TheFozid/go-llama.git
     cd go-llama
     ```
 
@@ -38,25 +38,16 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
     ```sh
     cp config.sample.json config.json
     # Edit config.json for your setup (see comments inside)
+    # For Docker Compose, use: host=postgres (not localhost) for database, addr=redis:6379 for Redis
     ```
 
-3. **Start database & cache:**
+3. **Build and start all services (backend, database, cache):**
     ```sh
-    docker compose up -d
+    docker compose up --build -d
     ```
 
-4. **Run backend:**
-    ```sh
-    go run ./cmd/server/main.go
-    ```
-    Or build:
-    ```sh
-    go build -o go-llama-backend ./cmd/server
-    ./go-llama-backend
-    ```
-
-5. **Open in browser:**  
-   Visit `http://localhost:8070/go-llama` (or your configured subpath).
+4. **Open in browser:**  
+   Visit [http://localhost:8070/go-llama](http://localhost:8070/go-llama) (or your configured subpath).
 
 ---
 
@@ -76,6 +67,20 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
 - See [`config.sample.json`](config.sample.json) for a template.
 - **Do not commit `config.json` with secrets!**  
   Use `.gitignore` (already included).
+- For Docker Compose, use service names (`postgres`, `redis`) as hosts in `config.json`.
+
+---
+
+## Troubleshooting
+
+- **Frontend not loading?**  
+  Make sure `frontend/` is included in your Docker image (see Dockerfile).
+- **Database/Redis errors?**  
+  Use `host=postgres`, `addr=redis:6379` in your config when running via Docker Compose.
+- **Check logs:**  
+  ```sh
+  docker compose logs go-llama-backend
+  ```
 
 ---
 
