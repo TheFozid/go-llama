@@ -718,11 +718,13 @@ function renderStreaming(mdText, sources, isFinal) {
     window.requestAnimationFrame(() => {
         bubble.innerHTML = renderWithThinkingBubbles(mdText);
 
-        // Always scroll chatMessages div to bottom
-        const chatMessagesDiv = document.getElementById("chatMessages");
-        if (chatMessagesDiv) {
-            chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
-        }
+        // Always scroll chatMessages div to bottom, with a tiny delay to ensure DOM has updated
+        setTimeout(() => {
+            const chatMessagesDiv = document.getElementById("chatMessages");
+            if (chatMessagesDiv) {
+                chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+            }
+        }, 0);
     });
 }
 window.renderStreaming = renderStreaming;
