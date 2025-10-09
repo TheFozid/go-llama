@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16  # Latest stable
+    restart: always
+    environment:
+      POSTGRES_DB: SAMPLE
+      POSTGRES_USER: SAMPLE
+      POSTGRES_PASSWORD: SAMPLE
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine  # Lightweight, latest
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes  # Persistence
+
+  go-llama-backend:
+    build: .
+    restart: always
+    ports:
+      - "8070:8070"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./config.json:/app/config.json
+
+volumes:
+  postgres_data:
+  redis_data:
