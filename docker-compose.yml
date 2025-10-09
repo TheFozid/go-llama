@@ -3,9 +3,9 @@ services:
     image: postgres:16  # Latest stable
     restart: always
     environment:
-      POSTGRES_DB: llmchat
-      POSTGRES_USER: llmuser
-      POSTGRES_PASSWORD: llmpass  # Change in prod!
+      POSTGRES_DB: SAMPLE
+      POSTGRES_USER: SAMPLE
+      POSTGRES_PASSWORD: SAMPLE
     ports:
       - "5432:5432"
     volumes:
@@ -19,6 +19,17 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes  # Persistence
+
+  go-llama-backend:
+    build: .
+    restart: always
+    ports:
+      - "8070:8070"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./config.json:/app/config.json
 
 volumes:
   postgres_data:

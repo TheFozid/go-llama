@@ -7,66 +7,69 @@ Update with notes, links, and status as you go._
 
 ## **1. Local Project Preparation**
 
-- [ ] All source code present (`cmd/`, `internal/`, `frontend/`, etc.)
-- [ ] Config files (`config.json`, `config.sample.json`, `docker-compose.yml`)
-- [ ] Docs (`README.md`, `SETUP.md`, `MANUAL_TESTING.md`, `HARDENING.md`, `PROJECT_STATE.md`, `openapi/openapi.yaml`)
-- [ ] Static assets (`static/Go-Llama-logo.png`, `static/favicon.ico`)
-- [ ] `.gitignore` created (protect secrets, binaries, logs)
-- [ ] Remove/clean any secrets before publishing
+- [x] All source code present (`cmd/`, `internal/`, `frontend/`, etc.)
+- [x] Config files (`config.json`, `config.sample.json`, `docker-compose.yml`)
+- [x] Docs (`README.md`, `SETUP.md`, `MANUAL_TESTING.md`, `HARDENING.md`, `PROJECT_STATE.md`, `openapi/openapi.yaml`)
+- [x] Static assets (`static/Go-Llama-logo.png`, `static/favicon.ico`)
+- [x] `.gitignore` created (protect secrets, binaries, logs)
+- [x] Remove/clean any secrets before publishing
 
 **Notes:**  
-- Use `config.sample.json` with dummy values; real secrets/keys should never be committed.
+- Used `config.sample.json` with sample values, but included actual LLM/SearxNG endpoints for reference/adaptation.
+- Verified no personal info or secrets in the repo.
 
 ---
 
 ## **2. Create New GitHub Repository**
 
-- [ ] Go to https://github.com and log in
-- [ ] Click "+" → "New repository"
-- [ ] Name: `go-llama` (or your choice)
-- [ ] Set **Public** for open sharing
-- [ ] Add project description
-- [ ] (Optional) Initialize with README
+- [x] Go to https://github.com and log in
+- [x] Click "+" → "New repository"
+- [x] Name: `go-llama`
+- [x] Set **Public** for open sharing
+- [x] Add project description
+- [x] Did NOT initialize with README (already have a local one)
 
 **Notes:**  
-- If you have an existing local folder, clone the empty repo first and copy files in.
+- Used existing local folder, did NOT clone empty repo.
 
 ---
 
 ## **3. Add Local Files to Repo**
 
-- [ ] Initialize git: `git init` (if not done)
-- [ ] Set remote: `git remote add origin https://github.com/YOUR_USERNAME/go-llama.git`
-- [ ] Add all files: `git add .`
-- [ ] Commit: `git commit -m "Initial commit: Go-LLama source code, config, docs, assets"`
-- [ ] Push: `git push -u origin main`
+- [x] Initialized git: `git init`
+- [x] Set remote: `git remote add origin https://github.com/TheFozid/go-llama.git`
+- [x] Added all files: `git add .`
+- [x] Committed: `git commit -m "Initial commit: Go-LLama source code, config, docs, assets"`
+- [x] Pushed: `git push -u origin main`
+- [x] Resolved branch and email privacy issues (used GitHub no-reply email, force push)
 
 **Notes:**  
-- Double-check `.gitignore` before pushing!  
-- Do not push secrets, compiled binaries, or personal info.
+- `.gitignore` verified before pushing.
+- No secrets, compiled binaries, or personal info pushed.
 
 ---
 
 ## **4. Write/Update README.md**
 
-- [ ] Project description
-- [ ] Features
-- [ ] Quickstart/Setup instructions
-- [ ] Docs/config links
-- [ ] License info (MIT recommended)
-- [ ] (Optional) Screenshots, badges
+- [x] Project description
+- [x] Features
+- [x] Quickstart/Setup instructions
+- [x] Docs/config links
+- [x] License info (MIT recommended)
+- [x] Screenshots, badges (logo included)
 
 **Notes:**  
-- Ask Copilot for a starter `README.md` if needed.
+- README includes project logo and credits Copilot.
+- README is up to date with latest code and docs.
 
 ---
 
 ## **5. Organize Docs and Configs**
 
-- [ ] Place docs in root or `/docs`
-- [ ] Add `config.sample.json`
-- [ ] Ensure `config.json` is in `.gitignore`
-- [ ] All docs up to date with latest code
+- [x] Docs in root (not `/docs`)
+- [x] Added `config.sample.json`
+- [x] Ensured `config.json` is in `.gitignore`
+- [x] All docs up to date with latest code
 
 ---
 
@@ -88,10 +91,10 @@ Update with notes, links, and status as you go._
 
 ## **8. Verify Repo & Share**
 
-- [ ] All files visible online
-- [ ] README and docs easy to find
-- [ ] Static assets present
-- [ ] Share repo URL for deployment
+- [x] All files visible online
+- [x] README and docs easy to find
+- [x] Static assets present
+- [x] Repo URL: [https://github.com/TheFozid/go-llama](https://github.com/TheFozid/go-llama)
 
 ---
 
@@ -112,18 +115,18 @@ Update with notes, links, and status as you go._
 
 ## **Progress Notes**
 
-_Add any blockers, completed steps, or changes here as you work through the checklist:_
-
-- 2025-10-09: Checklist started. Local files ready. Need to draft README and .gitignore.
-- ...
+- 2025-10-09: Checklist started. Local files ready. README and .gitignore drafted.
+- 2025-10-09: GitHub repo created, all files committed and pushed. Privacy/auth/email issues resolved.
+- 2025-10-09: README updated with logo and credits. All docs and configs current.
+- Next: Add LICENSE file, optionally set up GitHub Pages, verify deployment from repo.
 
 ---
 
 ## **Links**
 
-- [Go-LLama GitHub Repo](https://github.com/YOUR_USERNAME/go-llama) (update after publishing)
-- [Docs folder](https://github.com/YOUR_USERNAME/go-llama/tree/main/docs) (if used)
-- [GitHub Pages](https://YOUR_USERNAME.github.io/go-llama) (if enabled)
+- [Go-LLama GitHub Repo](https://github.com/TheFozid/go-llama)
+- [Docs folder](https://github.com/TheFozid/go-llama/tree/main/docs) (if used in future)
+- [GitHub Pages](https://TheFozid.github.io/go-llama) (if enabled)
 
 ---
 
