@@ -26,6 +26,21 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
 
 ---
 
+
+![Go-Llama Logo](static/Go-Llama-logo.png)
+
+![Screenshot 1](screenshots/1.jpg)
+
+![Screenshot 2](screenshots/2.jpg)
+
+![Screenshot 3](screenshots/3.jpg)
+
+![Screenshot 4](screenshots/4.jpg)
+
+![Screenshot 5](static/screenshots/5.jpg)
+
+---
+
 ## Quickstart (Dockerized Deployment)
 
 1. **Clone this repo:**
