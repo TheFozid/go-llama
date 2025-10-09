@@ -1,0 +1,5 @@
+config.json
+coverage.out
+go-llama-backend
+*.log
+*.backup

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Go-LLama - Chat</title>
+    <link rel="icon" href="{{ .subpath }}/static/favicon.ico">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ .subpath }}/css/main.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+</head>
+<body>
+    <script>window.SUBPATH = "{{ .subpath }}";</script>
+    <!-- Top Bar -->
+    <nav class="navbar navbar-expand-lg bg-white shadow-sm px-3 topbar-fixed">
+        <div class="container-fluid">
+            <div class="d-flex align-items-center gap-2">
+                <button class="btn btn-outline-secondary btn-sm" id="toggleHistoryBtn" title="Show/Hide history">
+                    <i class="bi bi-clock-history"></i>
+                </button>
+                <button class="btn btn-outline-primary btn-sm" id="newChatBtn" title="Start new chat">
+                    <i class="bi bi-plus-lg"></i>
+                </button>
+            </div>
+            <div class="d-flex align-items-center gap-3 mx-auto model-online-bar">
+                <span id="currentModel" class="fw-bold text-primary" title="Current model"></span>
+                <span id="onlineUsers" class="badge rounded-pill bg-success" title="Online users" style="font-size:0.95em;">
+                    <i class="bi bi-person-fill"></i>
+                    <span id="onlineUsersCount">0</span>
+                </span>
+            </div>
+            <div class="d-flex align-items-center gap-2 ms-auto">
+                <button class="btn btn-outline-info btn-sm" id="settingsBtn" title="Settings">
+                    <i class="bi bi-gear"></i>
+                </button>
+                <button class="btn btn-outline-danger btn-sm" id="signOutBtn" title="Sign out">
+                    <i class="bi bi-box-arrow-right"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+    <!-- Main Layout: flex row fills the screen minus topbar -->
+    <div class="main-layout" id="mainContent">
+        <!-- Chat History Sidebar -->
+        <div id="historySidebar" class="history-sidebar d-none">
+            <h5>Chat History</h5>
+            <ul id="chatHistory" class="list-group"></ul>
+        </div>
+        <!-- Chat Area -->
+        <div id="chatArea" class="chat-area">
+            <div id="chatSavedBanner" style="display:none;" class="alert alert-success text-center position-sticky top-0 fade">
+                Chat saved to history!
+            </div>
+            <div id="chatMessages" class="chat-window"></div>
+            <div id="chatSources" class="mt-2"></div>
+        </div>
+    </div>
+    <!-- Prompt Box: fixed at bottom -->
+    <form id="promptForm" class="input-group prompt-box-fixed">
+        <!-- Changed input to textarea for multi-line support -->
+        <textarea id="promptInput" class="form-control prompt-textarea"
+            rows="1" maxlength="4096"
+            placeholder="Type your prompt..." autocomplete="off"
+            style="resize:none;overflow-y:auto;"></textarea>
+        <button class="btn btn-primary" type="submit" id="sendBtn">
+            <i class="bi bi-send"></i>
+        </button>
+        <button class="btn btn-warning" type="button" id="stopBtn" style="display:none;">
+            <i class="bi bi-stop-circle"></i>
+        </button>
+        <button class="btn btn-outline-secondary" type="button" id="webSearchToggleBtn" title="Toggle Web Search">
+            <i class="bi bi-globe"></i>
+        </button>
+    </form>
+    <!-- Settings Modal (redesigned for user management) -->
+    <div class="modal fade" id="settingsModal" tabindex="-1">
+      <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Settings</h5>
+          </div>
+          <div class="modal-body">
+            <h6>User Management</h6>
+            <div style="max-height:225px;overflow-y:auto;">
+              <table class="table table-sm" id="usersTable">
+                <thead>
+                  <tr>
+                    <th>Username</th>
+                    <th>Role</th>
+                    <th>Edit</th>
+                    <th>Delete</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Populated dynamically -->
+                </tbody>
+              </table>
+            </div>
+            <button id="addUserBtn" class="btn btn-success btn-sm mt-2">Add User</button>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- New Chat Model Selection Modal -->
+    <div class="modal fade" id="modelModal" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Select Model for New Chat</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <form id="modelForm">
+              <div class="mb-3">
+                <label for="modelModalSelect" class="form-label">Model</label>
+                <select id="modelModalSelect" class="form-select"></select>
+              </div>
+              <button type="submit" class="btn btn-primary w-100">OK</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="{{ .subpath }}/js/main.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <script>
+    // Show greeting if no chat yet
+    document.addEventListener("DOMContentLoaded", async function() {
+        let username = "there";
+        try {
+            const res = await fetch(window.SUBPATH + "/auth/me", { credentials: "same-origin" });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.username) username = data.username;
+            }
+        } catch (e) {}
+        setTimeout(function() {
+            const chatMessagesDiv = document.getElementById("chatMessages");
+            if (chatMessagesDiv && chatMessagesDiv.children.length === 0) {
+                const div = document.createElement("div");
+                div.className = "llm";
+                const bubble = document.createElement("div");
+                bubble.className = "message fade-in";
+                bubble.textContent = `Hi ${username}, how can I help?`;
+                div.appendChild(bubble);
+                chatMessagesDiv.appendChild(div);
+            }
+        }, 200);
+    });
+    </script>
+</body>
+</html>

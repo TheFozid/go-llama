@@ -1,0 +1,37 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8070,
+    "subpath": "/go-llama",
+    "jwtSecret": "REPLACE_ME_WITH_A_LONG_RANDOM_STRING"
+  },
+  "postgres": {
+    "dsn": "host=localhost port=5432 user=SAMPLE password=SAMPLE dbname=SAMPLE sslmode=disable"
+  },
+  "redis": {
+    "addr": "localhost:6379",
+    "password": "",
+    "db": 0
+  },
+  "llms": [
+    {
+      "name": "qwen3_4b-cpp",
+      "url": "http://192.168.1.4:11431/v1/chat/completions"
+    },
+    {
+      "name": "qwen3_8b-cpp",
+      "url": "http://192.168.1.4:11432/v1/chat/completions"
+    },
+    {
+      "name": "qwen3_14b-cpp",
+      "url": "http://192.168.1.4:11433/v1/chat/completions"
+    },
+    {
+      "name": "qwen3_4b-file",
+      "url": "http://192.168.1.4:11111/v1/chat/completions"
+    }
+  ],
+  "searxng": {
+    "url": "http://192.168.1.4:8123/search"
+  }
+}
