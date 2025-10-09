@@ -717,7 +717,12 @@ function renderStreaming(mdText, sources, isFinal) {
     if (!bubble) return;
     window.requestAnimationFrame(() => {
         bubble.innerHTML = renderWithThinkingBubbles(mdText);
-        bubble.parentElement.parentElement.scrollTop = bubble.parentElement.parentElement.scrollHeight;
+
+        // Always scroll chatMessages div to bottom
+        const chatMessagesDiv = document.getElementById("chatMessages");
+        if (chatMessagesDiv) {
+            chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+        }
     });
 }
 window.renderStreaming = renderStreaming;
