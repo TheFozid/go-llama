@@ -6,10 +6,10 @@
     "jwtSecret": "REPLACE_ME_WITH_A_LONG_RANDOM_STRING"
   },
   "postgres": {
-    "dsn": "host=localhost port=5432 user=SAMPLE password=SAMPLE dbname=SAMPLE sslmode=disable"
+    "dsn": "host=postgres port=5432 user=SAMPLE password=SAMPLE dbname=SAMPLE sslmode=disable"
   },
   "redis": {
-    "addr": "localhost:6379",
+    "addr": "redis:6379",
     "password": "",
     "db": 0
   },
