@@ -26,9 +26,6 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
 
 ---
 
-
-![Go-Llama Logo](static/Go-Llama-logo.png)
-
 ![Screenshot 1](screenshots/1.jpg)
 
 ![Screenshot 2](screenshots/2.jpg)
@@ -38,6 +35,8 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
 ![Screenshot 4](screenshots/4.jpg)
 
 ![Screenshot 5](screenshots/5.jpg)
+
+![Go-Llama Logo](static/Go-Llama-logo.png)
 
 ---
 
