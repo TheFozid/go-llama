@@ -14,8 +14,9 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+
 func GenerateJWT(secret string, userId uint, username string, role string, duration time.Duration) (string, error) {
-	now := time.Now()
+	now := time.Now().UTC()
 	claims := Claims{
 		UserID:   userId,
 		Username: username,
