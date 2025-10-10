@@ -212,98 +212,103 @@ Question: ` + req.Prompt + "\n"
 			return
 		}
 
-if strings.TrimSpace(botResponse) != "" {
-    botResponseWithStats := botResponse + "\n\n_Tokens/sec: " + fmt.Sprintf("%.2f", toksPerSec) + "_"
-    botMsg := chat.Message{
-        ChatID:    chatInst.ID,
-        Sender:    "bot",
-        Content:   botResponseWithStats,
-        CreatedAt: time.Now(),
-    }
-    if err := db.DB.Create(&botMsg).Error; err != nil {
-        log.Printf("failed to save bot message: %v", err)
-    }
-}
+		if strings.TrimSpace(botResponse) != "" {
+			botResponseWithStats := botResponse + "\n\n_Tokens/sec: " + fmt.Sprintf("%.2f", toksPerSec) + "_"
+			botMsg := chat.Message{
+				ChatID:    chatInst.ID,
+				Sender:    "bot",
+				Content:   botResponseWithStats,
+				CreatedAt: time.Now(),
+			}
+			if err := db.DB.Create(&botMsg).Error; err != nil {
+				log.Printf("failed to save bot message: %v", err)
+			}
+		}
 	}
 }
+
 // --- Streaming function ---
 func streamLLMResponseWS(conn *websocket.Conn, llmURL string, payload map[string]interface{}, respOut *string, toksPerSecOut *float64) error {
-    ctx, cancel := context.WithCancel(context.Background())
-    defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-    go func() {
-        for {
-            _, msg, err := conn.ReadMessage()
-            if err != nil {
-                cancel() // WS closed
-                return
-            }
-            var req map[string]interface{}
-            if json.Unmarshal(msg, &req) == nil && req["event"] == "stop" {
-                cancel() // Explicit stop message
-                return
-            }
-        }
-    }()
+	go func() {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				cancel() // WS closed
+				return
+			}
+			var req map[string]interface{}
+			if json.Unmarshal(msg, &req) == nil && req["event"] == "stop" {
+				cancel() // Explicit stop message
+				return
+			}
+		}
+	}()
 
-    body, _ := json.Marshal(payload)
-    req, _ := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(body))
-    req.Header.Set("Content-Type", "application/json")
-    client := http.Client{Timeout: 0}
-    resp, err := client.Do(req)
-    if err != nil {
-        log.Printf("LLM HTTP request failed: %v", err)
-        return err
-    }
-    defer resp.Body.Close()
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	client := http.Client{Timeout: 0}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("LLM HTTP request failed: %v", err)
+		return err
+	}
+	defer resp.Body.Close()
 
-    scanner := bufio.NewScanner(resp.Body)
-    index := 0
-    var responseBuilder strings.Builder
-    startTime := time.Now()
+	reader := bufio.NewReader(resp.Body)
+	index := 0
+	var responseBuilder strings.Builder
+	startTime := time.Now()
 
-    for scanner.Scan() {
-        line := scanner.Text()
-        if len(line) < 7 || line[:6] != "data: " {
-            continue
-        }
-        data := line[6:]
-        if data == "[DONE]" {
-            break
-        }
-        var chunk struct {
-            Choices []struct {
-                Delta struct {
-                    Content string `json:"content"`
-                } `json:"delta"`
-            } `json:"choices"`
-            FinishReason string `json:"finish_reason"`
-        }
-        if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-            log.Printf("stream decode error: %v", err)
-            continue
-        }
-        log.Printf("WS LLM chunk: %+v", chunk)
-        if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-            token := chunk.Choices[0].Delta.Content
-            responseBuilder.WriteString(token)
-            conn.WriteJSON(WSChatToken{Token: token, Index: index})
-            index++
-        }
-        if chunk.FinishReason != "" {
-            break
-        }
-    }
-    duration := time.Since(startTime).Seconds()
-    toksPerSec := 0.0
-    if duration > 0 {
-        toksPerSec = float64(index) / duration
-    }
-    conn.WriteJSON(map[string]interface{}{
-        "event": "end",
-        "tokens_per_sec": toksPerSec,
-    })
-    *respOut = responseBuilder.String()
-    *toksPerSecOut = toksPerSec
-    return nil
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		line = strings.TrimSpace(line)
+		if len(line) < 7 || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[6:]
+		if data == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+			FinishReason string `json:"finish_reason"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			log.Printf("stream decode error: %v", err)
+			continue
+		}
+		log.Printf("WS LLM chunk: %+v", chunk)
+		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+			token := chunk.Choices[0].Delta.Content
+			responseBuilder.WriteString(token)
+			conn.WriteJSON(WSChatToken{Token: token, Index: index})
+			index++
+		}
+		if chunk.FinishReason != "" {
+			break
+		}
+	}
+	duration := time.Since(startTime).Seconds()
+	toksPerSec := 0.0
+	if duration > 0 {
+		toksPerSec = float64(index) / duration
+	}
+	conn.WriteJSON(map[string]interface{}{
+		"event":          "end",
+		"tokens_per_sec": toksPerSec,
+	})
+	*respOut = responseBuilder.String()
+	*toksPerSecOut = toksPerSec
+	return nil
 }
