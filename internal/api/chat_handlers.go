@@ -521,13 +521,40 @@ var CallLLM = func(url string, payload map[string]interface{}) (LLMResponse, err
 		b, _ := io.ReadAll(res.Body)
 		return LLMResponse{}, errors.New(string(b))
 	}
-	_ = json.NewDecoder(res.Body).Decode(&respStruct)
-	reply := ""
-	if len(respStruct.Choices) > 0 {
-		reply = respStruct.Choices[0].Message.Content
-	}
-	tokens := respStruct.Usage.CompletionTokens
-	tokensPerSec := respStruct.Timings.PredictedPerSecond
+// Prepare to collect the streamed reply
+replyBuilder := strings.Builder{}
+dec := json.NewDecoder(res.Body)
+for {
+    var chunk struct {
+        Choices []struct {
+            Delta struct {
+                Content string `json:"content"`
+            } `json:"delta"`
+            FinishReason string `json:"finish_reason"`
+        } `json:"choices"`
+    }
+    if err := dec.Decode(&chunk); err == io.EOF {
+        break
+    } else if err != nil {
+        return LLMResponse{}, err
+    }
+    // Append each token to the reply
+    if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+        replyBuilder.WriteString(chunk.Choices[0].Delta.Content)
+    }
+    // Optionally, you can break early if finish_reason is "stop"
+    if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason == "stop" {
+        break
+    }
+}
+reply := replyBuilder.String()
+// You may need to estimate tokens/tokensPerSec or omit for now
+return LLMResponse{
+    Reply: reply,
+    Tokens: len(strings.Fields(reply)), // crude token count
+    TokensPerSec: 0,
+    SessionID: "", // update if you use session
+}, nil
 	if tokensPerSec == 0 && respStruct.Timings.PredictedMs > 0 && respStruct.Timings.PredictedN > 0 {
 		tokensPerSec = float64(respStruct.Timings.PredictedN) / (respStruct.Timings.PredictedMs / 1000)
 	}
