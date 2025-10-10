@@ -3,16 +3,16 @@ package auth
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"go-llama/internal/config"
 	"go-llama/internal/user"
 
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 )
 
-func AuthMiddleware(cfg *config.Config, rdb *redis.Client, requireAdmin bool) gin.HandlerFunc {
+// Stateless JWT Auth Middleware (no Redis session dependency)
+// Only checks JWT signature and expiry. This eliminates premature logout caused by Redis session expiry.
+func AuthMiddleware(cfg *config.Config, rdb interface{}, requireAdmin bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
@@ -25,20 +25,13 @@ func AuthMiddleware(cfg *config.Config, rdb *redis.Client, requireAdmin bool) gi
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"message": "Invalid or expired token"}})
 			return
 		}
-		// Check session in Redis
-		sessionToken, err := GetSession(rdb, claims.UserID)
-		if err != nil || sessionToken != tokenStr {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"message": "Session expired or invalid"}})
-			return
-		}
-		// Enforce inactivity timeout (refresh expiry)
-		_ = SetSession(rdb, claims.UserID, tokenStr, 30*time.Minute)
+		// REMOVED REDIS SESSION CHECKS
 
 		// Attach user info to context
 		c.Set("userId", claims.UserID)
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)
-		c.Set("userRole", claims.Role) // <-- Add this line
+		c.Set("userRole", claims.Role)
 
 		if requireAdmin && claims.Role != string(user.RoleAdmin) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "Admin only"}})
