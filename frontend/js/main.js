@@ -300,11 +300,28 @@ function setJWT(token) {
     localStorage.setItem("jwt", token);
     localStorage.setItem("jwt_time", Date.now());
 }
+
+function parseJwt(token) {
+    // JWT is in format header.payload.signature
+    try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        return payload;
+    } catch (e) {
+        return {};
+    }
+}
+
 function getJWT() {
     const token = localStorage.getItem("jwt");
     if (!token) return null;
-    const start = parseInt(localStorage.getItem("jwt_time") || "0");
-    if (Date.now() - start > 30 * 60 * 1000) {
+    const payload = parseJwt(token);
+    const exp = payload.exp;
+    if (!exp) {
+        clearJWT();
+        return null;
+    }
+    // exp is in seconds since epoch
+    if (Date.now() / 1000 > exp) {
         clearJWT();
         return null;
     }
