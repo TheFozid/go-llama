@@ -574,13 +574,19 @@ async function loadChatHistory() {
             await deleteChat(chat.id);
             await loadChatHistory();
             const remaining = await getChatHistory();
-            if (chat.id === activeChatId) {
-                if (remaining.length > 0) {
-                    switchChat(remaining[0].id, remaining[0].model_name);
-                } else {
-                    ensureInitialChat();
-                }
-            }
+if (chat.id === activeChatId) {
+    if (remaining.length > 0) {
+        switchChat(remaining[0].id, remaining[0].model_name);
+    } else {
+        // No remaining chats: clear chat window
+        document.getElementById("chatMessages").innerHTML = "";
+        // Optionally show greeting
+        showGreetingIfEmpty();
+        activeChatId = null;
+        activeModel = null;
+        document.getElementById("currentModel").textContent = "";
+    }
+}
         };
         ul.appendChild(li);
     });
