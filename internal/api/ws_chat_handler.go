@@ -126,6 +126,7 @@ contextSize := modelConfig.ContextSize
 if contextSize == 0 {
     contextSize = 2048 // Fallback default
 }
+var messages []chat.Message
 messages = chat.BuildSlidingWindow(allMessages, contextSize)
 
 		var llmMessages []map[string]string
