@@ -308,18 +308,17 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		// Build messages history for LLM if needed (on session migration or model migration)
-		var messages []chat.Message
-		if modelMigrated || chatInst.LlmSessionID == "" {
-			// Re-feed entire history
-			if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&messages).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chat history"})
-				return
-			}
-		} else {
-			// Only need the latest user message
-			messages = []chat.Message{userMsg}
-		}
+// Build messages history for LLM with sliding window
+var allMessages []chat.Message
+if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
+    c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chat history"})
+    return
+}
+contextSize := modelConfig.ContextSize
+if contextSize == 0 {
+    contextSize = 2048 // Fallback default
+}
+messages := chat.BuildSlidingWindow(allMessages, contextSize)
 
 		// Prepare OpenAI API-compatible messages array
 		var llmMessages []map[string]string

@@ -30,3 +30,21 @@ type Message struct {
 func (c *Chat) DisplayTitle() string {
 	return c.Title
 }
+// Sliding window for context limitation
+func BuildSlidingWindow(messages []Message, contextSize int) []Message {
+	maxChars := int(float64(contextSize) * 0.85) * 4 // Use 85% of context, 4 chars/token
+	var window []Message
+	totalChars := 0
+
+	// Start from the end (latest message), prepend to window
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		msgLen := len(m.Content)
+		if totalChars+msgLen > maxChars {
+			break
+		}
+		window = append([]Message{m}, window...)
+		totalChars += msgLen
+	}
+	return window
+}

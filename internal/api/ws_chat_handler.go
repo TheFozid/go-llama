@@ -118,15 +118,15 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		var messages []chat.Message
-		if modelMigrated || chatInst.LlmSessionID == "" {
-			if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&messages).Error; err != nil {
-				conn.WriteJSON(map[string]string{"error": "failed to fetch chat history"})
-				return
-			}
-		} else {
-			messages = []chat.Message{userMsg}
-		}
+var allMessages []chat.Message
+if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
+    // error handling
+}
+contextSize := modelConfig.ContextSize
+if contextSize == 0 {
+    contextSize = 2048 // Fallback default
+}
+messages = chat.BuildSlidingWindow(allMessages, contextSize)
 
 		var llmMessages []map[string]string
 		for _, m := range messages {
