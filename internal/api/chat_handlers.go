@@ -245,6 +245,7 @@ func ListMessagesHandler() gin.HandlerFunc {
 		c.JSON(http.StatusOK, messages)
 	}
 }
+
 // Send a message in a chat (calls LLM, supports optional web search)
 func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -308,17 +309,17 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-// Build messages history for LLM with sliding window
-var allMessages []chat.Message
-if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
-    c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chat history"})
-    return
-}
-contextSize := modelConfig.ContextSize
-if contextSize == 0 {
-    contextSize = 2048 // Fallback default
-}
-messages := chat.BuildSlidingWindow(allMessages, contextSize)
+		// Build messages history for LLM with sliding window
+		var allMessages []chat.Message
+		if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chat history"})
+			return
+		}
+		contextSize := modelConfig.ContextSize
+		if contextSize == 0 {
+			contextSize = 2048 // Fallback default
+		}
+		messages := chat.BuildSlidingWindow(allMessages, contextSize)
 
 		// Prepare OpenAI API-compatible messages array
 		var llmMessages []map[string]string
@@ -335,6 +336,10 @@ messages := chat.BuildSlidingWindow(allMessages, contextSize)
 
 		// --- NEW: Handle optional web search ---
 		var sources []map[string]string
+		maxResults := 4 // default
+		if cfg.SearxNG.MaxResults > 0 {
+			maxResults = cfg.SearxNG.MaxResults
+		}
 		if req.WebSearch {
 			// Call SearxNG for search results
 			searxngURL := cfg.SearxNG.URL
@@ -358,7 +363,7 @@ messages := chat.BuildSlidingWindow(allMessages, contextSize)
 							"url":     r.URL,
 							"snippet": r.Content,
 						})
-						if len(sources) >= 4 {
+						if len(sources) >= maxResults {
 							break
 						}
 					}

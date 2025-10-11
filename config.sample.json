@@ -36,6 +36,7 @@
     }
   ],
   "searxng": {
-    "url": "http://192.168.1.4:8123/search"
+    "url": "http://192.168.1.4:8123/search",
+    "max_results": 10
   }
 }

@@ -9,8 +9,8 @@ import (
 )
 
 type LLMConfig struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
 	ContextSize int    `json:"context_size"`
 }
 
@@ -31,7 +31,8 @@ type Config struct {
 	} `json:"redis"`
 	LLMs []LLMConfig `json:"llms"`
 	SearxNG struct {
-		URL string `json:"url"`
+		URL        string `json:"url"`
+		MaxResults int    `json:"max_results"`
 	} `json:"searxng"`
 }
 

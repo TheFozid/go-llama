@@ -118,16 +118,16 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-var allMessages []chat.Message
-if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
-    // error handling
-}
-contextSize := modelConfig.ContextSize
-if contextSize == 0 {
-    contextSize = 2048 // Fallback default
-}
-var messages []chat.Message
-messages = chat.BuildSlidingWindow(allMessages, contextSize)
+		var allMessages []chat.Message
+		if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
+			conn.WriteJSON(map[string]string{"error": "failed to fetch chat history"})
+			return
+		}
+		contextSize := modelConfig.ContextSize
+		if contextSize == 0 {
+			contextSize = 2048 // Fallback default
+		}
+		messages := chat.BuildSlidingWindow(allMessages, contextSize)
 
 		var llmMessages []map[string]string
 		for _, m := range messages {
@@ -150,6 +150,10 @@ Do not change the meaning, tone, or structure of the content.
 		}, llmMessages...)
 
 		var sources []map[string]string
+		maxResults := 4 // default
+		if cfg.SearxNG.MaxResults > 0 {
+			maxResults = cfg.SearxNG.MaxResults
+		}
 		if req.WebSearch {
 			searxngURL := cfg.SearxNG.URL
 			if searxngURL == "" {
@@ -172,7 +176,7 @@ Do not change the meaning, tone, or structure of the content.
 							"url":     r.URL,
 							"snippet": r.Content,
 						})
-						if len(sources) >= 4 {
+						if len(sources) >= maxResults {
 							break
 						}
 					}
