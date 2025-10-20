@@ -176,7 +176,7 @@ body {
 /*--- PROMPT TEXTAREA ---*/
 .prompt-textarea {
     min-height: 40px;
-    max-height: 180px;
+    max-height: 220px;
     line-height: 1.4;
     padding-top: 8px;
     padding-bottom: 8px;
@@ -185,7 +185,7 @@ body {
     transition: min-height 0.1s, max-height 0.1s;
     box-sizing: border-box;
 }
-.prompt-textarea[rows="5"] {
+.prompt-textarea[rows="8"] {
     overflow-y: auto;
 }
 .input-group > .btn, .input-group > button {

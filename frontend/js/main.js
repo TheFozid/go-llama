@@ -181,16 +181,16 @@ function autoResizePrompt() {
     let rows = Math.round(contentHeight / lineHeight);
 
     if (isNaN(rows) || rows < 1) rows = 1;
-    if (rows > 5) rows = 5;
+    if (rows > 8) rows = 8;
 
     textarea.rows = rows;
 
-    if (rows < 5) {
+    if (rows < 8) {
         textarea.style.overflowY = "hidden";
         textarea.style.height = (lineHeight * rows + padding + border) + "px";
     } else {
         textarea.style.overflowY = "auto";
-        textarea.style.height = (lineHeight * 5 + padding + border) + "px";
+        textarea.style.height = (lineHeight * 8 + padding + border) + "px";
     }
 }
 
