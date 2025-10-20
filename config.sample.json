@@ -16,22 +16,22 @@
   "llms": [
     {
       "name": "qwen3_4b-cpp",
-      "url": "http://192.168.1.4:11431/v1/chat/completions"
+      "url": "http://192.168.1.4:11431/v1/chat/completions",
       "context_size": 4096
     },
     {
       "name": "qwen3_8b-cpp",
-      "url": "http://192.168.1.4:11432/v1/chat/completions"
+      "url": "http://192.168.1.4:11432/v1/chat/completions",
       "context_size": 4096
     },
     {
       "name": "qwen3_14b-cpp",
-      "url": "http://192.168.1.4:11433/v1/chat/completions"
+      "url": "http://192.168.1.4:11433/v1/chat/completions",
       "context_size": 4096
     },
     {
       "name": "qwen3_4b-file",
-      "url": "http://192.168.1.4:11111/v1/chat/completions"
+      "url": "http://192.168.1.4:11111/v1/chat/completions",
       "context_size": 4096
     }
   ],

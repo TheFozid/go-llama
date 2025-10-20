@@ -50,12 +50,12 @@ func LoginHandler(cfg *config.Config, rdb *redis.Client) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"message": "Invalid username or password"}})
 			return
 		}
-		token, err := auth.GenerateJWT(cfg.Server.JWTSecret, u.ID, u.Username, string(u.Role), 30*time.Minute)
+		token, err := auth.GenerateJWT(cfg.Server.JWTSecret, u.ID, u.Username, string(u.Role), 7*24*time.Hour)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "Failed to generate token"}})
 			return
 		}
-		_ = auth.SetSession(rdb, u.ID, token, 30*time.Minute)
+		_ = auth.SetSession(rdb, u.ID, token, 7*24*time.Hour)
 		c.JSON(http.StatusOK, LoginResponse{
 			Token:    token,
 			UserID:   u.ID,
