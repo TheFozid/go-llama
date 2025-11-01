@@ -725,6 +725,28 @@ function startStreamingResponse(prompt) {
 
             renderStreaming(finalMd, window.lastWS.sources, true);
 
+// Append Sources block if search was used
+if (window.lastWS.sources && window.lastWS.sources.length > 0) {
+    const chatMessagesDiv = document.getElementById("chatMessages");
+    const div = document.createElement("div");
+    div.className = "llm";
+    const box = document.createElement("div");
+    box.className = "message";
+    box.style.fontSize = "0.85em";
+    box.style.opacity = "0.85";
+
+    let html = "<strong>Sources:</strong><br>";
+    window.lastWS.sources.forEach((src, i) => {
+        html += `[${i+1}] <a href="${src.url}" target="_blank">${src.title}</a><br>`;
+    });
+
+    box.innerHTML = html;
+    div.appendChild(box);
+    chatMessagesDiv.appendChild(div);
+    chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+}
+
+
             loadChatHistory();
             getChatMessages(window.activeChatId).then(async (messages) => {
                 renderMessages(messages);

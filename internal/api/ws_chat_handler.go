@@ -216,10 +216,15 @@ if useWeb {
 					webContext += "[" + strconv.Itoa(i+1) + "] \"" + src["title"] + "\": " + src["snippet"] + " (" + src["url"] + ")\n"
 				}
 				webContext += `
-Using only the above web results and your own knowledge, please answer the following user question clearly and accurately.
-Format your response in valid Markdown. Use headings, lists, and code blocks where appropriate.
-Do not change the meaning, tone, or structure of the content.
-Include citations or references for any referenced sources in markdown format.
+Instructions:
+- Use the above results when answering
+- Cite sources as [n] at the end of sentences that use them
+- Do not generate a "Sources" section
+- If unsure whether a sentence needs a citation, include it
+- If the answer is not supported by the results, say so
+- Format your answer in Markdown
+
+User question:
 
 Question: ` + req.Prompt + "\n"
 				llmMessages = append([]map[string]string{
