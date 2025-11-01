@@ -694,6 +694,18 @@ function startStreamingResponse(prompt) {
         if (msg.sources) {
             window.lastWS.sources = msg.sources;
         }
+	// Auto-search indicator
+	if (msg.auto_search === true) {
+	    const chatMessagesDiv = document.getElementById("chatMessages");
+	    const div = document.createElement("div");
+	    div.className = "system-note";
+	    div.style.fontSize = "0.7em";
+	    div.style.opacity = "0.6";
+	    div.style.margin = "2px 0 4px 6px";
+	    div.textContent = "🌐 auto-search";
+	    chatMessagesDiv.appendChild(div);
+	}
+
 
         if (msg.event === "end" || (msg.FinishReason !== undefined && msg.FinishReason !== null)) {
             window.lastWS.close();

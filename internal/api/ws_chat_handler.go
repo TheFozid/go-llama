@@ -168,6 +168,11 @@ if cfg.SearxNG.MaxResults > 0 {
 // Decide whether to use web search (manual OR auto)
 useWeb := req.WebSearch || autoSearch
 
+// If auto search triggered, tell the client silently
+if autoSearch {
+    conn.WriteJSON(map[string]any{"auto_search": true})
+}
+
 if useWeb {
     searxngURL := cfg.SearxNG.URL
     if searxngURL == "" {
