@@ -1,3 +1,4 @@
+# README.md
 # Go-LLama
 
 ![Go-Llama Logo](static/Go-Llama-logo.png)
@@ -18,6 +19,12 @@ Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamaf
 - **Persistent chat history:** Each user gets private chat history, can rename/delete chats.
 - **Live streaming:** WebSocket-powered, tokens/sec display, stop button.
 - **Web search integration:** Toggle SearxNG results in chat for up-to-date answers.
+- **⚡️ Smart auto-web-search (NEW):**  
+  - Automatically detects when online results are needed  
+  - Works silently — UI stays clean  
+  - Manual toggle still available
+- **🌐 Auto-search indicator (NEW):**  
+  - Shows a tiny `🌐 auto-search` hint when the model triggered search on its own
 - **User management:** Admins can add/edit/delete users; users manage their own accounts.
 - **Responsive front-end:** Bootstrap UI, mobile-friendly, tooltips, icons, transitions.
 - **Configurable subpath:** Deploy under any subpath (default: `/go-llama`).
@@ -84,7 +91,6 @@ location /go-llama {
     proxy_connect_timeout 600s;
     proxy_buffering off;
     proxy_request_buffering off;
-    # For WebSocket and chunked HTTP streaming
     chunked_transfer_encoding on;
 }
 ```
@@ -92,6 +98,25 @@ location /go-llama {
 - This setup proxies all requests to `/go-llama` and its subpaths (like `/go-llama/static/...`) to your backend.
 - Make sure your backend config `subpath` is set to `/go-llama`.
 - For HTTPS, also set up SSL/TLS as usual.
+
+---
+
+## Auto-Web-Search Feature (NEW)
+
+Go-LLama can now intelligently detect queries that need fresh web data, such as:
+
+- "Who is the prime minister of the UK?"
+- "Latest NVIDIA driver version"
+- "Exchange rate GBP to USD"
+
+Behavior:
+
+| User Toggle | Auto Logic | UI |
+|------------|------------|----|
+OFF | AI silently checks + may search | “Thinking…” + small 🌐 badge |
+ON | Always search (existing behavior) | “Searching…” → “Thinking” |
+
+No loops, no agent chat — works on tiny models.
 
 ---
 
@@ -106,23 +131,71 @@ location /go-llama {
 
 ---
 
+## Updating Go-LLama
+
+### Update code & container images
+
+```sh
+cd go-llama
+git pull
+docker compose down
+docker compose up --build -d
+```
+
+### Update without downtime
+
+```sh
+git pull
+docker compose up --build -d
+docker image prune -f
+```
+
+> Your database and chat history are preserved.
+
+---
+
+## Full Uninstall
+
+> ⚠️ This deletes **all chats, users, and data**
+
+### Docker install
+
+```sh
+docker compose down -v
+docker image rm go-llama-backend
+rm -rf config.json postgres redis
+```
+
+### Bare-metal install
+
+```sh
+sudo systemctl stop go-llama || true
+rm -rf /opt/go-llama ~/.cache/go-llama ~/.config/go-llama
+```
+
+If you created a systemd service:
+
+```sh
+sudo rm /etc/systemd/system/go-llama.service
+sudo systemctl daemon-reload
+```
+
+---
+
 ## Configuration
 
-- See [`config.sample.json`](config.sample.json) for a template.
-- **Do not commit `config.json` with secrets!**  
-  Use `.gitignore` (already included).
-- For Docker Compose, use service names (`postgres`, `redis`) as hosts in `config.json`.
+- See [`config.sample.json`](config.sample.json)
+- **Do not commit `config.json` with secrets**
+- For Docker Compose, use service names (`postgres`, `redis`) as hosts in `config.json`
 
 ---
 
 ## Troubleshooting
 
 - **Frontend not loading?**  
-  Make sure `frontend/` and `static/` are included in your Docker image (see Dockerfile).
+  Ensure static files are included (see Dockerfile).
 - **Database/Redis errors?**  
-  Use `host=postgres`, `addr=redis:6379` in your config when running via Docker Compose.
-- **Favicon or logo not showing?**  
-  Ensure static files are present in `/app/static` inside the container and referenced as `/go-llama/static/...` in your HTML.
+  Use `postgres` and `redis:6379` in Docker mode.
 - **Check logs:**  
   ```sh
   docker compose logs go-llama-backend
@@ -140,6 +213,7 @@ MIT License (see [LICENSE](LICENSE))
 
 - **Created by:** [TheFozid](https://github.com/TheFozid)
 - **Copilot & Documentation:** [GitHub Copilot](https://github.com/features/copilot), @copilot
+- **AI assistance:** ChatGPT
 
 ---
 
