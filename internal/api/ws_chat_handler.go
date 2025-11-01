@@ -149,17 +149,40 @@ Do not change the meaning, tone, or structure of the content.
 			{"role": "system", "content": mdInstruction},
 		}, llmMessages...)
 
-		var sources []map[string]string
-		maxResults := 4 // default
-		if cfg.SearxNG.MaxResults > 0 {
-			maxResults = cfg.SearxNG.MaxResults
-		}
-		if req.WebSearch {
-			searxngURL := cfg.SearxNG.URL
-			if searxngURL == "" {
-				searxngURL = "http://localhost:8888/search"
-			}
-			httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(req.Prompt) + "&format=json")
+// ---- Auto-search (silent) decision: only if user didn't toggle manual search ----
+autoSearch := false
+autoQuery := ""
+if !req.WebSearch && len(cfg.LLMs) > 0 {
+    // Use the first configured model for the quick YES/NO decision + optional rewrite
+    as, q := chat.AutoSearchDecision(cfg.LLMs[0].URL, cfg.LLMs[0].Name, req.Prompt)
+    autoSearch = as
+    autoQuery = strings.TrimSpace(q)
+}
+
+var sources []map[string]string
+maxResults := 4 // default
+if cfg.SearxNG.MaxResults > 0 {
+    maxResults = cfg.SearxNG.MaxResults
+}
+
+// Decide whether to use web search (manual OR auto)
+useWeb := req.WebSearch || autoSearch
+
+if useWeb {
+    searxngURL := cfg.SearxNG.URL
+    if searxngURL == "" {
+        searxngURL = "http://localhost:8888/search"
+    }
+
+    // Use rewritten query if auto-search provided one; otherwise fall back to original prompt
+    searchQ := req.Prompt
+    if autoSearch && autoQuery != "" {
+        searchQ = autoQuery
+    }
+
+    httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(searchQ) + "&format=json")
+
+
 			if err == nil && httpResp.StatusCode == 200 {
 				defer httpResp.Body.Close()
 				var searxResp struct {
