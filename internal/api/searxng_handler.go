@@ -86,16 +86,15 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 			for i, src := range sources {
 				webContext += fmt.Sprintf("[%d] \"%s\": %s (%s)\n", i+1, src.Title, src.Snippet, src.URL)
 			}
-			webContext += "\nInstructions:
-- Use the above results when answering
-- Cite sources as [n] at the end of sentences that use them
-- Do not generate a "Sources" section
-- If unsure whether a sentence needs a citation, include it
-- If the answer is not supported by the results, say so
-- Format your answer in Markdown
+webContext += "\nInstructions:\n" +
+	"- Use the above results when answering\n" +
+	"- Cite sources as [n] at the end of sentences that use them\n" +
+	"- Do not generate a \\\"Sources\\\" section\n" +
+	"- If unsure whether a sentence needs a citation, include it\n" +
+	"- If the answer is not supported by the results, say so\n" +
+	"- Format your answer in Markdown\n\n" +
+	"User question:\n"
 
-User question:
-\n"
 		}
 
 		// --- 3. Build LLM payload ---
