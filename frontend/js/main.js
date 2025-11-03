@@ -124,13 +124,6 @@ document.addEventListener("DOMContentLoaded", function () {
             sidebar.classList.toggle("d-none");
         };
 
-        document.getElementById("webSearchToggleBtn").onclick = function () {
-            webSearchEnabled = !webSearchEnabled;
-            window.webSearchEnabled = webSearchEnabled;
-            document.getElementById("webSearchToggleBtn").classList.toggle("btn-info", webSearchEnabled);
-            document.getElementById("webSearchToggleBtn").classList.toggle("btn-outline-secondary", !webSearchEnabled);
-        };
-
         document.getElementById("signOutBtn").onclick = function () {
             clearJWT();
             window.location.href = SUBPATH + "/login";
@@ -283,7 +276,6 @@ function autoResizePrompt() {
 // --- Expose globals ---
 window.activeChatId = null;
 window.activeModel = null;
-window.webSearchEnabled = false;
 let modelsCache = [];
 
 // --- Helper to get WebSocket URL ---
@@ -640,7 +632,7 @@ function startStreamingResponse(prompt) {
         window.lastWS.send(JSON.stringify({
             chatId: window.activeChatId,
             prompt: prompt,
-            web_search: window.webSearchEnabled
+		web_search: false
         }));
         document.getElementById("sendBtn").style.display = "none";
         document.getElementById("stopBtn").style.display = "inline-block";
