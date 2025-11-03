@@ -266,7 +266,8 @@ func streamLLMResponseWS(conn *websocket.Conn, llmURL string, payload map[string
 	reader := bufio.NewReader(resp.Body)
 	index := 0
 	var responseBuilder strings.Builder
-	startTime := time.Now()
+	var startTime time.Time
+	firstToken := true
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -294,21 +295,32 @@ func streamLLMResponseWS(conn *websocket.Conn, llmURL string, payload map[string
 			continue
 		}
 		log.Printf("WS LLM chunk: %+v", chunk)
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			token := chunk.Choices[0].Delta.Content
-			responseBuilder.WriteString(token)
-			conn.WriteJSON(WSChatToken{Token: token, Index: index})
-			index++
-		}
+	if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+	    token := chunk.Choices[0].Delta.Content
+
+	    // Start timer when we receive first token
+	    if firstToken {
+	        startTime = time.Now()
+	        firstToken = false
+	    }
+
+	    responseBuilder.WriteString(token)
+	    conn.WriteJSON(WSChatToken{Token: token, Index: index})
+	    index++
+	}
+
 		if chunk.FinishReason != "" {
 			break
 		}
 	}
-	duration := time.Since(startTime).Seconds()
-	toksPerSec := 0.0
-	if duration > 0 {
-		toksPerSec = float64(index) / duration
+	var toksPerSec float64
+	if !startTime.IsZero() {
+	    duration := time.Since(startTime).Seconds()
+	    if duration > 0 {
+	        toksPerSec = float64(index) / duration
+	    }
 	}
+
 	conn.WriteJSON(map[string]interface{}{
 		"event":          "end",
 		"tokens_per_sec": toksPerSec,
