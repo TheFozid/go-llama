@@ -30,6 +30,24 @@ func shouldAutoSearch(prompt string) bool {
 		return false
 	}
 
+// Explicit user request to search
+explicitSearchPhrases := []string{
+	"search the web",
+	"search the internet",
+	"search online",
+	"look online",
+	"use the web",
+	"use internet",
+	"use web results",
+	"get info from the web",
+}
+for _, phrase := range explicitSearchPhrases {
+	if strings.Contains(p, phrase) {
+		return true
+	}
+}
+
+
 	// Recent years
 	if strings.Contains(p, "2024") || strings.Contains(p, "2025") {
 		score += 2
