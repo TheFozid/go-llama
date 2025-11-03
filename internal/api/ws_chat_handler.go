@@ -190,14 +190,6 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			conn.WriteJSON(map[string]string{"error": "chat not found"})
 			return
 		}
-		if req.Prompt == "" {
-			conn.WriteJSON(map[string]string{"error": "missing prompt"})
-			return
-		}
-if autoSearch && !req.WebSearch {
-	conn.WriteJSON(map[string]string{"auto_search": "true"})
-}
-
 
 		userMsg := chat.Message{
 			ChatID:    chatInst.ID,
@@ -265,20 +257,30 @@ Do not change the meaning, tone, or structure of the content.
 		if cfg.SearxNG.MaxResults > 0 {
 			maxResults = cfg.SearxNG.MaxResults
 		}
-// Auto web search decision
+if req.Prompt == "" {
+	conn.WriteJSON(map[string]string{"error": "missing prompt"})
+	return
+}
+
+// --- AUTO WEB SEARCH DECISION ---
 autoSearch := false
 
-// Only consider auto if user didn't explicitly enable search
-if !req.WebSearch {
-    if shouldAutoSearch(req.Prompt) {
-        autoSearch = true
-    } else {
-        tinyModel := cfg.LLMs[0].URL // smallest model slot
-        if tinyModelThinksWebNeeded(tinyModel, req.Prompt) {
-            autoSearch = true
-        }
-    }
+if !req.WebSearch { // only if user didn't manually enable
+	if shouldAutoSearch(req.Prompt) {
+		autoSearch = true
+	} else {
+		tinyModel := cfg.LLMs[0].URL
+		if tinyModelThinksWebNeeded(tinyModel, req.Prompt) {
+			autoSearch = true
+		}
+	}
 }
+
+// Notify UI if auto triggered
+if autoSearch && !req.WebSearch {
+	conn.WriteJSON(map[string]string{"auto_search": "true"})
+}
+
 
 		if req.WebSearch || autoSearch {
 			searxngURL := cfg.SearxNG.URL
