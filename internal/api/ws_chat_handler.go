@@ -20,6 +20,113 @@ import (
 	"go-llama/internal/db"
 )
 
+// --- Auto Web Search Logic ---
+func shouldAutoSearch(prompt string) bool {
+	p := strings.ToLower(prompt)
+	score := 0
+
+	// User override: don't search
+	if strings.Contains(p, "don't search") || strings.Contains(p, "do not search") {
+		return false
+	}
+
+	// Recent years
+	if strings.Contains(p, "2024") || strings.Contains(p, "2025") {
+		score += 2
+	}
+
+	// Freshness words
+	fresh := []string{"latest", "current", "today", "now"}
+	for _, w := range fresh {
+		if strings.Contains(p, w) {
+			score += 2
+			break
+		}
+	}
+
+	// Price / rates
+	priceWords := []string{"price", "rate", "convert", "exchange", "worth"}
+	for _, w := range priceWords {
+		if strings.Contains(p, w) {
+			score += 2
+			break
+		}
+	}
+
+	// News / live info
+	newsWords := []string{"news", "update", "trending", "live", "results"}
+	for _, w := range newsWords {
+		if strings.Contains(p, w) {
+			score += 2
+			break
+		}
+	}
+
+	// Tickers
+	if strings.Contains(p, "btc") || strings.Contains(p, "eth") ||
+		strings.Contains(p, "aapl") || strings.Contains(p, "tsla") ||
+		strings.Contains(p, "nvda") {
+		score += 3
+	}
+
+	// Question pattern boost
+	questionWords := []string{"who", "when", "where", "what", "will", "did", "does"}
+	parts := strings.Fields(p)
+	if len(parts) > 3 {
+		for _, q := range questionWords {
+			if strings.HasPrefix(p, q) {
+				score++
+				break
+			}
+		}
+	}
+
+	return score >= 3
+}
+
+func tinyModelThinksWebNeeded(modelURL, prompt string) bool {
+	payload := map[string]interface{}{
+		"model": "", // filled later by handler's first model
+		"messages": []map[string]string{
+			{
+				"role": "system",
+				"content": "Answer only yes or no. Does this query require up-to-date external information from the web?",
+			},
+			{
+				"role": "user",
+				"content": prompt,
+			},
+		},
+		"max_tokens": 2,
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", modelURL, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	client := http.Client{Timeout: 2 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&resp)
+
+	if len(resp.Choices) > 0 {
+		txt := strings.ToLower(strings.TrimSpace(resp.Choices[0].Message.Content))
+		return strings.HasPrefix(txt, "y")
+	}
+	return false
+}
+
+
 // WebSocket message format
 type WSChatPrompt struct {
 	ChatID    int    `json:"chatId"`
@@ -87,6 +194,10 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			conn.WriteJSON(map[string]string{"error": "missing prompt"})
 			return
 		}
+if autoSearch && !req.WebSearch {
+	conn.WriteJSON(map[string]string{"auto_search": "true"})
+}
+
 
 		userMsg := chat.Message{
 			ChatID:    chatInst.ID,
@@ -154,7 +265,22 @@ Do not change the meaning, tone, or structure of the content.
 		if cfg.SearxNG.MaxResults > 0 {
 			maxResults = cfg.SearxNG.MaxResults
 		}
-		if req.WebSearch {
+// Auto web search decision
+autoSearch := false
+
+// Only consider auto if user didn't explicitly enable search
+if !req.WebSearch {
+    if shouldAutoSearch(req.Prompt) {
+        autoSearch = true
+    } else {
+        tinyModel := cfg.LLMs[0].URL // smallest model slot
+        if tinyModelThinksWebNeeded(tinyModel, req.Prompt) {
+            autoSearch = true
+        }
+    }
+}
+
+		if req.WebSearch || autoSearch {
 			searxngURL := cfg.SearxNG.URL
 			if searxngURL == "" {
 				searxngURL = "http://localhost:8888/search"

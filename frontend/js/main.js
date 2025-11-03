@@ -686,6 +686,18 @@ function startStreamingResponse(prompt) {
             window.lastWS.tokenCount += msg.Choices[0].Delta.Content.length;
             renderStreaming(window.lastWS.tokens);
         }
+// Auto search notification
+if (msg.auto_search) {
+    const chatMessagesDiv = document.getElementById("chatMessages");
+    const badge = document.createElement("div");
+    badge.textContent = "Auto Web Search ✓";
+    badge.style.fontSize = "0.75rem";
+    badge.style.opacity = "0.6";
+    badge.style.margin = "4px 0";
+    chatMessagesDiv.appendChild(badge);
+    chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+}
+
         if (msg.token !== undefined) {
             window.lastWS.tokens += msg.token;
             window.lastWS.tokenCount += msg.token.length;
