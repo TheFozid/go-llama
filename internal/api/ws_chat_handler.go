@@ -244,13 +244,29 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			})
 		}
 
-		mdInstruction := `
-Please format your response in valid Markdown. Use headings, lists, and code blocks where appropriate.
-Do not change the meaning, tone, or structure of the content.
+mdInstruction := `
+Write clearly and naturally.
+Use light Markdown formatting only when it improves clarity.
+
+Rules:
+- Short direct answers should be plain text.
+- For longer or structured answers, use minimal Markdown:
+  - Bullet points for lists
+  - Bold for emphasis when helpful
+  - Headings sparingly (only if they genuinely help)
+  - Code blocks only for code or technical output
+- Do not format just for decoration or style. Clarity first, formatting second.
 `
+
 		llmMessages = append([]map[string]string{
 			{"role": "system", "content": mdInstruction},
 		}, llmMessages...)
+
+// Per-turn light markdown reminder
+llmMessages = append([]map[string]string{
+    {"role": "system", "content": "(Formatting note: Use light Markdown only if it improves clarity.)"},
+}, llmMessages...)
+
 
 		var sources []map[string]string
 		maxResults := 4 // default
