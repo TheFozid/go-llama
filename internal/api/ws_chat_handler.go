@@ -300,19 +300,45 @@ func streamLLMResponseWS(conn *websocket.Conn, llmURL string, payload map[string
 			continue
 		}
 		log.Printf("WS LLM chunk: %+v", chunk)
-	if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-	    token := chunk.Choices[0].Delta.Content
 
-	    // Start timer when we receive first token
-	    if firstToken {
-	        startTime = time.Now()
-	        firstToken = false
-	    }
+if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+    token := chunk.Choices[0].Delta.Content
 
-	    responseBuilder.WriteString(token)
-	    conn.WriteJSON(WSChatToken{Token: token, Index: index})
-	    index++
-	}
+    // Start timer when we receive first token
+    if firstToken {
+        startTime = time.Now()
+        firstToken = false
+    }
+
+    // Detect end tokens ONLY when stream is truly ending
+    endTokens := []string{
+        "<|end_of_text|>",
+        "<|end|>",
+        "<|assistant|>",
+        "<|eot_id|>",
+        "<|im_end|>",
+        "[|endofturn|]",
+    }
+
+    isEndToken := false
+    for _, t := range endTokens {
+        if token == t {
+            isEndToken = true
+            break
+        }
+    }
+
+    // Soft stop — skip outputting the end token
+    if isEndToken {
+        continue
+    }
+
+    // Normal token streaming
+    responseBuilder.WriteString(token)
+    conn.WriteJSON(WSChatToken{Token: token, Index: index})
+    index++
+}
+
 
 		if chunk.FinishReason != "" {
 			break
