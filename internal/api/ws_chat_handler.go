@@ -183,17 +183,22 @@ Do not change the meaning, tone, or structure of the content.
 				}
 			}
 			if len(sources) > 0 {
-				webContext := "Web search results:\n"
-				for i, src := range sources {
-					webContext += "[" + strconv.Itoa(i+1) + "] \"" + src["title"] + "\": " + src["snippet"] + " (" + src["url"] + ")\n"
-				}
-				webContext += `
-Using only the above web results and your own knowledge, please answer the following user question clearly and accurately.
-Format your response in valid Markdown. Use headings, lists, and code blocks where appropriate.
-Do not change the meaning, tone, or structure of the content.
-Include citations or references for any referenced sources in markdown format.
+webContext := "Web search results:\n"
+for i, src := range sources {
+    webContext += "[" + strconv.Itoa(i+1) + "] " + src["title"] + ": " + src["snippet"] + " -> URL: " + src["url"] + "\n"
+}
+webContext += `
+
+Use your own knowledge and the information above to answer the user's question.
+
+If you use a web result, cite it inline like [1].
+If you choose to add a hyperlink, use: [1](matching URL).
+
+Do not include a list of references and do not repeat URLs at the end.
+Format the answer in Markdown when helpful, but keep the message natural.
 
 Question: ` + req.Prompt + "\n"
+
 				llmMessages = append([]map[string]string{
 					{"role": "user", "content": webContext},
 				}, llmMessages[1:]...)

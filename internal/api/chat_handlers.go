@@ -371,11 +371,23 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 			// Prepend a formatted context to the prompt if results exist
 			if len(sources) > 0 {
-				webContext := "Web search results:\n"
-				for i, src := range sources {
-					webContext += fmt.Sprintf("[%d] \"%s\": %s (%s)\n", i+1, src["title"], src["snippet"], src["url"])
-				}
-				webContext += "\nUsing only the above web results and your own knowledge, answer the following question. Cite [n] where you use web results.\n"
+webContext := "Web search results:\n"
+for i, src := range sources {
+    webContext += fmt.Sprintf("[%d] %s: %s -> URL: %s\n", i+1, src["title"], src["snippet"], src["url"])
+}
+webContext += `
+
+Use your own knowledge and the information above to answer the user's question.
+
+If you use a web result, cite it inline like [1].
+If you choose to add a hyperlink, use: [1](matching URL).
+
+Do not include a list of references and do not repeat URLs at the end.
+Format the answer in Markdown when helpful, but keep the message natural.
+
+Question: `
+webContext += req.Content
+
 				// Insert as the first user message (preserve any real user messages after it)
 				llmMessages = append([]map[string]string{
 					{"role": "user", "content": webContext + req.Content},
