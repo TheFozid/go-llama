@@ -83,27 +83,28 @@ Screenshots are available in the screenshots directory.
 ---
 
 ## Installation (Docker)
-
+```
 git clone https://github.com/TheFozid/go-llama.git
 cd go-llama
 
 cp config.sample.json config.json
+```
 # Edit config.json
-
+```
 docker compose up --build -d
-
+```
 Application URL:
 http://localhost:8070/go-llama
 
 ---
 
 ## Upgrading
-
+```
 cd go-llama
 git pull
 docker compose down
 docker compose up --build -d
-
+```
 If you maintain chat history or user accounts, do not delete your database volume.  
 Check PROJECT_STATE.md for major changes.
 
@@ -111,6 +112,7 @@ Check PROJECT_STATE.md for major changes.
 
 ## Reverse Proxy (Nginx example)
 
+```
 location /go-llama {
     proxy_pass http://localhost:8070/go-llama;
     proxy_set_header Host $host;
@@ -122,7 +124,7 @@ location /go-llama {
     proxy_set_header Connection "upgrade";
     proxy_buffering off;
 }
-
+```
 ---
 
 ## Configuration
