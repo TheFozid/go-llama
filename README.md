@@ -1,75 +1,116 @@
 # Go-LLama
 
-![Go-Llama Logo](static/Go-Llama-logo.png)
+Local, private, fast LLM chat interface and orchestrator with optional web search via SearxNG.  
+Designed for self-hosting on everything from low-power mini-PCs to servers.
 
 ---
 
-## Modern Local LLM Chat Web App
+## Overview
 
-Go-LLama is a fully self-hosted, modern chat UI for local LLMs (llama.cpp/llamafile), featuring user authentication, persistent chat history, live streaming, and optional web search via SearxNG.  
-**Deploy on your own hardware, scale as needed, and keep your data private.**
+Go-LLama is a modern, secure, and high-performance chat interface for local LLMs such as llama.cpp and llamafile.  
+It provides user accounts, persistent chats, streaming responses, and automatic web search for real-time answers.
 
----
+This project prioritizes:
 
-## Features
-
-- **Local LLM chat:** Connects to llama.cpp/llamafile and compatible APIs.  
-- **User authentication:** JWT-based login, admin/user roles, session expiry.
-- **Persistent chat history:** Each user gets private chat history, can rename/delete chats.
-- **Live streaming:** WebSocket-powered, tokens/sec display, stop button.
-- **Web search integration:** Toggle SearxNG results in chat for up-to-date answers.
-- **User management:** Admins can add/edit/delete users; users manage their own accounts.
-- **Responsive front-end:** Bootstrap UI, mobile-friendly, tooltips, icons, transitions.
-- **Configurable subpath:** Deploy under any subpath (default: `/go-llama`).
-- **Dockerized database & cache:** PostgreSQL, Redis, and backend via Docker Compose.
-- **OpenAPI spec:** See [openapi/openapi.yaml](openapi/openapi.yaml) for full API documentation.
+- Low resource usage
+- Fast response time even on low-end hardware
+- Privacy and self-hosting
+- Simplicity and stability
 
 ---
 
-![Screenshot 1](screenshots/1.jpg)
+## Key Features
 
-![Screenshot 2](screenshots/2.jpg)
+### LLM Interaction
+- Connects to local llama.cpp, llamafile, or compatible REST LLM endpoints
+- True streaming token output, with tokens-per-second display
+- Session reuse when supported by the model backend
+- Automatic context window management
 
-![Screenshot 3](screenshots/3.jpg)
+### Web Search (SearxNG)
+- No manual toggle required
+- Search triggers automatically when relevant to the question
+- User can override via natural language:
+  - "search the web for ..."
+  - "do not search the web"
+- Search results are fed to the LLM before answering
+- Sources are appended at the end of responses
 
-![Screenshot 4](screenshots/4.jpg)
+### Authentication & User System
+- JWT-based login
+- Admin and standard user roles
+- User management UI
+- Private chat history
 
-![Screenshot 5](screenshots/5.jpg)
+### UI & UX
+- Bootstrap clean UI
+- Mobile-friendly
+- Streaming response bubbles
+- Stop generation button
 
-![Go-Llama Logo](static/Go-Llama-logo.png)
-
----
-
-## Quickstart (Dockerized Deployment)
-
-1. **Clone this repo:**
-    ```sh
-    git clone https://github.com/TheFozid/go-llama.git
-    cd go-llama
-    ```
-
-2. **Copy & edit config:**
-    ```sh
-    cp config.sample.json config.json
-    # Edit config.json for your setup (see comments inside)
-    # For Docker Compose, use: host=postgres (not localhost) for database, addr=redis:6379 for Redis
-    ```
-
-3. **Build and start all services (backend, database, cache):**
-    ```sh
-    docker compose up --build -d
-    ```
-
-4. **Open in browser:**  
-   Visit [http://localhost:8070/go-llama](http://localhost:8070/go-llama) (or your configured subpath).
+### Deployment
+- Works under a subpath (default /go-llama)
+- Docker-ready: PostgreSQL + Redis + Backend
+- OpenAPI spec included
 
 ---
 
-## Reverse Proxy Example (Nginx)
+## Performance Focus
 
-To expose Go-LLama securely or behind a custom domain, you can use a **single location block** for all web app traffic:
+Go-LLama is optimized to run efficiently even on low power hardware such as:
 
-```nginx
+- Intel N97 / N100 mini PCs
+- Small ARM SBCs (Raspberry Pi class, with small models)
+- Older laptops and low wattage home servers
+
+Performance strategies include:
+
+- Efficient Go WebSocket streaming
+- Minimal JavaScript execution
+- Very low server memory footprint
+- On-demand SearxNG triggering instead of always searching
+- Lightweight tiny-model check to validate search need (optional)
+- No background cron workers or idle overhead
+
+Result: fast UI response and chat flow, even with very small CPUs.
+
+---
+
+## Screenshots
+
+Screenshots are available in the screenshots directory.
+
+---
+
+## Installation (Docker)
+
+git clone https://github.com/TheFozid/go-llama.git
+cd go-llama
+
+cp config.sample.json config.json
+# Edit config.json
+
+docker compose up --build -d
+
+Application URL:
+http://localhost:8070/go-llama
+
+---
+
+## Upgrading
+
+cd go-llama
+git pull
+docker compose down
+docker compose up --build -d
+
+If you maintain chat history or user accounts, do not delete your database volume.  
+Check PROJECT_STATE.md for major changes.
+
+---
+
+## Reverse Proxy (Nginx example)
+
 location /go-llama {
     proxy_pass http://localhost:8070/go-llama;
     proxy_set_header Host $host;
@@ -79,81 +120,50 @@ location /go-llama {
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    proxy_read_timeout 600s;
-    proxy_send_timeout 600s;
-    proxy_connect_timeout 600s;
     proxy_buffering off;
-    proxy_request_buffering off;
-    # For WebSocket and chunked HTTP streaming
-    chunked_transfer_encoding on;
 }
-```
-
-- This setup proxies all requests to `/go-llama` and its subpaths (like `/go-llama/static/...`) to your backend.
-- Make sure your backend config `subpath` is set to `/go-llama`.
-- For HTTPS, also set up SSL/TLS as usual.
-
----
-
-## Documentation
-
-- [Setup Guide](SETUP.md)
-- [Manual Testing](MANUAL_TESTING.md)
-- [Security Hardening](HARDENING.md)
-- [API Spec](openapi/openapi.yaml)
-- [Project State & Progress](PROJECT_STATE.md)
-- [Code Review Tracker](CODE_REVIEW_TRACKER.md)
 
 ---
 
 ## Configuration
 
-- See [`config.sample.json`](config.sample.json) for a template.
-- **Do not commit `config.json` with secrets!**  
-  Use `.gitignore` (already included).
-- For Docker Compose, use service names (`postgres`, `redis`) as hosts in `config.json`.
+Config file: config.json  
+Sample file: config.sample.json
+
+Important settings include:
+
+- Subpath
+- Database and Redis connection
+- Model list and endpoints
+- SearxNG settings (URL and max results)
+
+Do not commit config.json.
 
 ---
 
 ## Troubleshooting
 
-- **Frontend not loading?**  
-  Make sure `frontend/` and `static/` are included in your Docker image (see Dockerfile).
-- **Database/Redis errors?**  
-  Use `host=postgres`, `addr=redis:6379` in your config when running via Docker Compose.
-- **Favicon or logo not showing?**  
-  Ensure static files are present in `/app/static` inside the container and referenced as `/go-llama/static/...` in your HTML.
-- **Check logs:**  
-  ```sh
-  docker compose logs go-llama-backend
-  ```
+Frontend not loading:
+Ensure static and frontend files are in the container.
+
+Web search not working:
+Confirm SearxNG URL is reachable and referenced in config.json.
+
+Streaming not working:
+Check nginx reverse proxy headers.
+
+Logs:
+docker compose logs go-llama-backend
 
 ---
 
 ## License
 
-MIT License (see [LICENSE](LICENSE))
+MIT License — see LICENSE.
 
 ---
 
-## Credits
+## Contribution
 
-- **Created by:** [TheFozid](https://github.com/TheFozid)
-- **Copilot & Documentation:** [GitHub Copilot](https://github.com/features/copilot), @copilot
-
----
-
-## Contributing
-
-PRs, issues, and suggestions welcome!  
-Open an issue or discussion for questions, bugs, or feature requests.
-
----
-
-## Screenshot
-
-![Go-Llama Logo](static/Go-Llama-logo.png)
-
----
-
-> Deploy, chat, and power up your local LLMs with Go-LLama!
+Pull requests welcome.  
+Ideas and improvements encouraged: performance, UI, and model routing.
