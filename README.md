@@ -1,7 +1,7 @@
 # Go-LLama
 
 Local, private, fast LLM chat interface and orchestrator with optional web search via SearxNG.  
-Designed for self-hosting on everything from low-power mini-PCs to servers.
+Designed for self-hosting on everything from low-power mini-PCs to servers.  
 Outperforms open-webUI due to being lighter on system resources.
 
 ---
@@ -144,16 +144,16 @@ Important settings include:
 
 ## Troubleshooting
 
-Frontend not loading:
+Frontend not loading:  
 Ensure static and frontend files are in the container.
 
-Web search not working:
+Web search not working:  
 Confirm SearxNG URL is reachable and referenced in config.json.
 
-Streaming not working:
+Streaming not working:  
 Check nginx reverse proxy headers.
 
-Logs:
+Logs:  
 docker compose logs go-llama-backend
 
 ---
