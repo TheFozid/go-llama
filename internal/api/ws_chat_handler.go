@@ -99,6 +99,38 @@ for _, phrase := range explicitSearchPhrases {
 		}
 	}
 
+// Extra positive search signals
+if strings.HasSuffix(p, "?") {
+    score++
+}
+if strings.Contains(p, " vs ") || strings.Contains(p, "compare") {
+    score++
+}
+currencyHints := []string{"£", "$", "€", "price of", "how much is"}
+for _, w := range currencyHints {
+    if strings.Contains(p, w) {
+        score++
+        break
+    }
+}
+recentPhrases := []string{"breaking", "just announced", "results today"}
+for _, w := range recentPhrases {
+    if strings.Contains(p, w) {
+        score++
+        break
+    }
+}
+
+// Negative signals — reduce search likelihood
+negativeWords := []string{"explain", "tutorial", "guide", "overview", "story", "fiction"}
+for _, w := range negativeWords {
+    if strings.Contains(p, w) {
+        score -= 2
+        break
+    }
+}
+
+
 // Adjust search threshold based on prompt length
 words := strings.Fields(p)
 dynamicThreshold := 3 + (len(words) / 80) // +1 point per 80 words
@@ -278,7 +310,12 @@ if autoSearch && !req.WebSearch {
 			if searxngURL == "" {
 				searxngURL = "http://localhost:8888/search"
 			}
-			httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(req.Prompt) + "&format=json")
+searchQuery := req.Prompt
+if len(strings.Fields(req.Prompt)) > 20 {
+    searchQuery = compressForSearch(req.Prompt)
+}
+
+httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(searchQuery) + "&format=json")
 			if err == nil && httpResp.StatusCode == 200 {
 				defer httpResp.Body.Close()
 				var searxResp struct {
@@ -488,4 +525,55 @@ if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 	*respOut = responseBuilder.String()
 	*toksPerSecOut = toksPerSec
 	return nil
+}
+// Compress long prompts into clean search queries
+func compressForSearch(prompt string) string {
+    words := strings.Fields(prompt)
+    if len(words) <= 20 {
+        return prompt
+    }
+
+    p := strings.ToLower(prompt)
+
+    stopwords := map[string]bool{
+        "a":true,"an":true,"the":true,"of":true,"for":true,"to":true,"in":true,"on":true,"with":true,"and":true,"or":true,
+        "by":true,"be":true,"is":true,"are":true,"that":true,"which":true,"this":true,"those":true,"about":true,"can":true,
+        "you":true,"could":true,"would":true,"please":true,"tell":true,"me":true,"explain":true,"give":true,"i":true,"want":true,
+    }
+
+    tokens := strings.Fields(p)
+    var keep []string
+
+    for _, t := range tokens {
+        if stopwords[t] {
+            continue
+        }
+        // keep numbers and years
+        if strings.ContainsAny(t, "0123456789") {
+            keep = append(keep, t)
+            continue
+        }
+        // known tickers
+        if t == "btc" || t == "eth" || t == "aapl" || t == "tsla" || t == "nvda" {
+            keep = append(keep, t)
+            continue
+        }
+        // skip tiny tokens
+        if len(t) <= 2 {
+            continue
+        }
+
+        keep = append(keep, t)
+    }
+
+    // limit to 12 keywords max
+    if len(keep) > 12 {
+        keep = keep[:12]
+    }
+
+    if len(keep) < 3 {
+        return prompt
+    }
+
+    return strings.Join(keep, " ")
 }
