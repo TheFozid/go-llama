@@ -99,51 +99,12 @@ for _, phrase := range explicitSearchPhrases {
 		}
 	}
 
-	return score >= 3
+// Adjust search threshold based on prompt length
+words := strings.Fields(p)
+dynamicThreshold := 3 + (len(words) / 80) // +1 point per 80 words
+
+return score >= dynamicThreshold
 }
-
-func tinyModelThinksWebNeeded(modelURL, prompt string) bool {
-	payload := map[string]interface{}{
-		"model": "", // filled later by handler's first model
-		"messages": []map[string]string{
-			{
-				"role": "system",
-				"content": "Answer only yes or no. Does this query require up-to-date external information from the web?",
-			},
-			{
-				"role": "user",
-				"content": prompt,
-			},
-		},
-		"max_tokens": 2,
-	}
-
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", modelURL, bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	client := http.Client{Timeout: 2 * time.Second}
-	res, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	defer res.Body.Close()
-
-	var resp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	_ = json.NewDecoder(res.Body).Decode(&resp)
-
-	if len(resp.Choices) > 0 {
-		txt := strings.ToLower(strings.TrimSpace(resp.Choices[0].Message.Content))
-		return strings.HasPrefix(txt, "y")
-	}
-	return false
-}
-
 
 // WebSocket message format
 type WSChatPrompt struct {
@@ -299,16 +260,12 @@ if req.Prompt == "" {
 // --- AUTO WEB SEARCH DECISION ---
 autoSearch := false
 
-if !req.WebSearch { // only if user didn't manually enable
-	if shouldAutoSearch(req.Prompt) {
-		autoSearch = true
-	} else {
-		tinyModel := cfg.LLMs[0].URL
-		if tinyModelThinksWebNeeded(tinyModel, req.Prompt) {
-			autoSearch = true
-		}
-	}
+if !req.WebSearch {
+    if shouldAutoSearch(req.Prompt) {
+        autoSearch = true
+    }
 }
+
 
 // Notify UI if auto triggered
 if autoSearch && !req.WebSearch {
