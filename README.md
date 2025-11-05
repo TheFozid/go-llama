@@ -2,7 +2,8 @@
 
 Local, private, fast LLM chat interface and orchestrator with optional web search via SearxNG.  
 Designed for self-hosting on everything from low-power mini-PCs to servers.  
-Outperforms open-webUI due to being lighter on system resources.
+Outperforms open-webUI due to being lighter on system resources.  
+Multi-architecture prebuilds that are auto pulled via docker compose are AMD64, ARM64 and ARMv7
 
 ---
 
