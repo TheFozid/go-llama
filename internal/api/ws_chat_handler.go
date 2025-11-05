@@ -526,6 +526,24 @@ if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 	*toksPerSecOut = toksPerSec
 	return nil
 }
+// Known geographic & political keywords to preserve during search compression
+var geoTokens = map[string]bool{
+    "uk":true, "united kingdom":true, "britain":true, "british":true, "england":true, "scotland":true, "wales":true, "london":true,
+    "us":true, "usa":true, "united states":true, "american":true, "america":true, "washington":true,
+    "canada":true, "canadian":true, "ottawa":true,
+    "australia":true, "australian":true, "sydney":true,
+    "europe":true, "eu":true, "european":true,
+    "france":true, "french":true, "paris":true,
+    "germany":true, "german":true, "berlin":true,
+    "italy":true, "italian":true, "rome":true,
+    "spain":true, "spanish":true, "madrid":true,
+    "japan":true, "japanese":true, "tokyo":true,
+    "china":true, "chinese":true, "beijing":true,
+    "india":true, "indian":true, "delhi":true,
+    "russia":true, "russian":true, "moscow":true,
+    "ukraine":true, "ukrainian":true, "kyiv":true,
+    "brazil":true, "brazilian":true, "brasilia":true,
+}
 // Compress long prompts into clean search queries
 func compressForSearch(prompt string) string {
     words := strings.Fields(prompt)
@@ -558,10 +576,10 @@ func compressForSearch(prompt string) string {
             keep = append(keep, t)
             continue
         }
-        // skip tiny tokens
-        if len(t) <= 2 {
-            continue
-        }
+// keep geo tokens even if short (e.g., "uk", "us", "eu")
+if len(t) <= 2 && !geoTokens[t] {
+    continue
+}
 
         keep = append(keep, t)
     }
@@ -574,6 +592,21 @@ func compressForSearch(prompt string) string {
     if len(keep) < 3 {
         return prompt
     }
+// Ensure the original geo context is not lost
+for key := range geoTokens {
+    if strings.Contains(p, key) {
+        found := false
+        for _, k := range keep {
+            if k == key {
+                found = true
+                break
+            }
+        }
+        if !found {
+            keep = append(keep, key)
+        }
+    }
+}
 
     return strings.Join(keep, " ")
 }
