@@ -2,6 +2,7 @@
 
 Local, private, fast LLM chat interface and orchestrator with optional web search via SearxNG.  
 Designed for self-hosting on everything from low-power mini-PCs to servers.
+Outperforms open-webUI due to being lighter on system resources.
 
 ---
 
@@ -67,9 +68,8 @@ Performance strategies include:
 
 - Efficient Go WebSocket streaming
 - Minimal JavaScript execution
-- Very low server memory footprint
+- Very low server memory footprint (Only 50mb of RAM)
 - On-demand SearxNG triggering instead of always searching
-- Lightweight tiny-model check to validate search need (optional)
 - No background cron workers or idle overhead
 
 Result: fast UI response and chat flow, even with very small CPUs.
@@ -88,6 +88,7 @@ git clone https://github.com/TheFozid/go-llama.git
 cd go-llama
 
 cp config.sample.json config.json
+(edit the config.json file with your searxng url, searxng results per query, llm servers and security detail.)
 ```
 # Edit config.json
 ```
@@ -138,8 +139,6 @@ Important settings include:
 - Database and Redis connection
 - Model list and endpoints
 - SearxNG settings (URL and max results)
-
-Do not commit config.json.
 
 ---
 
