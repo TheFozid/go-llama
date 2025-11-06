@@ -21,7 +21,11 @@ import (
 )
 
 // --- Auto Web Search Logic ---
-func shouldAutoSearch(prompt string) bool {
+func shouldAutoSearch(cfg *config.Config, prompt string) bool {
+// Disable auto web search entirely if max results set to 0 or less
+if cfg.SearxNG.MaxResults <= 0 {
+    return false
+}
 	p := strings.ToLower(prompt)
 	score := 0
 
@@ -293,7 +297,7 @@ if req.Prompt == "" {
 autoSearch := false
 
 if !req.WebSearch {
-    if shouldAutoSearch(req.Prompt) {
+    if shouldAutoSearch(cfg, req.Prompt) {
         autoSearch = true
     }
 }
