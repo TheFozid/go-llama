@@ -48,7 +48,7 @@ echo
 # Build + push images for AMD64 + ARM64
 echo "🚀 Building & pushing multi-arch images..."
 docker buildx build \
-  --platform linux/amd64 \
+  --platform linux/amd64,linux/arm64,linux/arm/v7 \
   -t "$IMAGE_BASE:latest" \
   -t "$IMAGE_BASE:$VERSION" \
   -t "$IMAGE_BASE:$MAJOR.$MINOR" \
