@@ -21,7 +21,7 @@ services:
     command: redis-server --appendonly yes  # Persistence
 
   go-llama-backend:
-    build: .
+    image: ghcr.io/thefozid/go-llama:latest
     restart: always
     ports:
       - "8070:8070"
