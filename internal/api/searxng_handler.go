@@ -42,7 +42,10 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 		u, _ := url.Parse(searxngURL)
 		q := u.Query()
-		q.Set("q", req.Prompt)
+		searchQuery := cleanForSearch(req.Prompt)
+		q.Set("q", searchQuery)
+		log.Printf("🔍 Cleaned query: %q → %q", req.Prompt, searchQuery)
+
 		q.Set("format", "json")
 		u.RawQuery = q.Encode()
 
