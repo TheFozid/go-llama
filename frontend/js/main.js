@@ -740,23 +740,41 @@ window.startStreamingResponse = startStreamingResponse;
 
 // --- Streaming renderer (PATCHED for thinking bubble) ---
 function renderStreaming(mdText, sources, isFinal) {
-    const bubble = document.getElementById("streamingBubble");
-    if (!bubble) return;
-    window.requestAnimationFrame(() => {
-        bubble.innerHTML = renderWithThinkingBubbles(mdText);
+const bubble = document.getElementById("streamingBubble");
+if (!bubble) return;
 
-        // Always scroll chatMessages div to bottom
-        const chatMessagesDiv = document.getElementById("chatMessages");
-        if (chatMessagesDiv) {
-            chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
-        }
+window.requestAnimationFrame(() => {
+    bubble.innerHTML = renderWithThinkingBubbles(mdText);
 
-        // Scroll the inner thinking bubble to bottom if present
-        const thinkingBubble = bubble.querySelector('.thinking-bubble');
-        if (thinkingBubble) {
-            thinkingBubble.scrollTop = thinkingBubble.scrollHeight;
-        }
-    });
+    // --- Add collapsible sources if final and sources exist ---
+    if (isFinal && Array.isArray(sources) && sources.length > 0) {
+        const details = document.createElement("details");
+        details.className = "sources-block";
+        const summary = document.createElement("summary");
+        summary.textContent = "View Sources";
+        summary.className = "sources-summary";
+        details.appendChild(summary);
+
+        const list = document.createElement("ul");
+        list.className = "sources-list";
+
+        sources.forEach((src, i) => {
+            const li = document.createElement("li");
+            li.innerHTML = `<strong>[${i + 1}]</strong> <a href="${src.url}" target="_blank">${src.title}</a>: ${src.snippet}`;
+            list.appendChild(li);
+        });
+
+        details.appendChild(list);
+        bubble.appendChild(details);
+    }
+
+    // Keep autoscroll working
+    const chatMessagesDiv = document.getElementById("chatMessages");
+    if (chatMessagesDiv) chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+
+    const thinkingBubble = bubble.querySelector(".thinking-bubble");
+    if (thinkingBubble) thinkingBubble.scrollTop = thinkingBubble.scrollHeight;
+});
 }
 window.renderStreaming = renderStreaming;
 
