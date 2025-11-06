@@ -353,12 +353,12 @@ body {
   }
 }
 
-/* --- Collapsible Sources Section --- */
+/* --- Collapsible Sources Block --- */
 .sources-block {
   margin-top: 1rem;
-  background: #f8f9fa;
+  background: #fff;
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
   padding: 0.5rem 0.75rem;
   font-size: 0.9em;
 }
@@ -371,23 +371,6 @@ body {
 .sources-block summary:hover {
   text-decoration: underline;
 }
-.sources-list {
-  margin-top: 0.5rem;
-  margin-bottom: 0;
-  padding-left: 1rem;
-  list-style: none;
-}
-.sources-list li {
-  margin-bottom: 0.4rem;
-  color: #333;
-  word-wrap: break-word;
-}
-.sources-list a {
-  color: #007bff;
-  text-decoration: none;
-}
-.sources-list a:hover {
-  text-decoration: underline;
-}
+
 
 /*--- END ---*/
