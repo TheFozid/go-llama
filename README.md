@@ -1,8 +1,8 @@
 # Go-LLama
 
 Local, private, fast LLM chat interface and orchestrator with optional web search via SearxNG.  
-Designed for self-hosting on everything from low-power mini-PCs to servers.  
-Outperforms open-webUI due to being lighter on system resources.  
+Designed for self-hosting on everything from low-power mini-PCs and raspberry pi's to desktops and servers.  
+Outperforms open-webUI due to less bloat and being lighter on system resources.  
 
 ---
 
@@ -86,6 +86,7 @@ curl -L -o config.json https://raw.githubusercontent.com/TheFozid/go-llama/main/
 
 # Edit config with your DB, Redis, LLM and SearxNG settings
 nano config.json
+nano docker-compose.yml
 
 # Start the services
 docker compose up -d
