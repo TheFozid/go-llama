@@ -2,10 +2,13 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"unicode/utf8"
 	"io"
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,7 +48,7 @@ func enrichAndSummarize(urlStr, fallbackSnippet string) string {
 		return fallbackSnippet
 	}
 
-	summary := summarizeText(text, 3) // roughly 3 sentences
+	summary := summarizeText(text, 4) // roughly 3 sentences
 	if summary == "" {
 		return fallbackSnippet
 	}
@@ -54,32 +57,162 @@ func enrichAndSummarize(urlStr, fallbackSnippet string) string {
 }
 
 // extractReadableText extracts visible text content from HTML.
-// It uses goquery if available; otherwise falls back to regex stripping.
+// It removes boilerplate (headers, navs, footers, ads, etc.).
 func extractReadableText(html string) string {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		// fallback to basic tag strip
 		re := regexp.MustCompile(`<[^>]+>`)
 		return re.ReplaceAllString(html, " ")
 	}
-	text := strings.TrimSpace(doc.Find("body").Text())
+
+	// Remove obvious non-content elements.
+	doc.Find("header, nav, footer, aside, script, style, noscript, svg, menu, form").Each(func(_ int, s *goquery.Selection) {
+		s.Remove()
+	})
+
+	// Remove common ad/promo/sidebar elements by class or id.
+	junkPatterns := []string{"nav", "menu", "header", "footer", "sidebar", "banner", "cookie", "ad", "promo", "share", "search", "modal", "popup"}
+	for _, pattern := range junkPatterns {
+		doc.Find(fmt.Sprintf("[class*=%q], [id*=%q]", pattern, pattern)).Each(func(_ int, s *goquery.Selection) {
+			s.Remove()
+		})
+	}
+
+	// Grab all paragraphs and article text.
+	var builder strings.Builder
+	doc.Find("article, main, section, p").Each(func(_ int, s *goquery.Selection) {
+		text := strings.TrimSpace(s.Text())
+		if len(text) > 0 {
+			builder.WriteString(text)
+			if !strings.HasSuffix(text, ".") {
+				builder.WriteString(". ")
+			} else {
+				builder.WriteString(" ")
+			}
+		}
+	})
+
+	text := builder.String()
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
-	return text
+	return strings.TrimSpace(text)
 }
 
-// summarizeText returns the first N sentences of a long string.
-// It’s intentionally lightweight — no LLM, just simple sentence splitting.
+// summarizeText condenses long article text into a short, non-repetitive summary.
+// It is robust: if aggressive filtering yields nothing, it falls back to the first N sentences.
 func summarizeText(text string, maxSentences int) string {
-	// naive sentence split
-	sentences := regexp.MustCompile(`(?m)([.!?])\s+`).Split(text, -1)
-	if len(sentences) == 0 {
+	text = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(text, " "))
+	if text == "" || maxSentences <= 0 {
 		return ""
 	}
 
-	if len(sentences) > maxSentences {
-		sentences = sentences[:maxSentences]
+	// Split into sentences while preserving end punctuation.
+	sentRe := regexp.MustCompile(`[^.!?]*[.!?]`)
+	raw := sentRe.FindAllString(text, -1)
+	if len(raw) == 0 {
+		if len(text) > 500 {
+			return text[:500] + "..."
+		}
+		return text
 	}
-	out := strings.Join(sentences, ". ")
-	out = strings.TrimSpace(out)
-	return out
+
+	// Global word frequency (simple importance estimate).
+	wordRe := regexp.MustCompile(`\pL+`)
+	freq := map[string]int{}
+	for _, w := range wordRe.FindAllString(strings.ToLower(text), -1) {
+		if len(w) > 2 {
+			freq[w]++
+		}
+	}
+
+	type sent struct {
+		s    string
+		idx  int
+		score int
+	}
+	var sents []sent
+	for i, s := range raw {
+		sc := 0
+		for _, w := range wordRe.FindAllString(strings.ToLower(s), -1) {
+			sc += freq[w]
+		}
+		sents = append(sents, sent{s: strings.TrimSpace(s), idx: i, score: sc})
+	}
+
+	// Rank by score descending; take a candidate pool wider than final N.
+	sort.Slice(sents, func(i, j int) bool { return sents[i].score > sents[j].score })
+	k := maxSentences * 3
+	if k > len(sents) {
+		k = len(sents)
+	}
+	cands := sents[:k]
+
+	// Deduplicate & trim extremes; keep sentences of reasonable size.
+	minRunes, maxRunes := 40, 400
+	simThresh := 0.7
+	chosen := make([]sent, 0, maxSentences)
+	for _, c := range cands {
+		runes := utf8.RuneCountInString(c.s)
+		if runes < minRunes || runes > maxRunes {
+			continue
+		}
+		dup := false
+		for _, d := range chosen {
+			if jaccardSimilarity(c.s, d.s) > simThresh {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			chosen = append(chosen, c)
+			if len(chosen) == maxSentences {
+				break
+			}
+		}
+	}
+
+	// If filters nuked everything, fall back to the first N sentences in order.
+	if len(chosen) == 0 {
+		n := maxSentences
+		if n > len(raw) {
+			n = len(raw)
+		}
+		return strings.TrimSpace(strings.Join(raw[:n], " "))
+	}
+
+	// Restore original order and join.
+	sort.Slice(chosen, func(i, j int) bool { return chosen[i].idx < chosen[j].idx })
+	out := make([]string, 0, len(chosen))
+	for _, c := range chosen {
+		out = append(out, c.s)
+	}
+	return strings.TrimSpace(strings.Join(out, " "))
+}
+
+func jaccardSimilarity(a, b string) float64 {
+	wordRe := regexp.MustCompile(`\pL+`)
+	wa := wordRe.FindAllString(strings.ToLower(a), -1)
+	wb := wordRe.FindAllString(strings.ToLower(b), -1)
+
+	setA := map[string]struct{}{}
+	setB := map[string]struct{}{}
+	for _, w := range wa {
+		setA[w] = struct{}{}
+	}
+	for _, w := range wb {
+		setB[w] = struct{}{}
+	}
+
+	inter := 0
+	union := len(setA)
+	for w := range setB {
+		if _, ok := setA[w]; ok {
+			inter++
+		} else {
+			union++
+		}
+	}
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
 }
