@@ -64,20 +64,22 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 		_ = json.Unmarshal(body, &searxResults)
 
-		sources := []SearxNGSource{}
-		for _, r := range searxResults.Results {
-			if r.Title == "" || r.URL == "" || r.Content == "" {
-				continue
-			}
-			sources = append(sources, SearxNGSource{
-				Title:   r.Title,
-				URL:     r.URL,
-				Snippet: r.Content,
-			})
-			if len(sources) >= 3 {
-				break
-			}
-		}
+sources := []SearxNGSource{}
+for _, r := range searxResults.Results {
+	if r.Title == "" || r.URL == "" {
+		continue
+	}
+	snippet := enrichAndSummarize(r.URL, r.Content)
+	sources = append(sources, SearxNGSource{
+		Title:   r.Title,
+		URL:     r.URL,
+		Snippet: snippet,
+	})
+	if len(sources) >= cfg.SearxNG.MaxResults {
+		break
+	}
+}
+
 
 		// --- 2. Format context for LLM ---
 		webContext := ""
