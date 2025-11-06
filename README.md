@@ -9,7 +9,7 @@ Multi-architecture prebuilds that are auto pulled via docker compose are AMD64, 
 
 ## Overview
 
-Go-LLama is a modern, secure, and high-performance chat interface for local LLMs such as llama.cpp and llamafile.  
+Go-LLama is a modern, secure, and high-performance chat interface for local LLMs such as vLLM, llama.cpp and llamafile.  
 It provides user accounts, persistent chats, streaming responses, and automatic web search for real-time answers.
 
 This project prioritizes:
@@ -24,7 +24,7 @@ This project prioritizes:
 ## Key Features
 
 ### LLM Interaction
-- Connects to local llama.cpp, llamafile, or compatible REST LLM endpoints  
+- Connects to local vLLM, llama.cpp, llamafile, or compatible REST LLM endpoints  
 - True streaming token output with tokens-per-second display  
 - Session reuse when supported by the model backend  
 - Automatic context window management  
@@ -34,6 +34,7 @@ This project prioritizes:
 - User can say “search the web…” or “do not search the web”  
 - Results injected into context before answering  
 - Sources shown at end of answer  
+- Can be entirely disabled by setting results to "0" in config.json  
 
 ### Authentication & Users
 - JWT-based authentication  
@@ -131,7 +132,7 @@ Configure:
 - PostgreSQL  
 - Redis  
 - LLM endpoints  
-- SearxNG URL & result count  
+- SearxNG URL & result count (set to 0 to disable)  
 
 ---
 
