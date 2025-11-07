@@ -354,6 +354,14 @@ webContext := "Web search results:\n"
 for i, src := range sources {
     webContext += "[" + strconv.Itoa(i+1) + "] " + src["title"] + ": " + src["snippet"] + " -> URL: " + src["url"] + "\n"
 }
+// 🟡 NEW graceful fallback if no results
+if (req.WebSearch || autoSearch) && len(sources) == 0 {
+    fallbackMsg := `No live web results were found from the attempted search.
+Please acknowledge this to the user, and answer using your own existing knowledge instead.`
+    llmMessages = append([]map[string]string{
+        {"role": "user", "content": fallbackMsg},
+    }, llmMessages...)
+}
 webContext += `
 
 Use your own knowledge and the information above to answer the user's question.
