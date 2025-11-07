@@ -486,22 +486,11 @@ async function deleteOwnUser() {
 
 // --- Markdown Renderer (using marked.js CDN) ---
 function renderMarkdown(md) {
-    if (!md) return "";
-
-    // ✅ Detect "Sources:" section at end of markdown
-    const match = md.match(/(?:^|\n)Sources:\s*\n([\s\S]*)$/i);
-    if (match) {
-        const before = md.slice(0, match.index);
-        const sources = match[1].trim();
-        const wrapped =
-            `${before.trim()}\n\n<details class="sources-block"><summary>View Sources</summary>\n\n${sources}\n\n</details>`;
-        md = wrapped;
-    }
-
     if (window.marked) {
         return marked.parse(md);
     }
     return md.replace(/\n/g, "<br>");
+}
 }
 
 

@@ -353,24 +353,4 @@ body {
   }
 }
 
-/* --- Collapsible Sources Block --- */
-.sources-block {
-  margin-top: 1rem;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-  padding: 0.5rem 0.75rem;
-  font-size: 0.9em;
-}
-.sources-block summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: #007bff;
-  outline: none;
-}
-.sources-block summary:hover {
-  text-decoration: underline;
-}
-
-
 /*--- END ---*/

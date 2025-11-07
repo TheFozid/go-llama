@@ -385,13 +385,14 @@ Question: ` + req.Prompt + "\n"
 		if strings.TrimSpace(botResponse) != "" {
 			botResponseWithStats := botResponse + "\n\n_Tokens/sec: " + fmt.Sprintf("%.2f", toksPerSec) + "_"
 
-	// Append sources if web search was used
+// Append sources if web search was used (collapsible)
 if (req.WebSearch || autoSearch) && len(sources) > 0 {
-	    botResponseWithStats += "\n\n**Sources:**\n"
-	    for i, src := range sources {
-	        botResponseWithStats += fmt.Sprintf("%d. [%s](%s)\n", i+1, src["title"], src["url"])
-	    }
-	}
+    botResponseWithStats += "\n\n<details><summary><strong>Sources</strong></summary>\n\n"
+    for i, src := range sources {
+        botResponseWithStats += fmt.Sprintf("%d. [%s](%s)\n", i+1, src["title"], src["url"])
+    }
+    botResponseWithStats += "\n</details>"
+}
 
 
 			botMsg := chat.Message{
