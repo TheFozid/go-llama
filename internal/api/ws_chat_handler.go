@@ -314,10 +314,17 @@ if autoSearch && !req.WebSearch {
 			if searxngURL == "" {
 				searxngURL = "http://localhost:8888/search"
 			}
-searchQuery := req.Prompt
-if len(strings.Fields(req.Prompt)) > 20 {
-    searchQuery = compressForSearch(req.Prompt)
+
+// --- Detect site-specific search ---
+cleanPrompt, siteDomain := extractSiteQuery(req.Prompt)
+searchQuery := cleanPrompt
+if len(strings.Fields(searchQuery)) > 20 {
+    searchQuery = compressForSearch(searchQuery)
 }
+if siteDomain != "" {
+    searchQuery = "site:" + siteDomain + " " + searchQuery
+}
+
 
 httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(searchQuery) + "&format=json")
 			if err == nil && httpResp.StatusCode == 200 {
