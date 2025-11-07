@@ -491,7 +491,7 @@ function renderMarkdown(md) {
     }
     return md.replace(/\n/g, "<br>");
 }
-}
+
 
 
 // --- Thinking Bubble Renderer ---
