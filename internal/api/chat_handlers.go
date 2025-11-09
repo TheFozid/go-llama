@@ -356,18 +356,31 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 						Content string `json:"content"`
 					} `json:"results"`
 				}
-				if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
-					for _, r := range searxResp.Results {
-						sources = append(sources, map[string]string{
-							"title":   r.Title,
-							"url":     r.URL,
-							"snippet": r.Content,
-						})
-						if len(sources) >= maxResults {
-							break
-						}
-					}
-				}
+if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
+    // Convert to reusable SearxResult slice for ranking
+    rawResults := make([]SearxResult, len(searxResp.Results))
+    for i, r := range searxResp.Results {
+        rawResults[i] = SearxResult{
+            Title:   r.Title,
+            URL:     r.URL,
+            Content: r.Content,
+        }
+    }
+
+    ranked := rankAndFilterResults(rawResults, req.Content)
+
+    for _, r := range ranked {
+        sources = append(sources, map[string]string{
+            "title":   r.Title,
+            "url":     r.URL,
+            "snippet": r.Content,
+        })
+        if len(sources) >= maxResults {
+            break
+        }
+    }
+}
+
 			}
 			// Prepend a formatted context to the prompt if results exist
 			if len(sources) > 0 {
