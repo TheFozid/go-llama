@@ -64,4 +64,8 @@ git push
 git push --tags
 
 echo
+echo "Cleaning up images / docker"
+docker system prune -a --volumes
+
+echo
 echo "✅ Release v$VERSION complete"

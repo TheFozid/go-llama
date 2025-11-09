@@ -67,6 +67,9 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 		_ = json.Unmarshal(body, &searxResults)
 
+// Rank and trim results before enrichment
+searxResults.Results = rankAndFilterResults(searxResults.Results, searchQuery)
+
 sources := []SearxNGSource{}
 for _, r := range searxResults.Results {
 	if r.Title == "" || r.URL == "" {
