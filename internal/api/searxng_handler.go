@@ -16,14 +16,23 @@ import (
 type SearxNGPromptRequest struct {
 	Prompt string `json:"prompt"`
 }
+
 type SearxNGSource struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Snippet string `json:"snippet"`
 }
+
 type SearxNGAnswerResponse struct {
 	Answer  string          `json:"answer"`
 	Sources []SearxNGSource `json:"sources"`
+}
+
+// SearxResult represents a single raw result entry from SearxNG.
+type SearxResult struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Content string `json:"content"`
 }
 
 // POST /search
@@ -59,33 +68,31 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 		body, _ := io.ReadAll(resp.Body)
 
 		var searxResults struct {
-			Results []struct {
-				Title   string `json:"title"`
-				URL     string `json:"url"`
-				Content string `json:"content"`
-			} `json:"results"`
+			Results []SearxResult `json:"results"`
 		}
 		_ = json.Unmarshal(body, &searxResults)
 
-// Rank and trim results before enrichment
-searxResults.Results = rankAndFilterResults(searxResults.Results, searchQuery)
+		// --- 1b. Rank and trim results BEFORE enrichment ---
+		searxResults.Results = rankAndFilterResults(searxResults.Results, searchQuery)
 
-sources := []SearxNGSource{}
-for _, r := range searxResults.Results {
-	if r.Title == "" || r.URL == "" {
-		continue
-	}
-	snippet := enrichAndSummarize(r.URL, r.Content)
-	sources = append(sources, SearxNGSource{
-		Title:   r.Title,
-		URL:     r.URL,
-		Snippet: snippet,
-	})
-	if len(sources) >= cfg.SearxNG.MaxResults {
-		break
-	}
-}
-
+		// --- 1c. Enrich the remaining (already ranked & trimmed) results ---
+		sources := []SearxNGSource{}
+		for _, r := range searxResults.Results {
+			if r.Title == "" || r.URL == "" {
+				continue
+			}
+			snippet := enrichAndSummarize(r.URL, r.Content)
+			sources = append(sources, SearxNGSource{
+				Title:   r.Title,
+				URL:     r.URL,
+				Snippet: snippet,
+			})
+			// MaxResults remains an upper bound; if SearxNG already respects it,
+			// and we halve before this loop, we'll effectively return half of MaxResults.
+			if len(sources) >= cfg.SearxNG.MaxResults {
+				break
+			}
+		}
 
 		// --- 2. Format context for LLM ---
 		webContext := ""
@@ -112,12 +119,12 @@ for _, r := range searxResults.Results {
 		}
 
 		// Use first model as default for /search
-		modelName := "default"
-		modelURL := ""
-		if len(cfg.LLMs) > 0 {
-			modelName = cfg.LLMs[0].Name
-			modelURL = cfg.LLMs[0].URL
-		}
+modelName := "default"
+modelURL := ""
+if len(cfg.LLMs) > 0 {
+    modelName = cfg.LLMs[0].Name
+    modelURL = cfg.LLMs[0].URL
+}
 		payload := map[string]interface{}{
 			"model":    modelName,
 			"messages": llmMessages,
