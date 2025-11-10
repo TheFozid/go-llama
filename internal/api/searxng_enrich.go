@@ -45,6 +45,7 @@ func enrichAndSummarize(urlStr, fallbackSnippet string) string {
 	}
 	req.Header.Set("User-Agent", "Go-Llama/1.1 (+https://github.com/TheFozid/go-llama)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1")
+// */
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -285,11 +286,12 @@ func extractMainContent(html string) string {
 	var merged strings.Builder
 	seen := map[string]bool{}
 	for _, b := range best {
-		key := b.el.Nodes[0].Data
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
+		    // Avoid merging the exact same element twice by index, not by tag name.
+		    if seen[b.text] {
+		        continue
+		    }
+		    seen[b.text] = true
+
 
 		// Merge sibling paragraphs around this node
 		merged.WriteString(b.text)
@@ -496,22 +498,23 @@ func fallbackParagraphs(doc *goquery.Document) string {
 	return b.String()
 }
 
+var spaceRe = regexp.MustCompile(`\s+`)
+
 func compactWhitespace(s string) string {
-	spaceRe := regexp.MustCompile(`\s+`)
-	return spaceRe.ReplaceAllString(s, " ")
+    return spaceRe.ReplaceAllString(s, " ")
 }
 
 func normalizeQuotes(s string) string {
 	// Normalize various unicode quotes to ASCII
-	replacer := strings.NewReplacer(
-		"’", "'",
-		"‘", "'",
-		"“", `"`,
-		"”", `"`,
-		"–", "-",
-		"—", "-",
-		"…", "...",
-	)
+replacer := strings.NewReplacer(
+    "’", "'",
+    "‘", "'",
+    "“", `"`,
+    "”", `"`,
+    "–", "-",
+    "—", "-",
+    "…", "...",
+)
 	return replacer.Replace(s)
 }
 
