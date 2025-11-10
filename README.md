@@ -1,107 +1,138 @@
 # Go-LLama
 
-Local, private, fast LLM chat interface and orchestrator with optional web search via SearxNG.  
-Designed for self-hosting on everything from low-power mini-PCs and raspberry pi's to desktops and servers.  
-Outperforms open-webUI due to less bloat and being lighter on system resources.  
+Local, private, and fast LLM chat interface and orchestrator — with optional intelligent web search via SearxNG.  
+Built for self-hosting on everything from Raspberry Pi and low-power mini-PCs to full servers.  
+Lightweight, secure, and purpose-built to outperform bloated open-web UI stacks.
 
 ---
 
 ## Overview
 
-Go-LLama is a modern, secure, and high-performance chat interface for local LLMs such as vLLM, llama.cpp and llamafile.  
-It provides user accounts, persistent chats, streaming responses, and automatic web search for real-time answers.  
+Go-LLama is a modern, high-performance chat interface for local LLM backends such as **vLLM**, **llama.cpp**, and **llamafile**.  
+It provides user accounts, persistent chat history, streaming responses, and context-aware web search for real-time information.  
 
-This project prioritizes:  
+This project prioritizes:
 
-* Low resource usage (~50mb ram)
-* Fast response time even on low-end hardware
-* Privacy and self-hosting
-* Simplicity and stability
+* **Low resource usage** (~50 MB RAM typical)
+* **Fast response times**, even on low-end hardware
+* **Privacy**, **simplicity**, and **stability**
+* **Complete offline operation** when web search is disabled
 
 ---
 
 ## Key Features
 
-### LLM Interaction
-
-* Connects to local vLLM, llama.cpp, llamafile, or compatible REST LLM endpoints  
-* True streaming token output, with tokens-per-second display  
-* Session reuse when supported by the model backend  
-* Automatic context window management  
-
-### Web Search (SearxNG)
-
-* Search triggers automatically when relevant to the question  
-* User can override via natural language  
-* Search results feed into LLM before answering  
-* Sources appended to responses  
-* Can be disabled in config.json by setting results to 0  
-
-### Authentication & User System
-
-* JWT-based login
-* Admin and standard users
-* User management UI
-* Private chat history
-
-### UI & UX
-
-* Bootstrap UI, mobile friendly
-* Streaming response bubbles
-* Stop generation button
-
-### Deployment
-
-* Works under a subpath
-* Docker-ready: PostgreSQL + Redis + Backend
-* OpenAPI spec included
+### 🧠 LLM Interaction
+* Connects to **local LLM APIs** (vLLM, llama.cpp, llamafile, etc.)
+* **True streaming output** with tokens-per-second metrics  
+* **Session reuse** for models that support incremental conversation memory  
+* **Automatic context trimming** to stay within model limits  
+* Per-user chat isolation and persistent history
 
 ---
 
-## Performance Focus
+### 🌐 Intelligent Web Search (SearxNG Integration)
 
-Optimized to run on low-power hardware with:
+Go-LLama’s search pipeline is more than a simple fetch-and-dump of results:
 
-* Efficient streaming
-* Minimal JS
-* Very low RAM use (~50MB)
-* On-demand SearxNG
+1. **Smart Auto-Search Trigger**  
+   - Searches the web automatically when the user’s question implies a need for current or factual data (dates, tickers, “latest”, etc.)  
+   - User can force or block searches naturally via phrases like *“search the web for…”* or *“don’t search online”*.
+
+2. **Result Ranking & Filtering**  
+   - Raw SearxNG results are **ranked by semantic relevance** to the query.  
+   - Irrelevant or low-content hits are dropped automatically.  
+   - Only the **top 50 % of the most relevant** results (respecting your configured limit) are retained.
+
+3. **Content Extraction & Enrichment**  
+   - Each remaining result is **visited** and its **full HTML content extracted** (not just the snippet).  
+   - Boilerplate and noise are stripped; the core text is identified.  
+   - Extracted text is **summarised and compressed** into a short, LLM-optimized snippet.
+
+4. **LLM-Optimised Context Assembly**  
+   - Summaries are formatted into a concise, numbered context block fed directly into the model prompt.  
+   - The LLM is instructed to answer using those references and cite them inline (`[1]`, `[2]`, …).  
+   - The user sees a **clean, cited answer** with expandable **source links** appended.
+
+This process produces higher-quality responses than naive web-injection — fast, relevant, and grounded without overwhelming the model.
 
 ---
 
-## Screenshots
+### 🔐 Authentication & User System
 
-Available in /screenshots
+* JWT-based authentication  
+* Admin and standard user roles  
+* Built-in user management endpoints  
+* Private, per-user chat storage  
 
 ---
 
-## Installation (Docker)
+### 💬 UI & UX
+
+* Clean Bootstrap-based interface  
+* Mobile-friendly layout  
+* Real-time streaming message bubbles  
+* Manual **Stop Generation** button  
+* Optional **auto-search notification** when triggered dynamically  
+
+---
+
+### 🧱 Deployment
+
+* Runs under a **custom sub-path** (useful for reverse proxies)
+* **Docker-ready** stack: PostgreSQL + Redis + Go-based backend  
+* **OpenAPI spec** included for integration and extension  
+
+---
+
+## ⚡ Performance Focus
+
+Optimised for low-power devices with:
+
+* Efficient Go concurrency for streaming and background fetches  
+* Minimal JavaScript footprint  
+* Very low RAM footprint (~50 MB idle)  
+* On-demand SearxNG queries only when needed  
+
+The result: an interface that feels instant even on hardware where most AI dashboards crawl.
+
+---
+
+## 📸 Screenshots
+
+See the `/screenshots` directory.
+
+---
+
+## 🐳 Installation (Docker)
 
 Install without cloning the repository:
 
-```
-# Download compose and config templates
+```bash
+# Download templates
 curl -L -o docker-compose.yml https://raw.githubusercontent.com/TheFozid/go-llama/main/docker-compose.yml.sample
 curl -L -o config.json https://raw.githubusercontent.com/TheFozid/go-llama/main/config.sample.json
 
-# Edit config with your DB, Redis, LLM and SearxNG settings
+# Edit with your DB, Redis, LLM, and SearxNG settings
 nano config.json
 nano docker-compose.yml
 
-# Start the services
+# Launch
 docker compose up -d
 ```
 
-Application URL:
+Application URL:  
 [http://localhost:8070/go-llama](http://localhost:8070/go-llama)
 
-## Updating
+---
+
+## 🔄 Updating
 
 To update to the latest version:
 
-```
+```bash
 docker compose pull
 docker compose up -d
 ```
 
-Your data stored in Docker volumes will be preserved.
+All user data in Docker volumes is preserved across updates.
