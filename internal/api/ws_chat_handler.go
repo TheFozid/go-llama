@@ -336,18 +336,28 @@ httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(searchQuery) + "&
 						Content string `json:"content"`
 					} `json:"results"`
 				}
-				if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
-					for _, r := range searxResp.Results {
-						sources = append(sources, map[string]string{
-							"title":   r.Title,
-							"url":     r.URL,
-							"snippet": r.Content,
-						})
-						if len(sources) >= maxResults {
-							break
-						}
-					}
-				}
+if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
+	tmpResults := make([]SearxResult, 0, len(searxResp.Results))
+	for _, r := range searxResp.Results {
+		tmpResults = append(tmpResults, SearxResult{
+			Title:   r.Title,
+			URL:     r.URL,
+			Content: r.Content,
+		})
+	}
+	ranked := rankAndFilterResults(req.Prompt, tmpResults)
+	for _, r := range ranked {
+		sources = append(sources, map[string]string{
+			"title":   r.Title,
+			"url":     r.URL,
+			"snippet": r.Content,
+		})
+		if len(sources) >= maxResults {
+			break
+		}
+	}
+}
+
 			}
 			if len(sources) > 0 {
 webContext := "Web search results:\n"

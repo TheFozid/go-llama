@@ -48,7 +48,7 @@ echo
 # Build + push images for AMD64 + ARM64
 echo "🚀 Building & pushing multi-arch images..."
 docker buildx build \
-  --platform linux/amd64,linux/arm64,linux/arm/v7 \
+  --platform linux/amd64,linux/arm64 \
   -t "$IMAGE_BASE:latest" \
   -t "$IMAGE_BASE:$VERSION" \
   -t "$IMAGE_BASE:$MAJOR.$MINOR" \
@@ -62,6 +62,10 @@ git commit -m "$MSG" || echo "No changes to commit"
 git tag "v$VERSION"
 git push
 git push --tags
+
+docker system prune -a --volumes -f
+docker builder prune -a -f
+docker buildx prune -a -f
 
 echo
 echo "✅ Release v$VERSION complete"

@@ -66,9 +66,19 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 			} `json:"results"`
 		}
 		_ = json.Unmarshal(body, &searxResults)
+// --- Rank & filter results before enrichment ---
+tmpResults := make([]SearxResult, 0, len(searxResults.Results))
+for _, r := range searxResults.Results {
+	tmpResults = append(tmpResults, SearxResult{
+		Title:   r.Title,
+		URL:     r.URL,
+		Content: r.Content,
+	})
+}
+ranked := rankAndFilterResults(req.Prompt, tmpResults)
 
 sources := []SearxNGSource{}
-for _, r := range searxResults.Results {
+for _, r := range ranked {
 	if r.Title == "" || r.URL == "" {
 		continue
 	}
