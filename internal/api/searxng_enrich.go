@@ -20,10 +20,10 @@ import (
 )
 
 // enrichAndSummarize fetches a URL and returns a compact, LLM-optimized summary
-// of the main static HTML content (~500 chars). If anything fails (non-HTML,
-// dynamic/SPA indicators, fetch/parse issues, too little content), it returns
-// the provided fallback snippet (typically ~150 chars from SearxNG).
-func enrichAndSummarize(urlStr, fallbackSnippet string) string {
+// of the main static HTML content (~500–1000 chars). It biases the summary toward
+// the given query when provided, helping small LLMs focus on relevant text. If
+// anything fails, it returns the provided fallback snippet.
+func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 	// Tuned HTTP client (connection reuse + timeouts)
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -118,17 +118,22 @@ func enrichAndSummarize(urlStr, fallbackSnippet string) string {
 	mainText := extractMainContent(html)
 	mainText = strings.TrimSpace(compactWhitespace(mainText))
 
-	// Require enough content to be meaningful
-	if utf8.RuneCountInString(mainText) < 200 {
-		return fallbackSnippet
-	}
+// Require enough content to be meaningful
+if utf8.RuneCountInString(mainText) < 200 {
+	return fallbackSnippet
+}
 
-	// Produce LLM-optimized compressed summary (~500 chars)
-	summary := summarizeForLLM(mainText, 1000)
-	if summary == "" {
-		return fallbackSnippet
-	}
-	return summary
+// Build query tokens for relevance weighting (may be empty)
+queryTokens := buildQueryTokensForRanking(query)
+
+// Produce LLM-optimized compressed summary (~500–1000 chars),
+// biased toward content overlapping with the query tokens.
+summary := summarizeForLLM(mainText, 1000, queryTokens)
+if summary == "" {
+	return fallbackSnippet
+}
+return summary
+
 }
 
 // looksDynamic returns true if HTML likely requires client-side JS rendering.
@@ -329,7 +334,7 @@ func extractMainContent(html string) string {
 // summarizeForLLM produces a ~targetChars compressed, machine-oriented summary.
 // It removes filler/stopwords, keeps nouns/verbs/numbers/entities, deduplicates,
 // and emits dense fragments separated by "; ".
-func summarizeForLLM(text string, targetChars int) string {
+func summarizeForLLM(text string, targetChars int, queryTokens []string) string {
 	if targetChars <= 0 {
 		targetChars = 500
 	}
@@ -342,20 +347,43 @@ func summarizeForLLM(text string, targetChars int) string {
 	}
 
 	// Convert sentences to keyword fragments (lowercase, stopwords removed)
-	type frag struct {
-		s   string  // original sentence
-		kws []string
-		sc  float64 // score by info-density
+type frag struct {
+	s   string  // original sentence
+	kws []string
+	sc  float64 // score by info-density + query overlap
+}
+var frags []frag
+
+// Prebuild a set for query tokens for fast overlap checks
+qset := map[string]struct{}{}
+for _, qt := range queryTokens {
+	qset[qt] = struct{}{}
+}
+
+for _, s := range sentences {
+	kws := keywordsFrom(s)
+	if len(kws) == 0 {
+		continue
 	}
-	var frags []frag
-	for _, s := range sentences {
-		kws := keywordsFrom(s)
-		if len(kws) == 0 {
-			continue
+
+	// Base score from general info density
+	base := infoDensityScore(s, kws)
+
+	// Extra score from overlap with query tokens (if any)
+	overlap := 0
+	if len(qset) > 0 {
+		for _, kw := range kws {
+			if _, ok := qset[kw]; ok {
+				overlap++
+			}
 		}
-		sc := infoDensityScore(s, kws)
-		frags = append(frags, frag{s: s, kws: kws, sc: sc})
 	}
+
+	// Each overlapping keyword gives a modest boost
+	sc := base + 2.0*float64(overlap)
+	frags = append(frags, frag{s: s, kws: kws, sc: sc})
+}
+
 	if len(frags) == 0 {
 		return ""
 	}
@@ -395,6 +423,59 @@ func summarizeForLLM(text string, targetChars int) string {
 	}
 	return s
 }
+
+// buildQueryTokensForRanking turns a raw query string into a set of
+// stemmed, de-duplicated tokens for relevance scoring. It explicitly
+// strips search operators like "site:example.com" and raw URLs so
+// they don't pollute the ranking.
+func buildQueryTokensForRanking(query string) []string {
+	if query == "" {
+		return nil
+	}
+
+	// Remove site: filters (e.g. "site:bbc.co.uk") and raw URLs
+	siteRe := regexp.MustCompile(`(?i)\bsite:[^\s]+`)
+	urlRe := regexp.MustCompile(`https?://\S+`)
+	q := siteRe.ReplaceAllString(query, " ")
+	q = urlRe.ReplaceAllString(q, " ")
+
+	// Normalize whitespace and case
+	q = strings.ToLower(strings.TrimSpace(q))
+	spaceReLocal := regexp.MustCompile(`\s+`)
+	q = spaceReLocal.ReplaceAllString(q, " ")
+
+	// Tokenize using the same tokenRe / stemming / stopwords as content
+	toks := tokenRe.FindAllString(q, -1)
+	if len(toks) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(toks))
+	seen := map[string]struct{}{}
+	for _, t := range toks {
+		t = strings.Trim(t, "-_/")
+		if t == "" {
+			continue
+		}
+		if _, stop := stopwords[t]; stop {
+			continue
+		}
+		if len(t) < 2 && !isNumeric(t) {
+			continue
+		}
+		stem := lightStem(t)
+		if _, ok := seen[stem]; ok {
+			continue
+		}
+		seen[stem] = struct{}{}
+		out = append(out, stem)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 
 // -------- helpers (I/O, text scoring, tokenization) --------
 

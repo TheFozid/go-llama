@@ -72,7 +72,7 @@ for _, r := range searxResults.Results {
 	if r.Title == "" || r.URL == "" {
 		continue
 	}
-	snippet := enrichAndSummarize(r.URL, r.Content)
+	snippet := enrichAndSummarize(r.URL, r.Content, searchQuery)
 	sources = append(sources, SearxNGSource{
 		Title:   r.Title,
 		URL:     r.URL,
