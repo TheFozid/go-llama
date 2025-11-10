@@ -77,6 +77,11 @@ for _, r := range searxResults.Results {
 }
 ranked := rankAndFilterResults(req.Prompt, tmpResults)
 
+// log filtered size for debug
+log.Printf("🔎 Filtered %d results (from %d)", len(ranked), len(searxResults.Results))
+
+maxAfterFilter := len(ranked)
+
 sources := []SearxNGSource{}
 for _, r := range ranked {
 	if r.Title == "" || r.URL == "" {
@@ -88,10 +93,11 @@ for _, r := range ranked {
 		URL:     r.URL,
 		Snippet: snippet,
 	})
-	if len(sources) >= cfg.SearxNG.MaxResults {
+	if len(sources) >= maxAfterFilter {
 		break
 	}
 }
+
 
 
 		// --- 2. Format context for LLM ---
