@@ -92,7 +92,6 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         });
 
-        document.getElementById("historySidebar").classList.add("d-none");
         ensureInitialChat().then(loadChatHistory);
 
         document.getElementById("newChatBtn").onclick = function () {
