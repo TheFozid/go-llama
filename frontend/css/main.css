@@ -1,72 +1,112 @@
-/* Go-LLama Frontend CSS - Responsive & Mobile-Optimized */
+/* Go-LLama Frontend – Clean, Orientation-aware Layout */
 
-/*--- GLOBAL RESET & BASE ---*/
-html {
-    font-size: clamp(20px, 1.5vw, 20px);
-    height: 100%;
-    background: #f5f7fb;
-    font-family: system-ui, Arial, sans-serif;
+/* =============== */
+/* global + tokens */
+/* =============== */
+
+:root {
+    --bg-app: #f5f7fb;
+    --bg-surface: #ffffff;
+    --bg-chat: #f8f9fb;
+
+    --border-subtle: #e0e4ec;
+    --border-strong: #c2c7d5;
+
+    --shadow-soft: 0 6px 18px rgba(15, 23, 42, 0.12);
+    --shadow-strong: 0 10px 30px rgba(15, 23, 42, 0.18);
+
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-pill: 999px;
+
+    --text-main: #111827;
+    --text-muted: #6b7280;
+    --text-soft: #9ca3af;
+
+    --bubble-user: #e5e7eb;
+    --bubble-llm: #ffffff;
+
+    --accent: #2563eb;
+    --accent-soft: rgba(37, 99, 235, 0.12);
 }
+
+/* Base typography */
+
+html,
 body {
     height: 100%;
     margin: 0;
     padding: 0;
-    box-sizing: border-box;
-    background: #f5f7fb;
-    overflow: hidden;
 }
 
-/*--- TOP BAR ---*/
+html {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 16px;
+    background: var(--bg-app);
+}
+
+body {
+    background: var(--bg-app);
+    color: var(--text-main);
+    overflow: hidden; /* main layout handles scrolling */
+}
+
+/* ================= */
+/* top navigation bar */
+/* ================= */
+
 .topbar-fixed {
     position: fixed;
-    left: 0;
+    inset-inline: 0;
     top: 0;
-    right: 0;
     z-index: 100;
     width: 100vw;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.35);
-    background: #fff;
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-soft);
 }
 
-/*--- MAIN LAYOUT ---*/
+.topbar-fixed .navbar {
+    padding-inline: 0.75rem;
+}
+
+.model-online-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+}
+
+#currentModel {
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+}
+
+#onlineUsers {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+/* ================== */
+/* main layout & panes */
+/* ================== */
+
 .main-layout {
     position: absolute;
-    top: 62px;
     left: 0;
     right: 0;
+    /* Height = viewport minus top bar */
+    top: 60px;
     bottom: 0;
     display: flex;
     flex-direction: row;
     width: 100vw;
-    height: auto;
     background: transparent;
     overflow: hidden;
 }
 
-/*--- HISTORY SIDEBAR ---*/
-.history-sidebar {
-    width: min(80vw, 580px);
-    min-width: 400px;
-    max-width: 580px;
-    background: #fff;
-    border-right: 1px solid #e0e0e0;
-    box-shadow: 8px 0 32px rgba(0,0,0,0.35);
-    padding: 1rem 0.5rem 1rem 1rem;
-    overflow-y: auto;
-    height: 100%;
-}
-#historySidebar h5 {
-    margin-top: 0.5rem;
-    margin-bottom: 1rem;
-}
-#chatHistory {
-    max-height: 100%;
-    overflow-y: auto;
-    margin-bottom: 0;
-    padding-bottom: 4.2rem;
-}
+/* Chat area always exists; sidebar overlays on top when visible */
 
-/*--- CHAT AREA & WINDOW ---*/
 .chat-area {
     flex: 1 1 0%;
     display: flex;
@@ -74,106 +114,150 @@ body {
     min-width: 0;
     position: relative;
     height: 100%;
+    padding: 0.75rem 0.75rem 0;
+    box-sizing: border-box;
 }
+
+/* ============ */
+/* chat window  */
+/* ============ */
+
 .chat-window {
     flex: 1 1 auto;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
-    border-radius: 12px;
-    background: #f8f9fa;
+    background: var(--bg-chat);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-soft);
     position: relative;
     overflow-y: auto;
     width: 100%;
-    padding: 1rem;
-    margin-bottom: 3.5rem;
-    height: 100%;
+    padding: 1rem 1.1rem;
+    margin-bottom: 3.5rem; /* space above prompt bar */
+    box-sizing: border-box;
 }
 
-/*--- PROMPT BOX (FIXED) ---*/
+/* Save banner */
+
+#chatSavedBanner {
+    border-radius: var(--radius-md);
+    margin: 0.5rem 0;
+}
+
+/* ====================== */
+/* history sidebar overlay */
+/* ====================== */
+
+/*
+   Behaviour:
+   - default: Bootstrap adds .d-none (no display)
+   - visible: .history-sidebar without .d-none
+   - overlay: sits on top of chat-area but doesn't push layout
+*/
+
+.history-sidebar {
+    position: fixed;
+    top: 60px;        /* just under the top bar */
+    bottom: 0;
+    left: 0;
+    z-index: 120;
+    width: min(360px, 80vw);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-strong);
+    padding: 0.75rem 0.75rem 0.75rem 0.9rem;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
+#historySidebar h5 {
+    margin: 0.25rem 0 0.75rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+#chatHistory {
+    max-height: 100%;
+    overflow-y: auto;
+    margin-bottom: 0;
+    padding-bottom: 3.25rem;
+}
+
+/* History list items */
+
+#chatHistory .list-group-item {
+    border: none;
+    border-radius: var(--radius-md);
+    margin-bottom: 0.4rem;
+    padding: 0.45rem 0.55rem 0.45rem 0.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: #f3f4f6;
+    cursor: pointer;
+    transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
+}
+
+#chatHistory .list-group-item:hover {
+    background: #e5e7eb;
+    box-shadow: 0 1px 6px rgba(15, 23, 42, 0.12);
+    transform: translateY(-1px);
+}
+
+.history-title {
+    flex: 1;
+    font-size: 0.85rem;
+    line-height: 1.3;
+    color: var(--text-main);
+    outline: none;
+}
+.history-title[contenteditable="true"] {
+    border-bottom: 1px dashed var(--border-strong);
+}
+
+/* History item buttons (edit/delete) */
+
+.chat-history-btns {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    align-items: flex-end;
+}
+
+.chat-history-btns .chat-history-btn {
+    width: 1.4em;
+    height: 1.4em;
+    min-width: 1.4em;
+    min-height: 1.4em;
+    font-size: 1.2em;
+    border-radius: 0.5rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+}
+
+/* ================ */
+/* prompt box (fixed)
+/* ================ */
+
 .prompt-box-fixed {
     position: fixed;
     left: 0;
-    bottom: 0;
     right: 0;
+    bottom: 0;
     z-index: 90;
-    background: #fff;
-    box-shadow: 0 0 32px 12px rgba(0,0,0,0.35), 0 -4px 24px rgba(0,0,0,0.35);
-    border-radius: 0;
-    padding: 0.5rem 0.5rem 14px 0.5rem;
+    background: var(--bg-surface);
+    box-shadow: 0 -4px 18px rgba(15, 23, 42, 0.14);
+    padding: 0.45rem 0.75rem 0.75rem;
     width: 100vw;
     max-width: 100vw;
     display: flex;
     align-items: flex-end;
-    transition: height 0.15s;
+    box-sizing: border-box;
 }
 
-/*--- INPUT & BUTTONS ---*/
-.prompt-textarea:focus,
-.input-group .form-control:focus,
-.input-group .btn:focus,
-.input-group button:focus {
-    box-shadow: 0 2px 16px rgba(0,0,0,0.4) !important;
-    border-color: #bdbdbd;
-    outline: none;
-}
-.input-group .form-control,
-.input-group .btn,
-.input-group button {
-    border-radius: 0 8px 8px 0;
-    font-size: 1em;
-    background: #ffffff !important;
-    color: #212529 !important;
-    margin-left: 4px;
-    box-shadow: 0 2px 16px rgba(0,0,0,0.9);
-    border: 2px solid #e0e0e0 !important;
-}
+/* prompt textarea */
 
-/* BUTTON: Send, Websearch, Stop */
-#sendBtn, #webSearchToggleBtn, #stopBtn {
-    min-width: 44px;
-    min-height: 44px;
-    padding: 0 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1em;
-    border-radius: 8px;
-    margin-left: 4px;
-    background: #fff !important;
-    border: 2px solid #e0e0e0 !important;
-    box-shadow: 0 2px 16px rgba(0,0,0,0.60);
-    color: #212529 !important;
-    transition: background 0.15s, color 0.15s, box-shadow 0.15s;
-}
-#sendBtn:hover, #sendBtn:focus,
-#stopBtn:hover, #stopBtn:focus,
-#webSearchToggleBtn:focus {
-    background: #f2f2f2 !important;
-    color: #212529 !important;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.25);
-}
-#webSearchToggleBtn.btn-info,
-#webSearchToggleBtn.btn-info:focus,
-#webSearchToggleBtn.btn-info:hover {
-    background: #2196f3 !important;
-    color: #fff !important;
-    border-color: #1565c0 !important;
-    box-shadow: 0 6px 32px 0 rgba(33,150,243,0.30) !important;
-}
-#webSearchToggleBtn.btn-info .bi-globe {
-    color: #fff !important;
-}
-#webSearchToggleBtn.btn-outline-secondary,
-#webSearchToggleBtn.btn-outline-secondary:focus,
-#webSearchToggleBtn.btn-outline-secondary:hover {
-    background: #fff !important;
-    color: #bdbdbd !important;
-    border-color: #e0e0e0 !important;
-}
-#webSearchToggleBtn.btn-outline-secondary .bi-globe {
-    color: #bdbdbd !important;
-}
-
-/*--- PROMPT TEXTAREA ---*/
 .prompt-textarea {
     min-height: 40px;
     max-height: 220px;
@@ -182,175 +266,267 @@ body {
     padding-bottom: 8px;
     resize: none;
     overflow-y: auto;
-    transition: min-height 0.1s, max-height 0.1s;
     box-sizing: border-box;
-}
-.prompt-textarea[rows="8"] {
-    overflow-y: auto;
-}
-.input-group > .btn, .input-group > button {
-    align-self: flex-end;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+    font-size: 0.95rem;
 }
 
-/*--- BANNER, ONLINE BAR ---*/
-.model-online-bar {
-    display: flex;
+.prompt-textarea:focus,
+.input-group .form-control:focus {
+    box-shadow: 0 0 0 1px var(--accent-soft), 0 0 0 2px rgba(37, 99, 235, 0.12);
+    border-color: var(--accent);
+    outline: none;
+}
+
+/* input group buttons */
+
+.input-group .btn,
+.input-group button {
+    border-radius: var(--radius-md);
+    font-size: 0.95rem;
+    margin-left: 0.4rem;
+}
+
+/* send / stop buttons */
+
+#sendBtn,
+#stopBtn {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0 10px;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
 }
 
-/*--- CHAT BUBBLES ---*/
+#sendBtn i,
+#stopBtn i {
+    font-size: 1rem;
+}
+
+/* =============== */
+/* chat bubbles    */
+/* =============== */
+
 #chatMessages .user {
     text-align: right;
 }
+
 #chatMessages .llm {
     text-align: left;
 }
+
 #chatMessages .message {
-    margin-bottom: 1rem;
-    padding: 1rem 1.5rem;
-    border-radius: 25px;
+    margin-bottom: 0.8rem;
+    padding: 0.7rem 1rem;
+    border-radius: var(--radius-lg);
     display: inline-block;
     max-width: 95%;
-    box-shadow: 0 5px 20px rgba(0,0,0,0.8);
-    font-size: 1em;
-    transition: background 0.2s, box-shadow 0.2s;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.14);
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+    word-wrap: break-word;
+    white-space: pre-wrap;
 }
+
 #chatMessages .user .message {
-    background: #f2f2f2;
-    color: #212529;
+    background: var(--bubble-user);
+    color: var(--text-main);
 }
+
 #chatMessages .llm .message {
-    background: #fff;
-    color: #212529;
+    background: var(--bubble-llm);
+    color: var(--text-main);
 }
+
 #chatMessages .fade-in {
-    animation: fadeIn 0.8s;
+    animation: fadeIn 0.35s ease-out;
 }
+
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px);}
-    to { opacity: 1; transform: translateY(0);}
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
-/*--- TYPEWRITER AND DOTS ANIMATION ---*/
-.typewriter-anim {
-  font-size: 1em;
-  font-weight: bold;
-  letter-spacing: 2px;
-  display: inline-block;
-  white-space: pre;
-}
-.typewriter-anim .letter {
-  opacity: 0;
-  animation: typewriterLetter 0.06s linear forwards;
-  animation-delay: var(--delay, 0s);
-}
-@keyframes typewriterLetter {
-  to { opacity: 1; }
-}
-.dots-anim span {
-  animation: blinkDot 1.2s infinite steps(1, end);
-  opacity: 0.2;
-  margin-left: 2px;
-}
-.dots-anim span:nth-child(2) { animation-delay: 0.4s; }
-.dots-anim span:nth-child(3) { animation-delay: 0.8s; }
-@keyframes blinkDot {
-  50% { opacity: 1; }
-}
+/* ======================= */
+/* thinking bubble styling */
+/* ======================= */
 
-/*--- HISTORY PANEL BUTTONS ---*/
-.chat-history-btns {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    align-items: flex-end;
-}
-.chat-history-btns .chat-history-btn {
-    width: 1.5em;
-    height: 1.5em;
-    min-width: 1.5em;
-    min-height: 1.5em;
-    font-size: 1.5em;
-    border-radius: 8px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
-    margin: 0;
-}
-
-/*--- THINKING BUBBLE ---*/
 .thinking-bubble {
-    background: #f5f7fb;
-    border: 1px dashed #bdbdbd;
-    border-radius: 12px;
-    color: #555;
-    font-size: clamp(0.9em, 1.2vw, 1.05em);
-    font-family: 'Inter', Arial, sans-serif;
-    padding: 0.3em 0.9em;
-    margin: 1em 0;
+    background: #f9fafb;
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--border-strong);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 0.45rem 0.55rem 0.45rem 0.7rem;
+    margin: 0.35rem 0 0.25rem;
     white-space: pre-wrap;
     word-break: break-word;
-    opacity: 0.95;
-    max-height: 70px;
+    opacity: 0.92;
+    max-height: 72px;
     overflow-y: auto;
     box-sizing: border-box;
 }
 
-/*--- RESPONSIVE SCALING SECTIONS ---*/
+/* subtle scrollbar for thinking bubble */
 
-/* Max width 2000px: Large desktops, minimal scaling needed ---*/
-@media (max-width: 2000px) {
-    html { font-size: 19px; }
-    .history-sidebar { width: min(70vw, 480px); min-width: 340px; max-width: 480px; }
-    .chat-window { padding: 1rem; }
-    .chat-history-btns .chat-history-btn { width: 1.5em; height: 1.5em; font-size: 1.5em; }
-    #sendBtn, #webSearchToggleBtn, #stopBtn { font-size: 1.5em; min-width: 45px; min-height: 45px; }
+.thinking-bubble::-webkit-scrollbar {
+    width: 5px;
+}
+.thinking-bubble::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.5);
+    border-radius: 999px;
+}
+.thinking-bubble::-webkit-scrollbar-track {
+    background: transparent;
 }
 
-/* Max width 1500px: Small desktops, minimal scaling needed ---*/
-@media (max-width: 1500px) {
-    html { font-size: 18px; }
-    .history-sidebar { width: min(75vw, 480px); min-width: 300px; max-width: 480px; }
-    .chat-window { padding: 0.9rem; }
-    .chat-history-btns .chat-history-btn { width: 1.5em; height: 1.5em; font-size: 1.5em; }
-    #sendBtn, #webSearchToggleBtn, #stopBtn { font-size: 1.5em; min-width: 43px; min-height: 43px; }
+/* ======================== */
+/* typewriter + dots effect */
+/* ======================== */
+
+.typewriter-anim {
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    display: inline-flex;
+    align-items: center;
+    white-space: pre;
+    color: var(--text-soft);
 }
 
-/* Max width 1100px: Very large phones/tablets */ 
-@media (max-width: 1100px) {
-    html { font-size: 17px; }
-    .history-sidebar { width: min(85vw, 480px); min-width: 200px; max-width: 480px; }
-    .chat-window { padding: 0.7rem; }
-    .chat-history-btns .chat-history-btn { width: 1.4em; height: 1.4em; font-size: 1.5em; }
-    #sendBtn, #webSearchToggleBtn, #stopBtn { font-size: 1.5em; min-width: 40px; min-height: 40px; }
+.typewriter-anim .letter {
+    opacity: 0;
+    animation: typewriterLetter 0.08s linear forwards;
+    animation-delay: var(--delay, 0s);
 }
 
-/* Max width 900px: Large phones/tablets */
-@media (max-width: 900px) {
-    html { font-size: 16px; }
-    .history-sidebar { width: min(97vw, 480px); min-width: 80px; max-width: 480px; }
-    .chat-window { padding: 0.5rem; }
-    .chat-history-btns .chat-history-btn { width: 1.5em; height: 1.5em; font-size: 1.5em; }
-    #sendBtn, #webSearchToggleBtn, #stopBtn { font-size: 1.5em; min-width: 36px; min-height: 36px; }
+@keyframes typewriterLetter {
+    to {
+        opacity: 1;
+    }
 }
 
-/* Max width 700px: Small phones */
-@media (max-width: 700px) {
-    html { font-size: 15px; }
-    .history-sidebar { width: min(100vw, 480px); min-width: 40px; max-width: 480px; }
-    .chat-window { padding: 0.3rem; }
-    .chat-history-btns .chat-history-btn { width: 1.5em; height: 1.5em; font-size: 1.5em; }
-    #sendBtn, #webSearchToggleBtn, #stopBtn { font-size: 1.5em; min-width: 30px; min-height: 30px; }
+.dots-anim {
+    display: inline-flex;
+    margin-left: 4px;
 }
 
-@media (pointer: coarse) and (min-resolution: 2dppx) {
-  html {
-    font-size: 30px !important; /* boost for high-DPI mobiles */
-  }
+.dots-anim span {
+    animation: blinkDot 1.2s infinite steps(1, end);
+    opacity: 0.2;
+    margin-left: 2px;
 }
 
-/*--- END ---*/
+.dots-anim span:nth-child(2) {
+    animation-delay: 0.35s;
+}
+.dots-anim span:nth-child(3) {
+    animation-delay: 0.7s;
+}
+
+@keyframes blinkDot {
+    50% {
+        opacity: 1;
+    }
+}
+
+/* ======================= */
+/* orientation-responsive  */
+/* ======================= */
+
+/* Portrait (phones/tablets held upright) */
+
+@media (orientation: portrait) {
+    html {
+        font-size: 15px;
+    }
+
+    .main-layout {
+        top: 56px;
+    }
+
+    .chat-area {
+        padding-inline: 0.5rem;
+    }
+
+    .chat-window {
+        margin-bottom: 3.25rem;
+        padding-inline: 0.8rem;
+    }
+
+    .history-sidebar {
+        width: min(100vw, 420px);
+    }
+
+    .prompt-box-fixed {
+        padding-inline: 0.5rem;
+    }
+
+    #chatMessages .message {
+        max-width: 100%;
+    }
+}
+
+/* Landscape (desktops, laptops, landscape tablets) */
+
+@media (orientation: landscape) {
+    html {
+        font-size: 16px;
+    }
+
+    .chat-area {
+        padding-inline: 1rem;
+    }
+
+    .chat-window {
+        padding-inline: 1.25rem;
+        margin-bottom: 3.75rem;
+    }
+
+    .history-sidebar {
+        width: min(360px, 70vw);
+    }
+}
+
+/* Optional: coarse pointer (touch devices) subtle font boost */
+
+@media (pointer: coarse) {
+    html {
+        font-size: 17px;
+    }
+}
+
+/* ============ */
+/* misc cleanup */
+/* ============ */
+
+/* prevent double icon CSS include collisions */
+body .bi {
+    vertical-align: -0.05em;
+}
+
+/* keep modals consistent with the new palette */
+.modal-content {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-soft);
+}
+
+.modal-header {
+    border-bottom-color: var(--border-subtle);
+}
+
+.modal-footer {
+    border-top-color: var(--border-subtle);
+}
