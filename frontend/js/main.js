@@ -119,10 +119,23 @@ document.addEventListener("DOMContentLoaded", function () {
             };
         };
 
-        document.getElementById("toggleHistoryBtn").onclick = function () {
-            const sidebar = document.getElementById("historySidebar");
-            sidebar.classList.toggle("d-none");
-        };
+const sidebar = document.getElementById("historySidebar");
+document.getElementById("toggleHistoryBtn").onclick = function () {
+    if (sidebar.classList.contains("visible")) {
+        hideSidebar();
+    } else {
+        showSidebar();
+    }
+};
+
+function showSidebar() {
+    sidebar.classList.add("visible");
+}
+
+function hideSidebar() {
+    sidebar.classList.remove("visible");
+}
+
 
         document.getElementById("signOutBtn").onclick = function () {
             clearJWT();
@@ -747,12 +760,6 @@ function renderStreaming(mdText, sources, isFinal) {
     window.requestAnimationFrame(() => {
         bubble.innerHTML = renderWithThinkingBubbles(mdText);
 
-        // Always scroll chatMessages div to bottom
-        const chatMessagesDiv = document.getElementById("chatMessages");
-        if (chatMessagesDiv) {
-            chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
-        }
-
         // Scroll the inner thinking bubble to bottom if present
         const thinkingBubble = bubble.querySelector('.thinking-bubble');
         if (thinkingBubble) {
@@ -779,7 +786,6 @@ function renderMessages(messages) {
         div.appendChild(bubble);
         chatMessagesDiv.appendChild(div);
     });
-    chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
 }
 window.renderMessages = renderMessages;
 
