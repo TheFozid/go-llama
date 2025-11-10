@@ -66,39 +66,52 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 			} `json:"results"`
 		}
 		_ = json.Unmarshal(body, &searxResults)
-// --- Rank & filter results before enrichment ---
-tmpResults := make([]SearxResult, 0, len(searxResults.Results))
-for _, r := range searxResults.Results {
-	tmpResults = append(tmpResults, SearxResult{
-		Title:   r.Title,
-		URL:     r.URL,
-		Content: r.Content,
-	})
-}
-ranked := rankAndFilterResults(req.Prompt, tmpResults)
 
-// log filtered size for debug
-log.Printf("🔎 Filtered %d results (from %d)", len(ranked), len(searxResults.Results))
+		// --- Limit to MaxResults, then rank, then keep top 50% ---
+		sources := []SearxNGSource{} // ✅ declared once, visible after block
 
-maxAfterFilter := len(ranked)
+		raw := searxResults.Results
+		if len(raw) > 0 {
+			// 1) Limit how many raw results we consider based on config
+			limit := cfg.SearxNG.MaxResults
+			if limit <= 0 || limit > len(raw) {
+				limit = len(raw)
+			}
 
-sources := []SearxNGSource{}
-for _, r := range ranked {
-	if r.Title == "" || r.URL == "" {
-		continue
-	}
-	snippet := enrichAndSummarize(r.URL, r.Content, searchQuery)
-	sources = append(sources, SearxNGSource{
-		Title:   r.Title,
-		URL:     r.URL,
-		Snippet: snippet,
-	})
-	if len(sources) >= maxAfterFilter {
-		break
-	}
-}
+			tmpResults := make([]SearxResult, 0, limit)
+			for i := 0; i < limit; i++ {
+				r := raw[i]
+				tmpResults = append(tmpResults, SearxResult{
+					Title:   r.Title,
+					URL:     r.URL,
+					Content: r.Content,
+				})
+			}
 
+			// 2) Rank those, then keep top 50% of *limit*
+			ranked := rankAndFilterResults(req.Prompt, tmpResults)
 
+			keepTop := limit / 2
+			if keepTop < 1 {
+				keepTop = 1
+			}
+			if keepTop > len(ranked) {
+				keepTop = len(ranked)
+			}
+
+			for i := 0; i < keepTop; i++ {
+				r := ranked[i]
+				if r.Title == "" || r.URL == "" {
+					continue
+				}
+				snippet := enrichAndSummarize(r.URL, r.Content, searchQuery)
+				sources = append(sources, SearxNGSource{
+					Title:   r.Title,
+					URL:     r.URL,
+					Snippet: snippet,
+				})
+			}
+		}
 
 		// --- 2. Format context for LLM ---
 		webContext := ""

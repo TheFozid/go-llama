@@ -284,10 +284,6 @@ llmMessages = append([]map[string]string{
 
 
 		var sources []map[string]string
-		maxResults := 4 // default
-		if cfg.SearxNG.MaxResults > 0 {
-			maxResults = cfg.SearxNG.MaxResults
-		}
 if req.Prompt == "" {
 	conn.WriteJSON(map[string]string{"error": "missing prompt"})
 	return
@@ -337,26 +333,46 @@ httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(searchQuery) + "&
 					} `json:"results"`
 				}
 if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
-	tmpResults := make([]SearxResult, 0, len(searxResp.Results))
-	for _, r := range searxResp.Results {
-		tmpResults = append(tmpResults, SearxResult{
-			Title:   r.Title,
-			URL:     r.URL,
-			Content: r.Content,
-		})
-	}
-	ranked := rankAndFilterResults(req.Prompt, tmpResults)
-	for _, r := range ranked {
-		sources = append(sources, map[string]string{
-			"title":   r.Title,
-			"url":     r.URL,
-			"snippet": r.Content,
-		})
-		if len(sources) >= maxResults {
-			break
+	raw := searxResp.Results
+	if len(raw) > 0 {
+		// 1) Determine how many raw results we care about
+		limit := cfg.SearxNG.MaxResults
+		if limit <= 0 || limit > len(raw) {
+			limit = len(raw)
+		}
+
+		tmpResults := make([]SearxResult, 0, limit)
+		for i := 0; i < limit; i++ {
+			r := raw[i]
+			tmpResults = append(tmpResults, SearxResult{
+				Title:   r.Title,
+				URL:     r.URL,
+				Content: r.Content,
+			})
+		}
+
+		// 2) Rank those and keep top 50% of *limit*
+		ranked := rankAndFilterResults(req.Prompt, tmpResults)
+
+		keepTop := limit / 2
+		if keepTop < 1 {
+			keepTop = 1
+		}
+		if keepTop > len(ranked) {
+			keepTop = len(ranked)
+		}
+
+		for i := 0; i < keepTop; i++ {
+			r := ranked[i]
+			sources = append(sources, map[string]string{
+				"title":   r.Title,
+				"url":     r.URL,
+				"snippet": r.Content,
+			})
 		}
 	}
 }
+
 
 			}
 			if len(sources) > 0 {

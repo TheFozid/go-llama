@@ -3,14 +3,14 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go-llama/internal/chat"
@@ -59,6 +59,7 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
+
 		var req struct {
 			Title     string `json:"title"`
 			ModelName string `json:"model_name"`
@@ -67,10 +68,12 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 			return
 		}
+
 		modelName := req.ModelName
 		if modelName == "" && len(cfg.LLMs) > 0 {
 			modelName = cfg.LLMs[0].Name
 		}
+
 		// Check model exists
 		modelExists := false
 		for _, m := range cfg.LLMs {
@@ -83,6 +86,7 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "model not available"})
 			return
 		}
+
 		chatInst := chat.Chat{
 			Title:        req.Title,
 			UserID:       userID,
@@ -94,6 +98,7 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create chat"})
 			return
 		}
+
 		c.JSON(http.StatusCreated, gin.H{
 			"id":        chatInst.ID,
 			"title":     chatInst.Title,
@@ -111,8 +116,8 @@ func ListChatsHandler() gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
+
 		var chats []chat.Chat
-		// Only include chats with at least one user message (prompt)
 		if err := db.DB.
 			Where("user_id = ?", userID).
 			Where("id IN (SELECT chat_id FROM messages WHERE sender = 'user')").
@@ -121,11 +126,12 @@ func ListChatsHandler() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chats"})
 			return
 		}
+
 		c.JSON(http.StatusOK, chats)
 	}
 }
 
-// Edit chat title (fixed: parse id to uint)
+// Edit chat title
 func EditChatTitleHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, ok := getUserIDFromContext(c)
@@ -133,12 +139,14 @@ func EditChatTitleHandler() gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
+
 		idStr := c.Param("id")
 		idUint, err := strconv.ParseUint(idStr, 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chat id"})
 			return
 		}
+
 		var req struct {
 			Title string `json:"title"`
 		}
@@ -146,21 +154,24 @@ func EditChatTitleHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "missing title"})
 			return
 		}
+
 		var chatInst chat.Chat
 		if err := db.DB.Where("id = ? AND user_id = ?", idUint, userID).First(&chatInst).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "chat not found"})
 			return
 		}
+
 		chatInst.Title = req.Title
 		if err := db.DB.Save(&chatInst).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update title"})
 			return
 		}
+
 		c.JSON(http.StatusOK, gin.H{"id": chatInst.ID, "title": chatInst.Title})
 	}
 }
 
-// Delete chat (fixed: parse id to uint)
+// Delete chat
 func DeleteChatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, ok := getUserIDFromContext(c)
@@ -168,30 +179,35 @@ func DeleteChatHandler() gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
+
 		idStr := c.Param("id")
 		idUint, err := strconv.ParseUint(idStr, 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chat id"})
 			return
 		}
+
 		var chatInst chat.Chat
 		if err := db.DB.Where("id = ? AND user_id = ?", idUint, userID).First(&chatInst).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "chat not found"})
 			return
 		}
+
 		if err := db.DB.Where("chat_id = ?", chatInst.ID).Delete(&chat.Message{}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete messages"})
 			return
 		}
+
 		if err := db.DB.Delete(&chatInst).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete chat"})
 			return
 		}
+
 		c.JSON(http.StatusOK, gin.H{"deleted": true})
 	}
 }
 
-// Get a single chat by ID for the current user (fixed: parse id to uint)
+// Get a single chat by ID for the current user
 func GetChatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, ok := getUserIDFromContext(c)
@@ -199,12 +215,14 @@ func GetChatHandler() gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
+
 		idStr := c.Param("id")
 		idUint, err := strconv.ParseUint(idStr, 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chat id"})
 			return
 		}
+
 		var chatInst chat.Chat
 		if err := db.DB.Where("id = ? AND user_id = ?", idUint, userID).First(&chatInst).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
@@ -214,11 +232,12 @@ func GetChatHandler() gin.HandlerFunc {
 			}
 			return
 		}
+
 		c.JSON(http.StatusOK, chatInst)
 	}
 }
 
-// List all messages in a chat (fixed: parse id to uint)
+// List all messages in a chat
 func ListMessagesHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, ok := getUserIDFromContext(c)
@@ -226,22 +245,26 @@ func ListMessagesHandler() gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
+
 		idStr := c.Param("id")
 		idUint, err := strconv.ParseUint(idStr, 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chat id"})
 			return
 		}
+
 		var chatInst chat.Chat
 		if err := db.DB.Where("id = ? AND user_id = ?", idUint, userID).First(&chatInst).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "chat not found"})
 			return
 		}
+
 		var messages []chat.Message
 		if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&messages).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch messages"})
 			return
 		}
+
 		c.JSON(http.StatusOK, messages)
 	}
 }
@@ -254,12 +277,14 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
+
 		idStr := c.Param("id")
 		idUint, err := strconv.ParseUint(idStr, 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chat id"})
 			return
 		}
+
 		var chatInst chat.Chat
 		if err := db.DB.Where("id = ? AND user_id = ?", idUint, userID).First(&chatInst).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "chat not found"})
@@ -315,6 +340,7 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chat history"})
 			return
 		}
+
 		contextSize := modelConfig.ContextSize
 		if contextSize == 0 {
 			contextSize = 2048 // Fallback default
@@ -334,21 +360,19 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 			})
 		}
 
-		// --- NEW: Handle optional web search ---
+		// --- Optional web search via SearxNG + ranking ---
 		var sources []map[string]string
-		maxResults := 4 // default
-		if cfg.SearxNG.MaxResults > 0 {
-			maxResults = cfg.SearxNG.MaxResults
-		}
 		if req.WebSearch {
-			// Call SearxNG for search results
 			searxngURL := cfg.SearxNG.URL
 			if searxngURL == "" {
 				searxngURL = "http://localhost:8888/search"
 			}
-			httpResp, err := http.Get(fmt.Sprintf("%s?q=%s&format=json", searxngURL, url.QueryEscape(req.Content)))
+
+			searchQuery := cleanForSearch(req.Content)
+			httpResp, err := http.Get(fmt.Sprintf("%s?q=%s&format=json", searxngURL, url.QueryEscape(searchQuery)))
 			if err == nil && httpResp.StatusCode == 200 {
 				defer httpResp.Body.Close()
+
 				var searxResp struct {
 					Results []struct {
 						Title   string `json:"title"`
@@ -356,35 +380,46 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 						Content string `json:"content"`
 					} `json:"results"`
 				}
-					if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
-tmpResults := make([]SearxResult, 0, len(searxResp.Results))
-for _, r := range searxResp.Results {
-	tmpResults = append(tmpResults, SearxResult{
-		Title:   r.Title,
-		URL:     r.URL,
-		Content: r.Content,
-	})
-}
-ranked := rankAndFilterResults(req.Content, tmpResults)
+				if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
+					raw := searxResp.Results
+					if len(raw) > 0 {
+						// Limit how many we *consider* based on config
+						limit := len(raw)
+						if cfg.SearxNG.MaxResults > 0 && cfg.SearxNG.MaxResults < limit {
+							limit = cfg.SearxNG.MaxResults
+						}
+
+						tmpResults := make([]SearxResult, 0, limit)
+						for i := 0; i < limit; i++ {
+							r := raw[i]
+							tmpResults = append(tmpResults, SearxResult{
+								Title:   r.Title,
+								URL:     r.URL,
+								Content: r.Content,
+							})
+						}
+
+						// Rank & filter (rankAndFilterResults already keeps top 50%)
+						ranked := rankAndFilterResults(req.Content, tmpResults)
 						for _, r := range ranked {
-						sources = append(sources, map[string]string{
-							"title":   r.Title,
-							"url":     r.URL,
-							"snippet": r.Content,
-						})
-						if len(sources) >= maxResults {
-							break
+							sources = append(sources, map[string]string{
+								"title":   r.Title,
+								"url":     r.URL,
+								"snippet": r.Content,
+							})
 						}
 					}
 				}
 			}
-			// Prepend a formatted context to the prompt if results exist
-			if len(sources) > 0 {
-webContext := "Web search results:\n"
-for i, src := range sources {
-    webContext += fmt.Sprintf("[%d] %s: %s -> URL: %s\n", i+1, src["title"], src["snippet"], src["url"])
-}
-webContext += `
+		}
+
+		// Prepend a formatted context to the prompt if results exist
+		if len(sources) > 0 {
+			webContext := "Web search results:\n"
+			for i, src := range sources {
+				webContext += fmt.Sprintf("[%d] %s: %s -> URL: %s\n", i+1, src["title"], src["snippet"], src["url"])
+			}
+			webContext += `
 
 Use your own knowledge and the information above to answer the user's question.
 
@@ -395,13 +430,12 @@ Do not include a list of references and do not repeat URLs at the end.
 Format the answer in Markdown when helpful, but keep the message natural.
 
 Question: `
-webContext += req.Content
+			webContext += req.Content
 
-				// Insert as the first user message (preserve any real user messages after it)
-				llmMessages = append([]map[string]string{
-					{"role": "user", "content": webContext + req.Content},
-				}, llmMessages[1:]...)
-			}
+			// Insert as the first user message (preserve any real user messages after it)
+			llmMessages = append([]map[string]string{
+				{"role": "user", "content": webContext + req.Content},
+			}, llmMessages[1:]...)
 		}
 
 		// Prepare LLM API payload
@@ -418,14 +452,16 @@ webContext += req.Content
 
 		// If session error, re-feed entire history as new session
 		if sessionErr == ErrLLMSession {
-			// Clear session and re-feed full history
 			payload["session"] = nil
-			if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&messages).Error; err != nil {
+
+			var msgs []chat.Message
+			if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&msgs).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chat history"})
 				return
 			}
+
 			llmMessages = llmMessages[:0]
-			for _, m := range messages {
+			for _, m := range msgs {
 				role := "user"
 				if m.Sender == "bot" {
 					role = "assistant"
@@ -435,9 +471,10 @@ webContext += req.Content
 					"content": m.Content,
 				})
 			}
+
 			payload["messages"] = llmMessages
 			llmResp, sessionErr = CallLLM(modelConfig.URL, payload)
-			modelMigrated = modelMigrated || sessionErr == nil // treat as migration for frontend
+			modelMigrated = modelMigrated || sessionErr == nil
 		}
 		if sessionErr != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "llm failure", "detail": sessionErr.Error()})
@@ -461,6 +498,7 @@ webContext += req.Content
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save bot message"})
 			return
 		}
+
 		// Update chat with new session id/model (if needed)
 		if chatInst.LlmSessionID != sessionID || modelMigrated {
 			db.DB.Model(&chatInst).Updates(map[string]interface{}{
@@ -484,10 +522,10 @@ webContext += req.Content
 			resp["old_model"] = oldModel
 			resp["new_model"] = chatInst.ModelName
 		}
-		// Add sources only if web_search was enabled and results were present
 		if req.WebSearch && len(sources) > 0 {
 			resp["sources"] = sources
 		}
+
 		c.JSON(http.StatusOK, resp)
 	}
 }
@@ -497,10 +535,10 @@ webContext += req.Content
 var ErrLLMSession = errors.New("llm session error")
 
 type LLMResponse struct {
-	Reply         string
-	Tokens        int
-	TokensPerSec  float64
-	SessionID     string
+	Reply        string
+	Tokens       int
+	TokensPerSec float64
+	SessionID    string
 }
 
 // CallLLM is exported for testing
@@ -524,20 +562,22 @@ var CallLLM = func(url string, payload map[string]interface{}) (LLMResponse, err
 		} `json:"timings"`
 		ID string `json:"id"`
 	}
+
 	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
+
 	client := http.Client{Timeout: 120 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
 		return LLMResponse{}, err
 	}
 	defer res.Body.Close()
+
 	if res.StatusCode == 400 || res.StatusCode == 422 {
-		// Check for session/token error in response
 		var respMap map[string]interface{}
 		_ = json.NewDecoder(res.Body).Decode(&respMap)
-		if respMap["error"] != nil && (containsSessionError(respMap["error"].(string))) {
+		if respMap["error"] != nil && containsSessionError(respMap["error"].(string)) {
 			return LLMResponse{}, ErrLLMSession
 		}
 		return LLMResponse{}, errors.New(respMap["error"].(string))
@@ -547,16 +587,16 @@ var CallLLM = func(url string, payload map[string]interface{}) (LLMResponse, err
 		return LLMResponse{}, errors.New(string(b))
 	}
 
-	// --- MINIMAL PATCH FOR STREAMING ---
-	// Detect if we expect streaming ("stream": true)
+	// Minimal streaming support: allow callers to set "stream": true
 	streaming := false
 	if val, ok := payload["stream"]; ok {
 		if b, ok := val.(bool); ok && b {
 			streaming = true
 		}
 	}
+
 	if streaming {
-		// OpenAI-style streaming JSON response
+		// OpenAI-style streaming JSON response (no timings available)
 		replyBuilder := strings.Builder{}
 		dec := json.NewDecoder(res.Body)
 		for {
@@ -582,15 +622,16 @@ var CallLLM = func(url string, payload map[string]interface{}) (LLMResponse, err
 		}
 		reply := replyBuilder.String()
 		return LLMResponse{
-			Reply: reply,
-			Tokens: len(strings.Fields(reply)),
+			Reply:        reply,
+			Tokens:       len(strings.Fields(reply)),
 			TokensPerSec: 0,
-			SessionID: "",
+			SessionID:    "",
 		}, nil
 	}
 
-	// --- ORIGINAL NON-STREAM RESPONSE ---
+	// Non-streaming response
 	_ = json.NewDecoder(res.Body).Decode(&respStruct)
+
 	reply := ""
 	if len(respStruct.Choices) > 0 {
 		reply = respStruct.Choices[0].Message.Content
@@ -600,6 +641,7 @@ var CallLLM = func(url string, payload map[string]interface{}) (LLMResponse, err
 	if tokensPerSec == 0 && respStruct.Timings.PredictedMs > 0 && respStruct.Timings.PredictedN > 0 {
 		tokensPerSec = float64(respStruct.Timings.PredictedN) / (respStruct.Timings.PredictedMs / 1000)
 	}
+
 	return LLMResponse{
 		Reply:        reply,
 		Tokens:       tokens,
@@ -609,7 +651,7 @@ var CallLLM = func(url string, payload map[string]interface{}) (LLMResponse, err
 }
 
 func containsSessionError(msg string) bool {
-	return (msg != "" && (contains(msg, "session") || contains(msg, "token")))
+	return msg != "" && (strings.Contains(msg, "session") || strings.Contains(msg, "token"))
 }
 
 func contains(s, substr string) bool {
