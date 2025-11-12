@@ -257,6 +257,20 @@ body {
     gap: 0.1rem;
     align-items: flex-end;
 }
+/* Material icon styling for chat history buttons */
+.chat-history-btns .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--text-muted);
+  transition: color 0.2s ease;
+}
+
+.chat-history-btns .editChatBtn:hover .material-symbols-outlined {
+  color: var(--accent);
+}
+
+.chat-history-btns .deleteChatBtn:hover .material-symbols-outlined {
+  color: #f87171; /* soft red for delete */
+}
 
 .chat-history-btns .chat-history-btn {
     width: 1.4em;
@@ -270,6 +284,21 @@ body {
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
+}
+/* --- Flatten chat history buttons (no Bootstrap borders or bg) --- */
+.chat-history-btn {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chat-history-btn:hover {
+  background: rgba(255,255,255,0.05); /* subtle graphite hover glow */
+}
+
+.chat-history-btn:active {
+  background: rgba(255,255,255,0.08);
 }
 
 /* ================ */

@@ -575,13 +575,17 @@ async function loadChatHistory() {
     chats.forEach(chat => {
         const li = document.createElement("li");
         li.className = "list-group-item d-flex justify-content-between align-items-center";
-        li.innerHTML = `
-           <span class="history-title" contenteditable="false">${chat.title || `Chat ${chat.id}`}</span>
-           <span class="chat-history-btns d-flex flex-column ms-2">
-            <button class="btn chat-history-btn btn-outline-secondary mb-1 edit-title-btn" title="Edit Title">&#9998;</button>
-            <button class="btn chat-history-btn btn-outline-danger delete-chat-btn" title="Delete">&#128465;</button>
-           </span>
-        `;
+li.innerHTML = `
+   <span class="history-title" contenteditable="false">${chat.title || `Chat ${chat.id}`}</span>
+   <span class="chat-history-btns d-flex flex-column ms-2">
+     <button class="btn chat-history-btn editChatBtn mb-1 edit-title-btn" title="Edit Title">
+       <span class="material-symbols-outlined">edit_note</span>
+     </button>
+     <button class="btn chat-history-btn deleteChatBtn delete-chat-btn" title="Delete">
+       <span class="material-symbols-outlined">delete</span>
+     </button>
+   </span>
+`;
         li.onclick = (e) => {
             if (e.target.classList.contains("edit-title-btn") || e.target.classList.contains("delete-chat-btn")) return;
             switchChat(chat.id, chat.model_name);
