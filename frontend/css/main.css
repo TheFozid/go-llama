@@ -762,17 +762,19 @@ textarea {
   border: 1px solid rgba(239, 68, 68, 0.35);
   color: #fca5a5 !important;
 }
-/* Smaller, more compact online users badge */
+/* Ultra-compact online users badge */
 #onlineUsers {
-  font-size: 0.7rem !important;
-  padding: 0.2rem 0.45rem !important;
+  font-size: 0.50rem !important;
+  padding: 0.1rem 0.30rem !important;
   line-height: 1;
-  border-radius: 1rem !important;
+  border-radius: 0.9rem !important;
+  transform: translateY(-1px); /* align visually with text */
 }
 #onlineUsers .material-symbols-outlined {
-  font-size: 14px !important;
+  font-size: 10px !important;
   vertical-align: -2px;
 }
+
 /* Refine current model label to match graphite aesthetic */
 #currentModel {
   font-size: 0.85rem;
@@ -784,13 +786,13 @@ textarea {
   letter-spacing: 0.03em;
   border: 1px solid var(--border-subtle);
 }
-/* Pull history + new chat buttons closer together and toward left edge */
+/* Left button group: tighter spacing + closer to edge */
 .topbar-fixed .d-flex.align-items-center.gap-2 {
-  gap: 0.25rem !important; /* reduce gap between buttons */
-  margin-left: -4px;       /* pull slightly toward left edge */
+  gap: 0.1rem !important;  /* nearly touching */
+  margin-left: -10px !important; /* visually align to left edge */
 }
-/* Bring settings + sign out buttons closer and toward right edge */
+/* Right button group: tighter spacing + closer to right edge */
 .topbar-fixed .d-flex.align-items-center.gap-2.ms-auto {
-  gap: 0.3rem !important;
-  margin-right: -4px;
+  gap: 0.1rem !important;
+  margin-right: -10px !important;
 }
