@@ -656,7 +656,7 @@ function startStreamingResponse(prompt) {
                     html += `<span class="dots-anim"><span>.</span><span>.</span><span>.</span></span></span>`;
                     bubble.innerHTML = html;
                 }
-            }, 1000);
+            }, 4000);
         } else {
             showTypewriterPlaceholder('Thinking');
         }
