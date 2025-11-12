@@ -78,7 +78,21 @@ body {
   color: var(--accent);
   opacity: 1;
 }
-
+.topbar-fixed .btn {
+    background: none !important;
+    border: none !important;
+    color: var(--text-main) !important;
+    opacity: 0.8;
+}
+.topbar-fixed .btn:hover {
+    color: var(--accent) !important;
+    opacity: 1;
+}
+.topbar-fixed,
+.topbar-fixed .navbar {
+    background: var(--bg-surface) !important;
+    color: var(--text-main);
+}
 
 .topbar-fixed .navbar {
     padding-inline: 0.75rem;
@@ -206,13 +220,13 @@ body {
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    background: #f3f4f6;
+    background: #2a2f37;
     cursor: pointer;
     transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
 }
 
 #chatHistory .list-group-item:hover {
-    background: #e5e7eb;
+    background: #333842;
     box-shadow: 0 1px 6px rgba(15, 23, 42, 0.12);
     transform: translateY(-1px);
 }
@@ -537,18 +551,31 @@ body .bi {
 
 /* keep modals consistent with the new palette */
 .modal-content {
+    background: var(--bg-surface);
+    color: var(--text-main);
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-subtle);
     box-shadow: var(--shadow-soft);
 }
-
-.modal-header {
-    border-bottom-color: var(--border-subtle);
-}
-
+.modal-header,
 .modal-footer {
-    border-top-color: var(--border-subtle);
+    background: var(--bg-chat);
+    border-color: var(--border-subtle);
+    color: var(--text-main);
 }
+.table {
+    color: var(--text-main);
+}
+.table thead {
+    background: #2a3038;
+}
+.table tbody tr:nth-child(even) {
+    background: #242830;
+}
+.table tbody tr:nth-child(odd) {
+    background: #2a2f37;
+}
+
 /* Smooth slide animation for sidebar */
 .history-sidebar {
     transform: translateX(-100%);
@@ -581,4 +608,19 @@ body .bi {
 
 .sidebar-overlay.showing {
     opacity: 1;
+}
+a,
+a:link,
+a:visited {
+    color: #60a5fa;
+    text-decoration: none;
+}
+a:hover,
+a:focus {
+    color: #93c5fd;
+    text-decoration: underline;
+}
+body,
+.text-dark {
+    color: var(--text-main) !important;
 }
