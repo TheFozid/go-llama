@@ -430,10 +430,14 @@ Question: ` + req.Prompt + "\n"
 if (req.WebSearch || autoSearch) && len(sources) > 0 {
     botResponseWithStats += "\n<details><summary><strong>Sources</strong></summary>\n"
     for i, src := range sources {
-        botResponseWithStats += fmt.Sprintf("%d. [%s](%s)\n", i+1, src["title"], src["url"])
+        botResponseWithStats += fmt.Sprintf(
+            "%d. <a href=\"%s\" target=\"_blank\" rel=\"noopener noreferrer\">%s</a>\n",
+            i+1, src["url"], src["title"],
+        )
     }
     botResponseWithStats += "</details>"
 }
+
 
 
 			botMsg := chat.Message{
