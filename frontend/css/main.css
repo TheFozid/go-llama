@@ -762,3 +762,35 @@ textarea {
   border: 1px solid rgba(239, 68, 68, 0.35);
   color: #fca5a5 !important;
 }
+/* Smaller, more compact online users badge */
+#onlineUsers {
+  font-size: 0.7rem !important;
+  padding: 0.2rem 0.45rem !important;
+  line-height: 1;
+  border-radius: 1rem !important;
+}
+#onlineUsers .material-symbols-outlined {
+  font-size: 14px !important;
+  vertical-align: -2px;
+}
+/* Refine current model label to match graphite aesthetic */
+#currentModel {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.04);
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.03em;
+  border: 1px solid var(--border-subtle);
+}
+/* Pull history + new chat buttons closer together and toward left edge */
+.topbar-fixed .d-flex.align-items-center.gap-2 {
+  gap: 0.25rem !important; /* reduce gap between buttons */
+  margin-left: -4px;       /* pull slightly toward left edge */
+}
+/* Bring settings + sign out buttons closer and toward right edge */
+.topbar-fixed .d-flex.align-items-center.gap-2.ms-auto {
+  gap: 0.3rem !important;
+  margin-right: -4px;
+}
