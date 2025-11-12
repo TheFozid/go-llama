@@ -100,7 +100,21 @@ The result: an interface that feels instant even on hardware where most AI dashb
 
 ## 📸 Screenshots
 
-See the `/screenshots` directory.
+<p align="center">
+  <img src="/screenshots/Screenshot1.png" alt="Screenshot 1" width="200" />
+  <img src="/screenshots/Screenshot2.png" alt="Screenshot 2" width="200" />
+  <img src="/screenshots/Screenshot3.png" alt="Screenshot 3" width="200" />
+</p>
+<p align="center">
+  <img src="/screenshots/Screenshot4.png" alt="Screenshot 4" width="200" />
+  <img src="/screenshots/Screenshot5.png" alt="Screenshot 5" width="200" />
+  <img src="/screenshots/Screenshot6.png" alt="Screenshot 6" width="200" />
+</p>
+<p align="center">
+  <img src="/screenshots/Screenshot7.png" alt="Screenshot 7" width="200" />
+  <img src="/screenshots/Screenshot8.png" alt="Screenshot 8" width="200" />
+  <img src="/screenshots/Screenshot9.png" alt="Screenshot 9" width="200" />
+</p>
 
 ---
 
