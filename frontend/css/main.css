@@ -575,6 +575,30 @@ body .bi {
 .table tbody tr:nth-child(odd) {
     background: #2a2f37;
 }
+/* Force dark theme inside all modals and tables */
+.modal-content table,
+.modal-content .table {
+  background: var(--bg-surface);
+  color: var(--text-main);
+}
+
+.modal-content thead,
+.modal-content thead tr,
+.modal-content thead th {
+  background: #2a3038 !important;
+  color: var(--text-main) !important;
+  border-color: var(--border-subtle);
+}
+
+.modal-content tbody,
+.modal-content tbody tr,
+.modal-content tbody td {
+  background: #242830 !important;
+  color: var(--text-main) !important;
+  border-color: var(--border-subtle);
+}
+
+
 
 /* Smooth slide animation for sidebar */
 .history-sidebar {
@@ -623,4 +647,52 @@ a:focus {
 body,
 .text-dark {
     color: var(--text-main) !important;
+}
+/* ============== */
+/* Login / Setup  */
+/* ============== */
+
+body.login-page,
+body.setup-page {
+  background: var(--bg-app);
+  color: var(--text-main);
+}
+
+body.login-page .card,
+body.setup-page .card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-soft);
+  color: var(--text-main);
+}
+
+body.login-page input,
+body.setup-page input,
+body.login-page select,
+body.setup-page select {
+  background: #2d323a;
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+}
+
+body.login-page input::placeholder,
+body.setup-page input::placeholder {
+  color: var(--text-soft);
+}
+
+body.login-page a,
+body.setup-page a {
+  color: #60a5fa;
+}
+
+body.login-page a:hover,
+body.setup-page a:hover {
+  color: #93c5fd;
+}
+input,
+select,
+textarea {
+  background-color: #2d323a;
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
 }
