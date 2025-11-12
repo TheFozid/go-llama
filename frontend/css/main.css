@@ -530,3 +530,36 @@ body .bi {
 .modal-footer {
     border-top-color: var(--border-subtle);
 }
+/* Smooth slide animation for sidebar */
+.history-sidebar {
+    transform: translateX(-100%);
+    opacity: 0;
+    transition: transform 0.25s ease-out, opacity 0.25s ease-out;
+}
+
+.history-sidebar.showing {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+/* Ensure hidden state is fully out of view when d-none removed momentarily */
+.history-sidebar:not(.d-none):not(.showing) {
+    transform: translateX(-100%);
+    opacity: 0;
+}
+/* Sidebar overlay (dim background when history open) */
+.sidebar-overlay {
+    position: fixed;
+    top: 60px; /* below top bar */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    z-index: 110; /* just below sidebar's 120 */
+    transition: opacity 0.25s ease-out;
+}
+
+.sidebar-overlay.showing {
+    opacity: 1;
+}

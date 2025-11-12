@@ -119,10 +119,35 @@ document.addEventListener("DOMContentLoaded", function () {
             };
         };
 
-        document.getElementById("toggleHistoryBtn").onclick = function () {
-            const sidebar = document.getElementById("historySidebar");
-            sidebar.classList.toggle("d-none");
+document.getElementById("toggleHistoryBtn").onclick = function () {
+    const sidebar = document.getElementById("historySidebar");
+    const overlay = document.getElementById("sidebarOverlay");
+
+    if (sidebar.classList.contains("d-none")) {
+        // Currently hidden → show with animation
+        sidebar.classList.remove("d-none");
+        overlay.classList.remove("d-none");
+
+        // trigger reflow so CSS transitions apply
+        void sidebar.offsetWidth;
+        void overlay.offsetWidth;
+
+        sidebar.classList.add("showing");
+        overlay.classList.add("showing");
+    } else {
+        // Currently visible → animate out before hiding
+        sidebar.classList.remove("showing");
+        overlay.classList.remove("showing");
+
+        const hideAfter = () => {
+            sidebar.classList.add("d-none");
+            overlay.classList.add("d-none");
         };
+
+        sidebar.addEventListener("transitionend", hideAfter, { once: true });
+    }
+};
+
 
         document.getElementById("signOutBtn").onclick = function () {
             clearJWT();
