@@ -66,6 +66,13 @@ body {
   border-bottom: 1px solid var(--border-subtle);
   box-shadow: none;
 }
+.material-symbols-outlined {
+  font-variation-settings: 'wght' 400;
+  font-size: 20px;
+  line-height: 1;
+  vertical-align: middle;
+  color: var(--text-main);
+}
 .topbar-fixed button {
   background: none;
   border: none;
@@ -270,40 +277,37 @@ body {
 /* ================ */
 
 .prompt-box-fixed {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 90;
-    background: var(--bg-surface);
-    box-shadow: none;
-	border-top: 1px solid var(--border-subtle);
-    padding: 0.45rem 0.75rem 0.75rem;
-    width: 100vw;
-    max-width: 100vw;
-    display: flex;
-    align-items: flex-end;
-    box-sizing: border-box;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  box-shadow: 0 -2px 6px rgba(0,0,0,0.25);
 }
 
 /* prompt textarea */
 
 .prompt-textarea {
-    min-height: 40px;
-    max-height: 220px;
-    line-height: 1.4;
-    padding-top: 8px;
-    padding-bottom: 8px;
-    resize: none;
-    overflow-y: auto;
-    box-sizing: border-box;
-    border-radius: var(--radius-md);
-	background: #2d323a;
-	color: var(--text-main);
-	border: 1px solid var(--border-subtle);
-	box-shadow: none;
-    font-size: 0.95rem;
+  flex: 1;
+  min-height: 42px;
+  max-height: 200px;
+  resize: none;
+  overflow-y: auto;
+  border-radius: var(--radius-pill);
+  background: #2a2f37;
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.95rem;
+  padding: 0.55rem 1rem;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
 }
+
 .prompt-textarea::placeholder {
   color: var(--text-soft);
 }
@@ -327,13 +331,30 @@ body {
 
 #sendBtn,
 #stopBtn {
-    min-width: 40px;
-    min-height: 40px;
-    padding: 0 10px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+  min-width: 42px;
+  min-height: 42px;
+  border-radius: var(--radius-pill);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  box-shadow: none;
 }
+#sendBtn {
+  background: var(--accent);
+  border: none;
+}
+#sendBtn:hover {
+  background: #5a9bff;
+}
+#stopBtn {
+  background: #f97316;
+  border: none;
+}
+#stopBtn:hover {
+  background: #fb923c;
+}
+
 
 #sendBtn i,
 #stopBtn i {
@@ -695,4 +716,20 @@ textarea {
   background-color: #2d323a;
   color: var(--text-main);
   border: 1px solid var(--border-subtle);
+}
+/* --- Refine online users badge for dark theme --- */
+.badge.bg-success {
+  background-color: rgba(34, 197, 94, 0.15) !important;   /* soft green glow */
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #86efac !important;
+}
+.badge.bg-warning {
+  background-color: rgba(251, 146, 60, 0.15) !important;  /* warm amber */
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  color: #fdba74 !important;
+}
+.badge.bg-danger {
+  background-color: rgba(239, 68, 68, 0.15) !important;   /* soft red */
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5 !important;
 }
