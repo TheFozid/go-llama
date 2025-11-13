@@ -445,18 +445,18 @@ body {
 /* ======================= */
 
 .thinking-bubble {
-    background: #f9fafb;
+    background: #3f444b;
     border-radius: var(--radius-md);
-    border-left: 3px solid var(--border-strong);
+    border-left: 5px solid var(--border-strong);
     color: var(--text-muted);
-    font-size: 0.8rem;
+    font-size: 0.5rem;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     padding: 0.45rem 0.55rem 0.45rem 0.7rem;
     margin: 0.35rem 0 0.25rem;
     white-space: pre-wrap;
     word-break: break-word;
     opacity: 0.92;
-    max-height: 72px;
+    max-height: 65px;
     overflow-y: auto;
     box-sizing: border-box;
 }
@@ -532,7 +532,7 @@ body {
 
 @media (orientation: portrait) {
     html {
-        font-size: 15px;
+        font-size: 14px;
     }
 
     .main-layout {
