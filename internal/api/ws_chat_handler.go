@@ -34,17 +34,45 @@ if cfg.SearxNG.MaxResults <= 0 {
 		return false
 	}
 
-// Explicit user request to search
 explicitSearchPhrases := []string{
-	"search the web",
-	"search the internet",
-	"search online",
-	"look online",
-	"use the web",
-	"use internet",
-	"use web results",
-	"get info from the web",
+    // Direct commands
+    "search the web",
+    "search online",
+    "search the internet",
+    "search web",
+    "search internet",
+
+    // Imperatives phrased differently
+    "look it up online",
+    "look online",
+    "look this up online",
+    "look it up on the web",
+
+    // Requests based on web sources
+    "use the web",
+    "use internet",
+    "use the internet",
+    "use online sources",
+    "use online information",
+    "use web results",
+
+    // Declarative forms
+    "get info from the web",
+    "get information from the web",
+    "get online information",
+    "find this online",
+    "find information online",
+    "verify this online",
+
+    // Short common expressions
+    "google it",
+    "bing it",
+    "check online",
+    "check the web",
+    "check the internet",
+    "web search",
 }
+
 for _, phrase := range explicitSearchPhrases {
 	if strings.Contains(p, phrase) {
 		return true
