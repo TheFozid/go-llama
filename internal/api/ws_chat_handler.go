@@ -273,15 +273,20 @@ Rules:
 - Do not format just for decoration or style. Clarity first, formatting second.
 `
 
+// Timestamp added every request to help model reason about recency
+currentTime := time.Now().UTC().Format("2006-01-02 15:04")
+timestampInstruction := fmt.Sprintf(
+    "Current date/time: %s UTC. Your training knowledge may be older than this date. If uncertain about recent information, say so.",
+    currentTime,
+)
+
+llmMessages = append([]map[string]string{
+    {"role": "system", "content": timestampInstruction},
+}, llmMessages...)
+
 		llmMessages = append([]map[string]string{
 			{"role": "system", "content": mdInstruction},
 		}, llmMessages...)
-
-// Per-turn light markdown reminder
-llmMessages = append([]map[string]string{
-    {"role": "system", "content": "(Formatting note: Use light Markdown only if it improves clarity.)"},
-}, llmMessages...)
-
 
 		var sources []map[string]string
 if req.Prompt == "" {
@@ -397,12 +402,11 @@ If you choose to add a hyperlink, use: [1](matching URL).
 
 Do not include a list of references and do not repeat URLs at the end.
 Format the answer in Markdown when helpful, but keep the message natural.
-
-Question: ` + req.Prompt + "\n"
+ `
 
 				llmMessages = append([]map[string]string{
 					{"role": "user", "content": webContext},
-				}, llmMessages[1:]...)
+				}, llmMessages...)
 			}
 		}
 
