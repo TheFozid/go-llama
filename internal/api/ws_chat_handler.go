@@ -30,8 +30,18 @@ if cfg.SearxNG.MaxResults <= 0 {
 	score := 0
 
 	// User override: don't search
-	if strings.Contains(p, "don't search") || strings.Contains(p, "do not search") {
-		return false
+	denyList := []string{
+	    "don't search",
+	    "do not search",
+	    "dont search",
+	    "dont web search",
+	    "do not web search",
+	}
+
+	for _, phrase := range denyList {
+	    if strings.Contains(p, phrase) {
+	        return false
+	    }
 	}
 
 explicitSearchPhrases := []string{
@@ -344,8 +354,19 @@ if autoSearch && !req.WebSearch {
 				searxngURL = "http://localhost:8888/search"
 			}
 
+// Build combined search context (last up to 3 user messages)
+var userPrompts []string
+for i := len(messages) - 1; i >= 0 && len(userPrompts) < 3; i-- {
+    if messages[i].Sender == "user" {
+        userPrompts = append([]string{messages[i].Content}, userPrompts...)
+    }
+}
+
+combinedPrompt := strings.Join(userPrompts, " ")
+
+
 // --- Detect site-specific search ---
-cleanPrompt, siteDomain := extractSiteQuery(req.Prompt)
+cleanPrompt, siteDomain := extractSiteQuery(combinedPrompt)
 searchQuery := cleanPrompt
 if len(strings.Fields(searchQuery)) > 20 {
     searchQuery = compressForSearch(searchQuery)
@@ -385,7 +406,7 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 		}
 
 		// 2) Rank those and keep top 50% of *limit*
-		ranked := rankAndFilterResults(req.Prompt, tmpResults)
+		ranked := rankAndFilterResults(combinedPrompt, tmpResults)
 
 		keepTop := limit / 2
 		if keepTop < 1 {
