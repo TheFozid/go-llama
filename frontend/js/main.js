@@ -148,6 +148,36 @@ document.getElementById("toggleHistoryBtn").onclick = function () {
     }
 };
 
+// === NEW: Clicking the overlay closes sidebar ===
+document.getElementById("sidebarOverlay").onclick = function () {
+    const sidebar = document.getElementById("historySidebar");
+    const overlay = document.getElementById("sidebarOverlay");
+
+    // If already hidden, do nothing
+    if (sidebar.classList.contains("d-none")) return;
+
+    sidebar.classList.remove("showing");
+    overlay.classList.remove("showing");
+
+    sidebar.addEventListener("transitionend", () => {
+        sidebar.classList.add("d-none");
+        overlay.classList.add("d-none");
+    }, { once: true });
+};
+
+// === NEW: ESC key closes sidebar ===
+document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+
+    const sidebar = document.getElementById("historySidebar");
+    const overlay = document.getElementById("sidebarOverlay");
+
+    if (!sidebar.classList.contains("d-none")) {
+        overlay.click(); // reuse closing logic
+    }
+});
+
+
 
         document.getElementById("signOutBtn").onclick = function () {
             clearJWT();
