@@ -349,16 +349,22 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 		// First estimate: do we need web search?
 		webContextSize := 0
 		if req.WebSearch {
-			webContextSize = 1000 // Reserve space for web results
+			// Estimate based on max results we'll fetch
+			estimatedResults := cfg.SearxNG.MaxResults / 2 // We keep top 50%
+			if estimatedResults < 1 {
+				estimatedResults = 1
+			}
+			// Estimate: ~50 tokens per result (title + snippet + URL) + overhead
+			webContextSize = (estimatedResults * 50) + 50
 		}
 		
 		// Adjust context size for history if web search is enabled
-		adjustedContextSize := contextSize - webContextSize
+		adjustedContextSize := contextSize - webContextSize - 50 // Reserve for system message
 		if adjustedContextSize < 512 {
 			adjustedContextSize = 512
 		}
 		if !req.WebSearch {
-			adjustedContextSize = contextSize
+			adjustedContextSize = contextSize - 50 // Just system message
 		}
 		
 		messages := chat.BuildSlidingWindow(allMessages, adjustedContextSize)
@@ -431,27 +437,21 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 
 		// Prepend a formatted context to the prompt if results exist
 		if len(sources) > 0 {
-			webContext := "Web search results:\n"
+			var webContextBuilder strings.Builder
+			webContextBuilder.WriteString("Search results:\n")
 			for i, src := range sources {
-				webContext += fmt.Sprintf("[%d] %s: %s -> URL: %s\n", i+1, src["title"], src["snippet"], src["url"])
+				webContextBuilder.WriteString(fmt.Sprintf("[%d] %s: %s (%s)\n", 
+					i+1, src["title"], src["snippet"], src["url"]))
 			}
-			webContext += `
+			webContextBuilder.WriteString("\nCite sources as [1], [2].")
+			
+			webContext := webContextBuilder.String()
 
-Use your own knowledge and the information above to answer the user's question.
-
-If you use a web result, cite it inline like [1].
-If you choose to add a hyperlink, use: [1](matching URL).
-
-Do not include a list of references and do not repeat URLs at the end.
-Format the answer in Markdown when helpful, but keep the message natural.
-
-Question: `
-			webContext += req.Content
-
-			// Insert as the first user message (preserve any real user messages after it)
-			llmMessages = append([]map[string]string{
-				{"role": "user", "content": webContext + req.Content},
-			}, llmMessages[1:]...)
+			// Insert web context as system message before current prompt
+			llmMessages = append(llmMessages, map[string]string{
+				"role":    "system",
+				"content": webContext,
+			})
 		}
 
 		// Prepare LLM API payload

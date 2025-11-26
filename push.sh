@@ -20,10 +20,10 @@ IMAGE_BASE="ghcr.io/thefozid/go-llama"
 git fetch --tags --quiet
 LATEST=$(git tag --list 'v*' | sort -V | tail -n 1)
 LATEST=${LATEST#v}
+
 if [ -z "$LATEST" ]; then
   LATEST="0.0.0"
 fi
-
 
 MAJOR=$(echo "$LATEST" | cut -d. -f1)
 MINOR=$(echo "$LATEST" | cut -d. -f2)
@@ -42,13 +42,19 @@ echo "📌 Previous version: $LATEST"
 echo "✨ New version: v$VERSION"
 echo
 
-#  --platform linux/amd64,linux/arm64,linux/arm/v7 \
-
+# Git operations BEFORE build (faster feedback if commit fails)
+echo "📦 Git commit + tag..."
+git add .
+git commit -m "$MSG" || echo "No changes to commit"
+git tag "v$VERSION"
 
 # Build + push images for AMD64 + ARM64
 echo "🚀 Building & pushing multi-arch images..."
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
+  --cache-from type=registry,ref="$IMAGE_BASE:buildcache" \
+  --cache-to type=registry,ref="$IMAGE_BASE:buildcache",mode=max \
+  --build-arg BUILDKIT_INLINE_CACHE=1 \
   -t "$IMAGE_BASE:latest" \
   -t "$IMAGE_BASE:$VERSION" \
   -t "$IMAGE_BASE:$MAJOR.$MINOR" \
@@ -56,16 +62,14 @@ docker buildx build \
   --push .
 
 echo
-echo "📦 Git commit + tag..."
-git add .
-git commit -m "$MSG" || echo "No changes to commit"
-git tag "v$VERSION"
+echo "🌐 Pushing git changes..."
 git push
 git push --tags
 
-docker system prune -a --volumes -f
-docker builder prune -a -f
-docker buildx prune -a -f
+# Selective cleanup (don't prune build cache!)
+echo "🧹 Cleaning up old images..."
+docker system prune -f --filter "until=168h"  # Keep last week
+docker builder prune --keep-storage 10GB -f   # Keep 10GB cache
 
 echo
 echo "✅ Release v$VERSION complete"

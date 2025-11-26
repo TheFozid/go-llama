@@ -337,10 +337,17 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 
 		// Estimate web context size if search will happen
+		// Calculate based on actual results for better space utilization
 		webContextSize := 0
-		if req.WebSearch || shouldAutoSearch(cfg, req.Prompt) {
-			// Rough estimate: will be refined after actual search
-			webContextSize = 1000 // Reserve space for web results
+		willSearch := req.WebSearch || shouldAutoSearch(cfg, req.Prompt)
+		if willSearch {
+			// Initial rough estimate before we have actual sources
+			estimatedResults := cfg.SearxNG.MaxResults / 2 // We keep top 50%
+			if estimatedResults < 1 {
+				estimatedResults = 1
+			}
+			// Estimate: ~50 tokens per result (title + snippet + URL) + overhead
+			webContextSize = (estimatedResults * 50) + 50
 		}
 		
 		// Rebuild sliding window if we need to account for web context
@@ -365,34 +372,13 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			}
 		}
 
-mdInstruction := `
-Write clearly and naturally.
-Use light Markdown formatting only when it improves clarity.
-
-Rules:
-- Short direct answers should be plain text.
-- For longer or structured answers, use minimal Markdown:
-  - Bullet points for lists
-  - Bold for emphasis when helpful
-  - Headings sparingly (only if they genuinely help)
-  - Code blocks only for code or technical output
-- Do not format just for decoration or style. Clarity first, formatting second.
-`
-
-// Timestamp added every request to help model reason about recency
+// Single, concise system instruction optimized for small models (1B-10B)
 currentTime := time.Now().UTC().Format("2006-01-02 15:04")
-timestampInstruction := fmt.Sprintf(
-    "Current date/time: %s UTC. Your training knowledge may be older than this date. If uncertain about recent information, say so.",
-    currentTime,
-)
+systemInstruction := fmt.Sprintf("Today is %s UTC. Be direct and helpful.", currentTime)
 
 llmMessages = append([]map[string]string{
-    {"role": "system", "content": timestampInstruction},
+    {"role": "system", "content": systemInstruction},
 }, llmMessages...)
-
-		llmMessages = append([]map[string]string{
-			{"role": "system", "content": mdInstruction},
-		}, llmMessages...)
 
 		var sources []map[string]string
 if req.Prompt == "" {
@@ -551,18 +537,61 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 
 
 			}
-			// 🟡 Graceful fallback if no results
-			if (req.WebSearch || autoSearch) && len(sources) == 0 {
-				fallbackMsg := `No live web results were found from the attempted search.
-Please acknowledge this to the user, and answer using your own existing knowledge instead.`
-				llmMessages = append([]map[string]string{
-					{"role": "user", "content": fallbackMsg},
-				}, llmMessages...)
+
+			// Recalculate actual web context size now that we have real sources
+			if len(sources) > 0 {
+				// Calculate actual token usage from sources
+				actualWebSize := 0
+				for _, src := range sources {
+					// Rough estimate: title + snippet + URL ≈ 4 chars per token
+					actualWebSize += (len(src["title"]) + len(src["snippet"]) + len(src["url"])) / 4
+				}
+				actualWebSize += 50 // Overhead for formatting
+				
+				// If actual size is very different from estimate, rebuild sliding window
+				if actualWebSize < webContextSize-200 || actualWebSize > webContextSize+200 {
+					adjustedContextSize := contextSize - 50 - actualWebSize - 100 // system msg + web + safety
+					if adjustedContextSize < 512 {
+						adjustedContextSize = 512
+					}
+					
+					messages = chat.BuildSlidingWindow(allMessages, adjustedContextSize)
+					
+					// Rebuild llmMessages with better-fitted history
+					llmMessages = []map[string]string{}
+					currentTime := time.Now().UTC().Format("2006-01-02 15:04")
+					systemInstruction := fmt.Sprintf("Today is %s UTC. Be direct and helpful.", currentTime)
+					llmMessages = append(llmMessages, map[string]string{
+						"role":    "system",
+						"content": systemInstruction,
+					})
+					
+					for _, m := range messages {
+						role := "user"
+						if m.Sender == "bot" {
+							role = "assistant"
+						}
+						llmMessages = append(llmMessages, map[string]string{
+							"role":    role,
+							"content": m.Content,
+						})
+					}
+				}
 			}
 			
+			// 🟡 Graceful fallback if no results
+			if (req.WebSearch || autoSearch) && len(sources) == 0 {
+				fallbackMsg := "Web search returned no results."
+				llmMessages = append(llmMessages, map[string]string{
+					"role":    "system",
+					"content": fallbackMsg,
+				})
+			}
+			
+
 			if len(sources) > 0 {
 				var webContextBuilder strings.Builder
-				webContextBuilder.WriteString("Web search results:\n")
+				webContextBuilder.WriteString("Search results:\n")
 				for i, src := range sources {
 					webContextBuilder.WriteString("[")
 					webContextBuilder.WriteString(strconv.Itoa(i+1))
@@ -570,25 +599,18 @@ Please acknowledge this to the user, and answer using your own existing knowledg
 					webContextBuilder.WriteString(src["title"])
 					webContextBuilder.WriteString(": ")
 					webContextBuilder.WriteString(src["snippet"])
-					webContextBuilder.WriteString(" -> URL: ")
+					webContextBuilder.WriteString(" (")
 					webContextBuilder.WriteString(src["url"])
-					webContextBuilder.WriteString("\n")
+					webContextBuilder.WriteString(")\n")
 				}
-				webContextBuilder.WriteString(`
-
-Use your own knowledge and the information above to answer the user's question.
-
-If you use a web result, cite it inline like [1].
-If you choose to add a hyperlink, use: [1](matching URL).
-
-Do not include a list of references and do not repeat URLs at the end.
-Format the answer in Markdown when helpful, but keep the message natural.
-`)
+				webContextBuilder.WriteString("\nCite sources as [1], [2].")
+				
 				webContext := webContextBuilder.String()
 
-				llmMessages = append([]map[string]string{
-					{"role": "user", "content": webContext},
-				}, llmMessages...)
+				llmMessages = append(llmMessages, map[string]string{
+					"role":    "system",
+					"content": webContext,
+				})
 			}
 		}
 
