@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -19,22 +20,47 @@ import (
 	"golang.org/x/net/html/charset"
 )
 
+// Package-level HTTP client for reuse across enrichment calls
+var enrichHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        128,
+		MaxIdleConnsPerHost: 32,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+	},
+}
+
+// Pre-compiled regexes for performance
+var (
+	spaceReGlobal    = regexp.MustCompile(`\s+`)
+	tokenReGlobal    = regexp.MustCompile(`[\p{L}\p{N}\-_/]+`)
+	acronymReGlobal  = regexp.MustCompile(`\b[A-Z]{2,}\b`)
+	sentenceReGlobal = regexp.MustCompile(`(?m)([^.!?]*[.!?])`)
+	siteFilterRe     = regexp.MustCompile(`(?i)\bsite:[^\s]+`)
+	urlFilterRe      = regexp.MustCompile(`https?://\S+`)
+)
+
+// Cache for enriched content (simple in-memory cache)
+var (
+	enrichCache = make(map[string]string)
+	cacheMu     sync.RWMutex
+)
+
 // enrichAndSummarize fetches a URL and returns a compact, LLM-optimized summary
 // of the main static HTML content (~500–1000 chars). It biases the summary toward
 // the given query when provided, helping small LLMs focus on relevant text. If
 // anything fails, it returns the provided fallback snippet.
 func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
-	// Tuned HTTP client (connection reuse + timeouts)
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			Proxy:               http.ProxyFromEnvironment,
-			MaxIdleConns:        128,
-			MaxIdleConnsPerHost: 32,
-			IdleConnTimeout:     30 * time.Second,
-			DisableCompression:  false, // let Go auto-handle gzip
-		},
+	// Check cache first
+	cacheKey := urlStr + "|" + query
+	cacheMu.RLock()
+	if cached, ok := enrichCache[cacheKey]; ok {
+		cacheMu.RUnlock()
+		return cached
 	}
+	cacheMu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -47,7 +73,7 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1")
 // */
 
-	resp, err := client.Do(req)
+	resp, err := enrichHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("⚠️ fetch failed: %s: %v", urlStr, err)
 		return fallbackSnippet
@@ -128,11 +154,20 @@ queryTokens := buildQueryTokensForRanking(query)
 
 // Produce LLM-optimized compressed summary (~500–1000 chars),
 // biased toward content overlapping with the query tokens.
-summary := summarizeForLLM(mainText, 1000, queryTokens)
-if summary == "" {
-	return fallbackSnippet
-}
-return summary
+	summary := summarizeForLLM(mainText, 1000, queryTokens)
+	if summary == "" {
+		return fallbackSnippet
+	}
+	
+	// Cache the result
+	cacheMu.Lock()
+	if len(enrichCache) > 100 { // Simple LRU: clear if too large
+		enrichCache = make(map[string]string)
+	}
+	enrichCache[cacheKey] = summary
+	cacheMu.Unlock()
+	
+	return summary
 
 }
 
@@ -197,6 +232,13 @@ func looksDynamic(html string) bool {
 		if matches >= 1 {
 			return true
 		}
+	}
+
+	// Check for pre-rendered content markers (likely has real content despite framework)
+	if strings.Contains(lower, "article") || 
+	   strings.Contains(lower, "<main") ||
+	   strings.Count(lower, "<p>") > 5 {
+		return false
 	}
 
 	// Looks fine — treat as static
@@ -352,7 +394,7 @@ type frag struct {
 	kws []string
 	sc  float64 // score by info-density + query overlap
 }
-var frags []frag
+frags := make([]frag, 0, len(sentences))
 
 // Prebuild a set for query tokens for fast overlap checks
 qset := map[string]struct{}{}
@@ -434,18 +476,15 @@ func buildQueryTokensForRanking(query string) []string {
 	}
 
 	// Remove site: filters (e.g. "site:bbc.co.uk") and raw URLs
-	siteRe := regexp.MustCompile(`(?i)\bsite:[^\s]+`)
-	urlRe := regexp.MustCompile(`https?://\S+`)
-	q := siteRe.ReplaceAllString(query, " ")
-	q = urlRe.ReplaceAllString(q, " ")
+	q := siteFilterRe.ReplaceAllString(query, " ")
+	q = urlFilterRe.ReplaceAllString(q, " ")
 
 	// Normalize whitespace and case
 	q = strings.ToLower(strings.TrimSpace(q))
-	spaceReLocal := regexp.MustCompile(`\s+`)
-	q = spaceReLocal.ReplaceAllString(q, " ")
+	q = spaceReGlobal.ReplaceAllString(q, " ")
 
 	// Tokenize using the same tokenRe / stemming / stopwords as content
-	toks := tokenRe.FindAllString(q, -1)
+	toks := tokenReGlobal.FindAllString(q, -1)
 	if len(toks) == 0 {
 		return nil
 	}
@@ -579,10 +618,8 @@ func fallbackParagraphs(doc *goquery.Document) string {
 	return b.String()
 }
 
-var spaceRe = regexp.MustCompile(`\s+`)
-
 func compactWhitespace(s string) string {
-    return spaceRe.ReplaceAllString(s, " ")
+    return spaceReGlobal.ReplaceAllString(s, " ")
 }
 
 func normalizeQuotes(s string) string {
@@ -601,8 +638,7 @@ replacer := strings.NewReplacer(
 
 func splitSentences(s string) []string {
 	// Simple splitter respecting common terminators and preserving boundaries
-	re := regexp.MustCompile(`(?m)([^.!?]*[.!?])`)
-	m := re.FindAllString(s, -1)
+	m := sentenceReGlobal.FindAllString(s, -1)
 	if len(m) == 0 {
 		return []string{s}
 	}
@@ -632,11 +668,9 @@ var stopwords = map[string]struct{}{
 }
 
 
-var tokenRe = regexp.MustCompile(`[\p{L}\p{N}\-_/]+`)
-
 func keywordsFrom(s string) []string {
 	lower := strings.ToLower(s)
-	toks := tokenRe.FindAllString(lower, -1)
+	toks := tokenReGlobal.FindAllString(lower, -1)
 	if len(toks) == 0 {
 		return nil
 	}
@@ -673,8 +707,7 @@ func infoDensityScore(sent string, kws []string) float64 {
 			numbers++
 		}
 	}
-	acronymRe := regexp.MustCompile(`\b[A-Z]{2,}\b`)
-	acronyms = len(acronymRe.FindAllString(sent, -1))
+	acronyms = len(acronymReGlobal.FindAllString(sent, -1))
 	return float64(len(kws)) + 1.5*float64(numbers) + 2.0*float64(acronyms)
 }
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -76,7 +77,10 @@ func rankAndFilterResults(query string, results []SearxResult) []SearxResult {
 		}
 
 		score := titleHits*2 + snippetHits + phraseBonus
-		scoredList = append(scoredList, scored{item: r, score: score})
+		// Normalize by document length to avoid bias toward longer snippets
+		textLen := float64(len(title) + len(snippet) + 10)
+		normalizedScore := float64(score) / math.Log(textLen)
+		scoredList = append(scoredList, scored{item: r, score: int(normalizedScore * 100)})
 	}
 
 	// --- Sort descending by score ---

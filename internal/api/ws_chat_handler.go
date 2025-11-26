@@ -8,8 +8,10 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"context"
 	"github.com/gin-gonic/gin"
@@ -19,6 +21,19 @@ import (
 	"go-llama/internal/config"
 	"go-llama/internal/db"
 )
+
+// extractURLFromPrompt finds and removes URLs from prompt, returning (cleanedPrompt, extractedURL)
+func extractURLFromPrompt(prompt string) (string, string) {
+	urlPattern := regexp.MustCompile(`https?://[^\s]+|(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*`)
+	urls := urlPattern.FindAllString(prompt, -1)
+	cleanedPrompt := urlPattern.ReplaceAllString(prompt, " ")
+	cleanedPrompt = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(cleanedPrompt, " "))
+	
+	if len(urls) > 0 {
+		return cleanedPrompt, urls[0]
+	}
+	return cleanedPrompt, ""
+}
 
 // --- Auto Web Search Logic ---
 func shouldAutoSearch(cfg *config.Config, prompt string) bool {
@@ -197,6 +212,26 @@ var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// WebSocket connection wrapper with mutex for thread-safe writes
+type safeWSConn struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func (s *safeWSConn) WriteJSON(v interface{}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn.WriteJSON(v)
+}
+
+func (s *safeWSConn) ReadMessage() (int, []byte, error) {
+	return s.conn.ReadMessage()
+}
+
+func (s *safeWSConn) Close() error {
+	return s.conn.Close()
+}
+
 func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.GetHeader("Authorization")
@@ -215,14 +250,16 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 		}
 		c.Set("userId", claims.UserID)
 
-		conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
+		rawConn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			log.Println("WebSocket upgrade failed:", err)
 			return
 		}
+		conn := &safeWSConn{conn: rawConn}
 		defer conn.Close()
 
 		_, msg, err := conn.ReadMessage()
+
 		if err != nil {
 			conn.WriteJSON(map[string]string{"error": "invalid initial payload"})
 			return
@@ -254,7 +291,6 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			conn.WriteJSON(map[string]string{"error": "failed to save message"})
 			return
 		}
-
 		var modelConfig *config.LLMConfig
 		for i := range cfg.LLMs {
 			if cfg.LLMs[i].Name == chatInst.ModelName {
@@ -283,6 +319,9 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 		if contextSize == 0 {
 			contextSize = 2048 // Fallback default
 		}
+		
+		// We'll adjust context size after we know if web search is happening
+		// For now, build with full context and adjust later if needed
 		messages := chat.BuildSlidingWindow(allMessages, contextSize)
 
 		var llmMessages []map[string]string
@@ -295,6 +334,35 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 				"role":    role,
 				"content": m.Content,
 			})
+		}
+
+		// Estimate web context size if search will happen
+		webContextSize := 0
+		if req.WebSearch || shouldAutoSearch(cfg, req.Prompt) {
+			// Rough estimate: will be refined after actual search
+			webContextSize = 1000 // Reserve space for web results
+		}
+		
+		// Rebuild sliding window if we need to account for web context
+		if webContextSize > 0 {
+			adjustedContextSize := contextSize - webContextSize
+			if adjustedContextSize < 512 {
+				adjustedContextSize = 512 // Minimum context for history
+			}
+			messages = chat.BuildSlidingWindow(allMessages, adjustedContextSize)
+			
+			// Rebuild llmMessages with adjusted history
+			llmMessages = []map[string]string{}
+			for _, m := range messages {
+				role := "user"
+				if m.Sender == "bot" {
+					role = "assistant"
+				}
+				llmMessages = append(llmMessages, map[string]string{
+					"role":    role,
+					"content": m.Content,
+				})
+			}
 		}
 
 mdInstruction := `
@@ -355,23 +423,40 @@ if autoSearch && !req.WebSearch {
 			}
 
 // Build combined search context (last up to 3 user messages)
+// with character limit to avoid processing huge concatenations
 var userPrompts []string
+combinedLength := 0
+const maxCombinedChars = 500
+
 for i := len(messages) - 1; i >= 0 && len(userPrompts) < 3; i-- {
     if messages[i].Sender == "user" {
+        if combinedLength + len(messages[i].Content) > maxCombinedChars {
+            break
+        }
         userPrompts = append([]string{messages[i].Content}, userPrompts...)
+        combinedLength += len(messages[i].Content)
     }
 }
 
 combinedPrompt := strings.Join(userPrompts, " ")
 
+// --- Extract URL from prompt first ---
+cleanedFromURL, extractedURL := extractURLFromPrompt(combinedPrompt)
 
-// --- Detect site-specific search ---
-cleanPrompt, siteDomain := extractSiteQuery(combinedPrompt)
+// --- Then detect site-specific search phrases ---
+cleanPrompt, siteDomain := extractSiteQuery(cleanedFromURL)
 searchQuery := cleanPrompt
 if len(strings.Fields(searchQuery)) > 20 {
     searchQuery = compressForSearch(searchQuery)
 }
-if siteDomain != "" {
+
+// Apply site filter: prioritize extracted URL, then detected domain
+if extractedURL != "" {
+    parsed, err := url.Parse(extractedURL)
+    if err == nil && parsed.Host != "" {
+        searchQuery = "site:" + parsed.Host + " " + searchQuery
+    }
+} else if siteDomain != "" {
     searchQuery = "site:" + siteDomain + " " + searchQuery
 }
 
@@ -416,33 +501,80 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 			keepTop = len(ranked)
 		}
 
+		// Parallel enrichment for better performance
+		type enrichResult struct {
+			index   int
+			title   string
+			url     string
+			snippet string
+		}
+
+		enrichChan := make(chan enrichResult, keepTop)
+		var wg sync.WaitGroup
+
 		for i := 0; i < keepTop; i++ {
-			r := ranked[i]
-			sources = append(sources, map[string]string{
-				"title":   r.Title,
-				"url":     r.URL,
-				"snippet": r.Content,
-			})
+			wg.Add(1)
+			go func(idx int, r SearxResult) {
+				defer wg.Done()
+				enrichedSnippet := enrichAndSummarize(r.URL, r.Content, searchQuery)
+				enrichChan <- enrichResult{
+					index:   idx,
+					title:   r.Title,
+					url:     r.URL,
+					snippet: enrichedSnippet,
+				}
+			}(i, ranked[i])
+		}
+
+		go func() {
+			wg.Wait()
+			close(enrichChan)
+		}()
+
+		// Collect results in original order
+		enriched := make([]enrichResult, keepTop)
+		for res := range enrichChan {
+			enriched[res.index] = res
+		}
+
+		for _, e := range enriched {
+			if e.title != "" && e.url != "" {
+				sources = append(sources, map[string]string{
+					"title":   e.title,
+					"url":     e.url,
+					"snippet": e.snippet,
+				})
+			}
 		}
 	}
 }
 
 
 			}
-			if len(sources) > 0 {
-webContext := "Web search results:\n"
-for i, src := range sources {
-    webContext += "[" + strconv.Itoa(i+1) + "] " + src["title"] + ": " + src["snippet"] + " -> URL: " + src["url"] + "\n"
-}
-// 🟡 NEW graceful fallback if no results
-if (req.WebSearch || autoSearch) && len(sources) == 0 {
-    fallbackMsg := `No live web results were found from the attempted search.
+			// 🟡 Graceful fallback if no results
+			if (req.WebSearch || autoSearch) && len(sources) == 0 {
+				fallbackMsg := `No live web results were found from the attempted search.
 Please acknowledge this to the user, and answer using your own existing knowledge instead.`
-    llmMessages = append([]map[string]string{
-        {"role": "user", "content": fallbackMsg},
-    }, llmMessages...)
-}
-webContext += `
+				llmMessages = append([]map[string]string{
+					{"role": "user", "content": fallbackMsg},
+				}, llmMessages...)
+			}
+			
+			if len(sources) > 0 {
+				var webContextBuilder strings.Builder
+				webContextBuilder.WriteString("Web search results:\n")
+				for i, src := range sources {
+					webContextBuilder.WriteString("[")
+					webContextBuilder.WriteString(strconv.Itoa(i+1))
+					webContextBuilder.WriteString("] ")
+					webContextBuilder.WriteString(src["title"])
+					webContextBuilder.WriteString(": ")
+					webContextBuilder.WriteString(src["snippet"])
+					webContextBuilder.WriteString(" -> URL: ")
+					webContextBuilder.WriteString(src["url"])
+					webContextBuilder.WriteString("\n")
+				}
+				webContextBuilder.WriteString(`
 
 Use your own knowledge and the information above to answer the user's question.
 
@@ -451,7 +583,8 @@ If you choose to add a hyperlink, use: [1](matching URL).
 
 Do not include a list of references and do not repeat URLs at the end.
 Format the answer in Markdown when helpful, but keep the message natural.
- `
+`)
+				webContext := webContextBuilder.String()
 
 				llmMessages = append([]map[string]string{
 					{"role": "user", "content": webContext},
@@ -470,7 +603,7 @@ Format the answer in Markdown when helpful, but keep the message natural.
 
 		var botResponse string
 		var toksPerSec float64
-		err = streamLLMResponseWS(conn, modelConfig.URL, payload, &botResponse, &toksPerSec)
+		err = streamLLMResponseWS(conn, rawConn, modelConfig.URL, payload, &botResponse, &toksPerSec)
 		if err != nil {
 			conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": err.Error()})
 			return
@@ -507,13 +640,13 @@ if (req.WebSearch || autoSearch) && len(sources) > 0 {
 }
 
 // --- Streaming function ---
-func streamLLMResponseWS(conn *websocket.Conn, llmURL string, payload map[string]interface{}, respOut *string, toksPerSecOut *float64) error {
+func streamLLMResponseWS(safeConn *safeWSConn, rawConn *websocket.Conn, llmURL string, payload map[string]interface{}, respOut *string, toksPerSecOut *float64) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go func() {
 		for {
-			_, msg, err := conn.ReadMessage()
+			_, msg, err := rawConn.ReadMessage()
 			if err != nil {
 				cancel() // WS closed
 				return
@@ -598,7 +731,7 @@ if len(chunk.Choices) > 0 {
         responseBuilder.WriteString(token)
 
         // Stream to frontend
-        conn.WriteJSON(WSChatToken{Token: token, Index: index})
+		safeConn.WriteJSON(WSChatToken{Token: token, Index: index})
         index++
     }
 
@@ -617,7 +750,7 @@ if len(chunk.Choices) > 0 {
             inReasoning = false
             // Close the think block in both saved content and streamed tokens
             responseBuilder.WriteString("</think>")
-            conn.WriteJSON(WSChatToken{Token: "</think>", Index: index})
+            safeConn.WriteJSON(WSChatToken{Token: "</think>", Index: index})
             index++
         }
 
@@ -644,7 +777,7 @@ if len(chunk.Choices) > 0 {
 
         // Normal answer token
         responseBuilder.WriteString(token)
-        conn.WriteJSON(WSChatToken{Token: token, Index: index})
+		safeConn.WriteJSON(WSChatToken{Token: token, Index: index})
         index++
     }
 }
@@ -668,7 +801,7 @@ if len(chunk.Choices) > 0 {
 	    }
 	}
 
-	conn.WriteJSON(map[string]interface{}{
+	safeConn.WriteJSON(map[string]interface{}{
 		"event":          "end",
 		"tokens_per_sec": toksPerSec,
 	})

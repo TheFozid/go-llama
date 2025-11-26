@@ -345,7 +345,23 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 		if contextSize == 0 {
 			contextSize = 2048 // Fallback default
 		}
-		messages := chat.BuildSlidingWindow(allMessages, contextSize)
+		
+		// First estimate: do we need web search?
+		webContextSize := 0
+		if req.WebSearch {
+			webContextSize = 1000 // Reserve space for web results
+		}
+		
+		// Adjust context size for history if web search is enabled
+		adjustedContextSize := contextSize - webContextSize
+		if adjustedContextSize < 512 {
+			adjustedContextSize = 512
+		}
+		if !req.WebSearch {
+			adjustedContextSize = contextSize
+		}
+		
+		messages := chat.BuildSlidingWindow(allMessages, adjustedContextSize)
 
 		// Prepare OpenAI API-compatible messages array
 		var llmMessages []map[string]string
