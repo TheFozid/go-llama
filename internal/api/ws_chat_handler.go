@@ -591,7 +591,7 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 
 			if len(sources) > 0 {
 				var webContextBuilder strings.Builder
-				webContextBuilder.WriteString("Search results:\n")
+				webContextBuilder.WriteString("Current information from web search:\n")
 				for i, src := range sources {
 					webContextBuilder.WriteString("[")
 					webContextBuilder.WriteString(strconv.Itoa(i+1))
@@ -603,7 +603,7 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 					webContextBuilder.WriteString(src["url"])
 					webContextBuilder.WriteString(")\n")
 				}
-				webContextBuilder.WriteString("\nCite sources as [1], [2].")
+				webContextBuilder.WriteString("\nAnswer using ONLY the information above. Cite sources as [1], [2]. Do not list sources at the end.")
 				
 				webContext := webContextBuilder.String()
 
