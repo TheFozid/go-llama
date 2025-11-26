@@ -438,16 +438,15 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 		// Prepend a formatted context to the prompt if results exist
 		if len(sources) > 0 {
 			var webContextBuilder strings.Builder
-			webContextBuilder.WriteString("Current information from web search:\n")
+			webContextBuilder.WriteString("IMPORTANT - Web search results (use this information, not your training data):\n\n")
 			for i, src := range sources {
-				webContextBuilder.WriteString(fmt.Sprintf("[%d] %s: %s (%s)\n", 
+				webContextBuilder.WriteString(fmt.Sprintf("[%d] %s\n%s\nSource: %s\n\n", 
 					i+1, src["title"], src["snippet"], src["url"]))
 			}
-			webContextBuilder.WriteString("\nAnswer using ONLY the information above. Cite sources as [1], [2]. Do not list sources at the end.")
+			webContextBuilder.WriteString("Answer based ONLY on the search results above. Cite as [1], [2]. Do not list sources at end.")
 			
 			webContext := webContextBuilder.String()
 
-			// Insert web context as system message before current prompt
 			llmMessages = append(llmMessages, map[string]string{
 				"role":    "system",
 				"content": webContext,

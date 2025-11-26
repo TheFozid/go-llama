@@ -591,19 +591,19 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 
 			if len(sources) > 0 {
 				var webContextBuilder strings.Builder
-				webContextBuilder.WriteString("Current information from web search:\n")
+				webContextBuilder.WriteString("IMPORTANT - Web search results (use this information, not your training data):\n\n")
 				for i, src := range sources {
 					webContextBuilder.WriteString("[")
 					webContextBuilder.WriteString(strconv.Itoa(i+1))
 					webContextBuilder.WriteString("] ")
 					webContextBuilder.WriteString(src["title"])
-					webContextBuilder.WriteString(": ")
+					webContextBuilder.WriteString("\n")
 					webContextBuilder.WriteString(src["snippet"])
-					webContextBuilder.WriteString(" (")
+					webContextBuilder.WriteString("\nSource: ")
 					webContextBuilder.WriteString(src["url"])
-					webContextBuilder.WriteString(")\n")
+					webContextBuilder.WriteString("\n\n")
 				}
-				webContextBuilder.WriteString("\nAnswer using ONLY the information above. Cite sources as [1], [2]. Do not list sources at the end.")
+				webContextBuilder.WriteString("Answer based ONLY on the search results above. Cite as [1], [2]. Do not list sources at end.")
 				
 				webContext := webContextBuilder.String()
 
