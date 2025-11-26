@@ -438,12 +438,12 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 		// Prepend a formatted context to the prompt if results exist
 		if len(sources) > 0 {
 			var webContextBuilder strings.Builder
-			webContextBuilder.WriteString("IMPORTANT - Web search results (use this information, not your training data):\n\n")
+			webContextBuilder.WriteString("Web search results:\n\n")
 			for i, src := range sources {
-				webContextBuilder.WriteString(fmt.Sprintf("[%d] %s\n%s\nSource: %s\n\n", 
-					i+1, src["title"], src["snippet"], src["url"]))
+				webContextBuilder.WriteString(fmt.Sprintf("[%d] %s\n\n", 
+					i+1, src["snippet"]))
 			}
-			webContextBuilder.WriteString("Answer based ONLY on the search results above. Cite as [1], [2]. Do not list sources at end.")
+			webContextBuilder.WriteString("Use the above information to answer. Cite sources as [1], [2].")
 			
 			webContext := webContextBuilder.String()
 

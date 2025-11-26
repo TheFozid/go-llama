@@ -116,11 +116,11 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 		// --- 2. Format context for LLM ---
 		webContext := ""
 		if len(sources) > 0 {
-			webContext = "IMPORTANT - Web search results (use this information, not your training data):\n\n"
+			webContext = "Web search results:\n\n"
 			for i, src := range sources {
-				webContext += fmt.Sprintf("[%d] %s\n%s\nSource: %s\n\n", i+1, src.Title, src.Snippet, src.URL)
+				webContext += fmt.Sprintf("[%d] %s\n\n", i+1, src.Snippet)
 			}
-			webContext += "Answer based ONLY on the search results above. Cite as [1], [2]. Do not list sources at end.\n"
+			webContext += "Use the above information to answer. Cite sources as [1], [2].\n"
 		}
 
 		// --- 3. Build LLM payload ---

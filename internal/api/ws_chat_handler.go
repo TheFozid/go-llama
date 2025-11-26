@@ -530,6 +530,8 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 					"url":     e.url,
 					"snippet": e.snippet,
 				})
+				// Debug: Log what we're actually sending to LLM
+				log.Printf("📄 Source [%s]: %s", e.title, e.snippet[:min(len(e.snippet), 200)])
 			}
 		}
 	}
@@ -591,19 +593,15 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 
 			if len(sources) > 0 {
 				var webContextBuilder strings.Builder
-				webContextBuilder.WriteString("IMPORTANT - Web search results (use this information, not your training data):\n\n")
+				webContextBuilder.WriteString("Web search results:\n\n")
 				for i, src := range sources {
 					webContextBuilder.WriteString("[")
 					webContextBuilder.WriteString(strconv.Itoa(i+1))
 					webContextBuilder.WriteString("] ")
-					webContextBuilder.WriteString(src["title"])
-					webContextBuilder.WriteString("\n")
 					webContextBuilder.WriteString(src["snippet"])
-					webContextBuilder.WriteString("\nSource: ")
-					webContextBuilder.WriteString(src["url"])
 					webContextBuilder.WriteString("\n\n")
 				}
-				webContextBuilder.WriteString("Answer based ONLY on the search results above. Cite as [1], [2]. Do not list sources at end.")
+				webContextBuilder.WriteString("Use the above information to answer. Cite sources as [1], [2].")
 				
 				webContext := webContextBuilder.String()
 
@@ -914,4 +912,10 @@ for key := range geoTokens {
 }
 
     return strings.Join(keep, " ")
+}
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
