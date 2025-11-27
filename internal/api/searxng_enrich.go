@@ -135,19 +135,23 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 
 	html := string(decoded)
 
-	// Quick dynamic/SPA heuristics (skip)
-	if looksDynamic(html) {
-		return fallbackSnippet
-	}
-
-	// Parse & extract main content
+	// Parse & extract main content FIRST
 	mainText := extractMainContent(html)
 	mainText = strings.TrimSpace(compactWhitespace(mainText))
 
-// Require enough content to be meaningful
-if utf8.RuneCountInString(mainText) < 200 {
-	return fallbackSnippet
-}
+	// If we got good content, use it regardless of framework detection
+	if utf8.RuneCountInString(mainText) >= 200 {
+		// We have content - proceed with summarization
+		// (The framework detection doesn't matter if content exists)
+	} else {
+		// Only NOW check if it's dynamic (explains why we got no content)
+		if looksDynamic(html) {
+			// It's a SPA with no server-rendered content
+			return fallbackSnippet
+		}
+		// Not dynamic but still no content - generic failure
+		return fallbackSnippet
+	}
 
 // Build query tokens for relevance weighting (may be empty)
 queryTokens := buildQueryTokensForRanking(query)
@@ -331,38 +335,25 @@ func extractMainContent(html string) string {
 	best := blocks[:topK]
 
 	var merged strings.Builder
+	
+	// Take top 3 blocks to get comprehensive content without massive duplication
+	// Don't merge siblings - causes 2-3x text repetition when blocks are adjacent
 	seen := map[string]bool{}
-	for _, b := range best {
-		    // Avoid merging the exact same element twice by index, not by tag name.
-		    if seen[b.text] {
-		        continue
-		    }
-		    seen[b.text] = true
-
-
-		// Merge sibling paragraphs around this node
+	blocksToUse := 3
+	if blocksToUse > len(best) {
+		blocksToUse = len(best)
+	}
+	
+	for i := 0; i < blocksToUse; i++ {
+		b := best[i]
+		// Avoid adding exact duplicate blocks
+		if seen[b.text] {
+			continue
+		}
+		seen[b.text] = true
+		
 		merged.WriteString(b.text)
 		merged.WriteString(" ")
-
-		// Shallow siblings (prev/next) paragraph text
-		prev := b.el.Prev()
-		for i := 0; i < 2 && prev != nil; i++ {
-			pt := strings.TrimSpace(compactWhitespace(nodeVisibleText(prev)))
-			if utf8.RuneCountInString(pt) > 120 {
-				merged.WriteString(pt)
-				merged.WriteString(" ")
-			}
-			prev = prev.Prev()
-		}
-		next := b.el.Next()
-		for i := 0; i < 2 && next != nil; i++ {
-			nt := strings.TrimSpace(compactWhitespace(nodeVisibleText(next)))
-			if utf8.RuneCountInString(nt) > 120 {
-				merged.WriteString(nt)
-				merged.WriteString(" ")
-			}
-			next = next.Next()
-		}
 	}
 
 	out := strings.TrimSpace(compactWhitespace(merged.String()))
@@ -393,17 +384,27 @@ func summarizeForLLM(text string, targetChars int, queryTokens []string) string 
 	
 	var scored []scoredSentence
 	
-	// Build query token set for relevance scoring
+	// Prebuild a set for query tokens for fast overlap checks
 	qset := map[string]struct{}{}
 	for _, qt := range queryTokens {
 		qset[qt] = struct{}{}
 	}
+
+	// Deduplicate sentences BEFORE scoring to prevent duplicates inflating scores
+	seenSentences := make(map[string]bool)
 
 	for _, s := range sentences {
 		s = strings.TrimSpace(s)
 		if len(s) < 20 {  // Skip very short sentences
 			continue
 		}
+		
+		// Skip duplicate sentences (normalize for comparison)
+		sNormalized := strings.ToLower(s)
+		if seenSentences[sNormalized] {
+			continue
+		}
+		seenSentences[sNormalized] = true
 		
 		// Extract keywords for scoring
 		kws := keywordsFrom(s)
@@ -445,8 +446,15 @@ func summarizeForLLM(text string, targetChars int, queryTokens []string) string 
 	// Build summary by taking top-scored sentences until we hit target length
 	var result strings.Builder
 	totalChars := 0
+	addedSentences := make(map[string]bool) // Safety layer - shouldn't be needed but ensures no duplicates
 	
 	for _, sent := range scored {
+		// Double-check we haven't added this sentence already
+		sentNormalized := strings.ToLower(strings.TrimSpace(sent.text))
+		if addedSentences[sentNormalized] {
+			continue
+		}
+		
 		// Would this sentence fit?
 		sentLen := len(sent.text)
 		if totalChars > 0 && totalChars+sentLen+1 > targetChars {
@@ -458,6 +466,7 @@ func summarizeForLLM(text string, targetChars int, queryTokens []string) string 
 			result.WriteString(" ")
 		}
 		result.WriteString(sent.text)
+		addedSentences[sentNormalized] = true
 		totalChars += sentLen + 1
 		
 		// Stop if we have enough content (at least 3 good sentences or hit target)
