@@ -116,13 +116,13 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 		// --- 2. Format context for LLM ---
 		webContext := ""
 		if len(sources) > 0 {
-			webContext = "Web search results:\n\n"
+			currentDate := time.Now().UTC().Format("2006-01-02")
+			webContext = fmt.Sprintf("Current information (searched %s):\n\n", currentDate)
 			for i, src := range sources {
 				webContext += fmt.Sprintf("[%d] %s\n\n", i+1, src.Snippet)
 			}
-			webContext += "Use the above information to answer. Cite sources as [1], [2].\n"
+			webContext += "This is the most current information available. Answer based on these search results. Cite sources as [1], [2].\n"
 		}
-
 		// --- 3. Build LLM payload ---
 		var llmMessages []map[string]string
 		if webContext != "" {

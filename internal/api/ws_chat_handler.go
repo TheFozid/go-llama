@@ -476,15 +476,13 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 			})
 		}
 
-		// 2) Rank those and keep top 50% of *limit*
+		// 2) Rank those (returns top 80%, removing junk)
 		ranked := rankAndFilterResults(combinedPrompt, tmpResults)
 
-		keepTop := limit / 2
+		// Keep all ranked results (they're already filtered to 80% best)
+		keepTop := len(ranked)
 		if keepTop < 1 {
 			keepTop = 1
-		}
-		if keepTop > len(ranked) {
-			keepTop = len(ranked)
 		}
 
 		// Parallel enrichment for better performance
@@ -593,7 +591,8 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 
 			if len(sources) > 0 {
 				var webContextBuilder strings.Builder
-				webContextBuilder.WriteString("Web search results:\n\n")
+				currentDate := time.Now().UTC().Format("2006-01-02")
+				webContextBuilder.WriteString(fmt.Sprintf("Current information (searched %s):\n\n", currentDate))
 				for i, src := range sources {
 					webContextBuilder.WriteString("[")
 					webContextBuilder.WriteString(strconv.Itoa(i+1))
@@ -601,7 +600,7 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 					webContextBuilder.WriteString(src["snippet"])
 					webContextBuilder.WriteString("\n\n")
 				}
-				webContextBuilder.WriteString("Use the above information to answer. Cite sources as [1], [2].")
+				webContextBuilder.WriteString("This is the most current information available. Answer based on these search results. Cite sources as [1], [2].")
 				
 				webContext := webContextBuilder.String()
 
