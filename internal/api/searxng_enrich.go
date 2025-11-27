@@ -163,16 +163,106 @@ queryTokens := buildQueryTokensForRanking(query)
 		return fallbackSnippet
 	}
 	
+	// Quality check: compare our enriched snippet vs SearXNG's original
+	enrichedScore := scoreSnippetQuality(summary, query)
+	fallbackScore := scoreSnippetQuality(fallbackSnippet, query)
+	
+	// Use enriched only if it's significantly better (at least 15 points higher)
+	var finalSnippet string
+	if enrichedScore >= fallbackScore+15 {
+		finalSnippet = summary
+		log.Printf("✅ Using enriched snippet (score: %d vs %d): %s", enrichedScore, fallbackScore, urlStr)
+	} else {
+		finalSnippet = fallbackSnippet
+		log.Printf("⚠️ Fallback to SearXNG snippet (score: %d vs %d): %s", fallbackScore, enrichedScore, urlStr)
+	}
+	
 	// Cache the result
 	cacheMu.Lock()
-	if len(enrichCache) > 100 { // Simple LRU: clear if too large
+	if len(enrichCache) > 100 {
 		enrichCache = make(map[string]string)
 	}
-	enrichCache[cacheKey] = summary
+	enrichCache[cacheKey] = finalSnippet
 	cacheMu.Unlock()
 	
-	return summary
+	return finalSnippet
 
+}
+
+// scoreSnippetQuality rates a snippet based on information density and relevance
+// Returns a score from 0-100 (higher is better)
+func scoreSnippetQuality(snippet, query string) int {
+	if snippet == "" {
+		return 0
+	}
+	
+	snippet = strings.ToLower(strings.TrimSpace(snippet))
+	query = strings.ToLower(strings.TrimSpace(query))
+	
+	score := 0
+	
+	// Length score (prefer 100-500 chars, penalize too short or too long)
+	length := len(snippet)
+	if length >= 100 && length <= 500 {
+		score += 30
+	} else if length > 50 && length < 100 {
+		score += 15
+	} else if length > 500 && length <= 1000 {
+		score += 20
+	} else if length < 50 {
+		score += 5 // Too short
+	}
+	
+	// Query term coverage (do we mention the search terms?)
+	queryTokens := strings.Fields(query)
+	hitCount := 0
+	for _, token := range queryTokens {
+		if len(token) > 2 && strings.Contains(snippet, token) {
+			hitCount++
+		}
+	}
+	if len(queryTokens) > 0 {
+		coverage := float64(hitCount) / float64(len(queryTokens))
+		score += int(coverage * 30) // Up to 30 points for query coverage
+	}
+	
+	// Sentence structure (prefer complete sentences)
+	sentenceCount := strings.Count(snippet, ".") + strings.Count(snippet, "!") + strings.Count(snippet, "?")
+	if sentenceCount >= 2 && sentenceCount <= 5 {
+		score += 20 // Good: 2-5 sentences
+	} else if sentenceCount == 1 {
+		score += 10 // OK: 1 sentence
+	}
+	
+	// Information density indicators
+	hasNumbers := strings.ContainsAny(snippet, "0123456789")
+	if hasNumbers {
+		score += 10 // Numbers often indicate specific facts
+	}
+	
+	// Penalize junk indicators
+	junkPhrases := []string{
+		"click here", "subscribe", "sign up", "register", "login",
+		"cookie", "javascript", "browser", "search for", "powered by",
+		"copyright", "all rights reserved", "terms of service",
+	}
+	junkCount := 0
+	for _, junk := range junkPhrases {
+		if strings.Contains(snippet, junk) {
+			junkCount++
+		}
+	}
+	score -= (junkCount * 15) // Heavy penalty for junk
+	
+	// Ensure score is in 0-100 range
+	if score < 0 {
+		score = 0
+	}
+	if score > 100 {
+		score = 100
+	}
+	
+	return score
 }
 
 // looksDynamic returns true if HTML likely requires client-side JS rendering.
@@ -282,8 +372,19 @@ func extractMainContent(html string) string {
 		})
 	}
 
-	// Candidate containers to score
-	candidates := doc.Find("article, main, .content, .post, .entry, .article, .post-content, .story, .page-content, section, div")
+	// Candidate containers to score - prioritize semantic tags and common article classes
+	// First try semantic HTML5 and known article containers
+	candidates := doc.Find("article, main, [role='main'], .article-body, .article-content, .post-body, .post-content, .entry-content, .story-body, .content-body")
+	
+	// If we didn't find good semantic candidates, fall back to broader search
+	if candidates.Length() == 0 {
+		candidates = doc.Find(".content, .post, .entry, .article, .story, .page-content, section")
+	}
+	
+	// Last resort: search all divs (but this often gets junk)
+	if candidates.Length() == 0 {
+		candidates = doc.Find("div")
+	}
 
 	type block struct {
 		el        *goquery.Selection
@@ -295,23 +396,41 @@ func extractMainContent(html string) string {
 	var blocks []block
 
 	candidates.Each(func(_ int, s *goquery.Selection) {
-		// Skip tiny containers (quick prefilter)
-		pCount := s.Find("p").Length()
-		if pCount == 0 && s.Children().Length() == 0 {
-			return
-		}
 		txt := nodeVisibleText(s)
 		txt = strings.TrimSpace(compactWhitespace(txt))
-		if utf8.RuneCountInString(txt) < 150 {
+		
+		// Require minimum length (increased from 150 to 200)
+		if utf8.RuneCountInString(txt) < 200 {
 			return
 		}
-		total := float64(len(txt))
+		
+		// Skip blocks with too many links (likely navigation)
 		linkTxt := nodeLinkText(s)
+		total := float64(len(txt))
 		lr := 0.0
 		if total > 0 {
 			lr = float64(len(linkTxt)) / total
 		}
+		if lr > 0.5 { // More than 50% links = probably navigation/footer
+			return
+		}
+		
+		// Count paragraphs - real articles have multiple paragraphs
+		pCount := s.Find("p").Length()
+		
+		// Score the block
 		score := densityScore(txt, lr)
+		
+		// Boost score for blocks with multiple paragraphs (article indicator)
+		if pCount >= 3 {
+			score *= 1.5
+		}
+		
+		// Boost score for semantic article tags
+		if s.Is("article") || s.Is("main") || s.Is("[role='main']") {
+			score *= 1.3
+		}
+		
 		blocks = append(blocks, block{
 			el:        s,
 			text:      txt,
