@@ -196,62 +196,157 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 	return finalSnippet
 }
 
-// extractParagraphs extracts all substantial paragraphs from the page
+
+// extractParagraphs extracts content and intelligently splits it into logical paragraphs
 func extractParagraphs(html string) []Paragraph {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil
 	}
 
-	// Remove junk
+	// Remove junk elements
 	doc.Find("script, style, noscript, iframe, svg, canvas, template, link, meta, form, button, input, select, textarea").Remove()
-	doc.Find("nav, footer, aside, header, .nav, .menu, .footer, .sidebar, .comments, .comment, .related, .share, .social").Remove()
+	doc.Find("nav, footer, aside, header, .nav, .menu, .footer, .sidebar, .comments, .comment, .related, .share, .social, .advertisement").Remove()
+	doc.Find("[hidden], [aria-hidden=true], [style*='display:none'], [style*='visibility:hidden']").Remove()
 
-	// Find main content container (prioritize semantic tags)
+	// Find main content container using the same logic as before (works well)
 	var mainContainer *goquery.Selection
+	
+	// Try semantic tags first
 	mainContainer = doc.Find("article").First()
 	if mainContainer.Length() == 0 {
 		mainContainer = doc.Find("main, [role='main']").First()
 	}
 	if mainContainer.Length() == 0 {
-		mainContainer = doc.Find(".article-body, .article-content, .post-content, .entry-content, .story-body, .post-body").First()
+		mainContainer = doc.Find(".article-body, .article-content, .post-content, .entry-content, .story-body, .post-body, .content-body").First()
 	}
+	
+	// Broader search if needed
+	if mainContainer.Length() == 0 {
+		mainContainer = doc.Find(".content, .post, .article").First()
+	}
+	
+	// Last resort
 	if mainContainer.Length() == 0 {
 		mainContainer = doc.Find("body")
 	}
 
-	// Extract all paragraphs
-	var paragraphs []Paragraph
-	position := 0
+	if mainContainer.Length() == 0 {
+		return nil
+	}
 
-	mainContainer.Find("p").Each(func(i int, p *goquery.Selection) {
-		text := strings.TrimSpace(compactWhitespace(p.Text()))
-
-		// Skip very short paragraphs
-		if utf8.RuneCountInString(text) < 30 {
+	// Extract ALL text from the main container, preserving structure
+	// Look for text-containing elements (p, div, li, h1-h6, blockquote, etc.)
+	var textBlocks []string
+	
+	mainContainer.Find("p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, td, th, dd, dt, figcaption").Each(func(i int, s *goquery.Selection) {
+		text := strings.TrimSpace(s.Text())
+		
+		// Skip very short blocks
+		if utf8.RuneCountInString(text) < 25 {
 			return
 		}
-
-		// Skip paragraphs that are mostly links
+		
+		// Skip if mostly links
 		linkText := ""
-		p.Find("a").Each(func(_ int, a *goquery.Selection) {
+		s.Find("a").Each(func(_ int, a *goquery.Selection) {
 			linkText += a.Text()
 		})
-		linkRatio := float64(len(linkText)) / float64(len(text))
-		if linkRatio > 0.6 {
-			return
+		if len(text) > 0 {
+			linkRatio := float64(len(linkText)) / float64(len(text))
+			if linkRatio > 0.7 {
+				return
+			}
 		}
-
-		paragraphs = append(paragraphs, Paragraph{
-			Text:     text,
-			Position: position,
-			Length:   utf8.RuneCountInString(text),
-		})
-		position++
+		
+		textBlocks = append(textBlocks, text)
 	})
+
+	// If we didn't find structured elements, fall back to div text
+	if len(textBlocks) == 0 {
+		mainContainer.Find("div").Each(func(i int, s *goquery.Selection) {
+			// Only get direct text, not nested
+			text := strings.TrimSpace(s.Contents().Text())
+			if utf8.RuneCountInString(text) >= 50 {
+				textBlocks = append(textBlocks, text)
+			}
+		})
+	}
+
+	if len(textBlocks) == 0 {
+		return nil
+	}
+
+	// Now split into logical paragraphs
+	// Group consecutive short blocks, keep long blocks separate
+	var paragraphs []Paragraph
+	position := 0
+	var currentGroup []string
+	
+	for _, block := range textBlocks {
+		blockLen := utf8.RuneCountInString(block)
+		
+		// If block is substantial (100+ chars), treat it as its own paragraph
+		if blockLen >= 100 {
+			// Flush any accumulated group first
+			if len(currentGroup) > 0 {
+				combined := strings.Join(currentGroup, " ")
+				if utf8.RuneCountInString(combined) >= 40 {
+					paragraphs = append(paragraphs, Paragraph{
+						Text:     combined,
+						Position: position,
+						Length:   utf8.RuneCountInString(combined),
+					})
+					position++
+				}
+				currentGroup = nil
+			}
+			
+			// Add this block as its own paragraph
+			paragraphs = append(paragraphs, Paragraph{
+				Text:     block,
+				Position: position,
+				Length:   blockLen,
+			})
+			position++
+			
+		} else {
+			// Small block - accumulate with others
+			currentGroup = append(currentGroup, block)
+			
+			// If accumulated group is getting large, flush it
+			combinedLen := 0
+			for _, g := range currentGroup {
+				combinedLen += utf8.RuneCountInString(g)
+			}
+			if combinedLen >= 150 {
+				combined := strings.Join(currentGroup, " ")
+				paragraphs = append(paragraphs, Paragraph{
+					Text:     combined,
+					Position: position,
+					Length:   utf8.RuneCountInString(combined),
+				})
+				position++
+				currentGroup = nil
+			}
+		}
+	}
+	
+	// Flush any remaining group
+	if len(currentGroup) > 0 {
+		combined := strings.Join(currentGroup, " ")
+		if utf8.RuneCountInString(combined) >= 40 {
+			paragraphs = append(paragraphs, Paragraph{
+				Text:     combined,
+				Position: position,
+				Length:   utf8.RuneCountInString(combined),
+			})
+		}
+	}
 
 	return paragraphs
 }
+
 
 // scoreParagraphRelevance scores a paragraph based on query relevance and quality
 func scoreParagraphRelevance(para Paragraph, queryTokens []string) float64 {
