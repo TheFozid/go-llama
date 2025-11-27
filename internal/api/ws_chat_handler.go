@@ -913,9 +913,3 @@ for key := range geoTokens {
 
     return strings.Join(keep, " ")
 }
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

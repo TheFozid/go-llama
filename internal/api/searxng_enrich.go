@@ -461,7 +461,7 @@ func summarizeForLLM(text string, targetChars int, queryTokens []string) string 
 		totalChars += sentLen + 1
 		
 		// Stop if we have enough content (at least 3 good sentences or hit target)
-		if result.Len() >= targetChars*0.8 && strings.Count(result.String(), ".") >= 3 {
+		if result.Len() >= int(float64(targetChars)*0.8) && strings.Count(result.String(), ".") >= 3 {
 			break
 		}
 	}
