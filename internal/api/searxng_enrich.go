@@ -666,13 +666,13 @@ func compactWhitespace(s string) string {
 
 func normalizeQuotes(s string) string {
 	replacer := strings.NewReplacer(
-		"'", "'",
-		"'", "'",
-		""", `"`,
-		""", `"`,
-		"–", "-",
-		"—", "-",
-		"…", "...",
+		"\u2018", "'",
+		"\u2019", "'",
+		"\u201c", "\"",
+		"\u201d", "\"",
+		"\u2013", "-",
+		"\u2014", "-",
+		"\u2026", "...",
 	)
 	return replacer.Replace(s)
 }
@@ -702,7 +702,7 @@ var stopwords = map[string]struct{}{
 	"no": {}, "nor": {}, "not": {}, "only": {}, "own": {}, "same": {}, "than": {}, "too": {}, "very": {}, "can": {}, "could": {},
 	"should": {}, "would": {}, "may": {}, "might": {}, "will": {}, "shall": {}, "do": {}, "does": {}, "did": {}, "done": {},
 	"have": {}, "has": {}, "had": {}, "having": {}, "also": {}, "via": {}, "using": {}, "use": {},
-	"we": {}, "our": {}, "you": {}, "your": {}, "they": {}, "their": {}, "he": {}, "she": {}, "i": {},
+	"we": {}, "our": {}, "you": {}, "your": {}, "they": {}, "their": {}, "he": {}, "she": {}, "it's": {}, "i": {},
 	"here": {}, "there": {}, "when": {}, "where": {}, "why": {}, "how": {}, "what": {},
 	"article": {}, "read": {}, "click": {}, "share": {}, "subscribe": {}, "login": {}, "sign": {}, "privacy": {}, "policy": {}, "terms": {},
 }
