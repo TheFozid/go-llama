@@ -529,7 +529,7 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 					"snippet": e.snippet,
 				})
 				// Debug: Log what we're actually sending to LLM
-				log.Printf("📄 Source [%s]: %s", e.title, e.snippet[:min(len(e.snippet), 200)])
+				log.Printf("📄 Source [%s]: %s", e.title, e.snippet[:min(len(e.snippet), 500)])
 			}
 		}
 	}
