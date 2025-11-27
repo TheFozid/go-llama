@@ -88,8 +88,8 @@ func rankAndFilterResults(query string, results []SearxResult) []SearxResult {
 		return scoredList[i].score > scoredList[j].score
 	})
 
-	// --- Keep top 50% ---
-	cut := len(scoredList) / 2
+	// --- Keep top 80% (remove only obvious junk) ---
+	cut := (len(scoredList) * 4) / 5  // 80%
 	if cut < 1 {
 		cut = 1
 	}

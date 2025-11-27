@@ -373,97 +373,108 @@ func extractMainContent(html string) string {
 	return fallbackParagraphs(doc)
 }
 
-// summarizeForLLM produces a ~targetChars compressed, machine-oriented summary.
-// It removes filler/stopwords, keeps nouns/verbs/numbers/entities, deduplicates,
-// and emits dense fragments separated by "; ".
 func summarizeForLLM(text string, targetChars int, queryTokens []string) string {
 	if targetChars <= 0 {
-		targetChars = 500
+		targetChars = 1000  // Increased default since length isn't the priority
 	}
 	text = normalizeQuotes(compactWhitespace(text))
 
-	// Split into sentences (heuristic but Unicode-aware enough)
+	// Split into sentences
 	sentences := splitSentences(text)
 	if len(sentences) == 0 {
 		sentences = []string{text}
 	}
 
-	// Convert sentences to keyword fragments (lowercase, stopwords removed)
-type frag struct {
-	s   string  // original sentence
-	kws []string
-	sc  float64 // score by info-density + query overlap
-}
-frags := make([]frag, 0, len(sentences))
-
-// Prebuild a set for query tokens for fast overlap checks
-qset := map[string]struct{}{}
-for _, qt := range queryTokens {
-	qset[qt] = struct{}{}
-}
-
-for _, s := range sentences {
-	kws := keywordsFrom(s)
-	if len(kws) == 0 {
-		continue
+	// Score each sentence based on relevance and information density
+	type scoredSentence struct {
+		text  string
+		score float64
+	}
+	
+	var scored []scoredSentence
+	
+	// Build query token set for relevance scoring
+	qset := map[string]struct{}{}
+	for _, qt := range queryTokens {
+		qset[qt] = struct{}{}
 	}
 
-	// Base score from general info density
-	base := infoDensityScore(s, kws)
+	for _, s := range sentences {
+		s = strings.TrimSpace(s)
+		if len(s) < 20 {  // Skip very short sentences
+			continue
+		}
+		
+		// Extract keywords for scoring
+		kws := keywordsFrom(s)
+		if len(kws) == 0 {
+			continue
+		}
 
-	// Extra score from overlap with query tokens (if any)
-	overlap := 0
-	if len(qset) > 0 {
-		for _, kw := range kws {
-			if _, ok := qset[kw]; ok {
-				overlap++
+		// Base score: information density (numbers, proper nouns, unique terms)
+		baseScore := infoDensityScore(s, kws)
+		
+		// Boost score for query relevance
+		overlap := 0
+		if len(qset) > 0 {
+			for _, kw := range kws {
+				if _, ok := qset[kw]; ok {
+					overlap++
+				}
 			}
 		}
+		
+		// Query-relevant sentences get significant boost
+		finalScore := baseScore + (3.0 * float64(overlap))
+		
+		scored = append(scored, scoredSentence{
+			text:  s,
+			score: finalScore,
+		})
 	}
 
-	// Each overlapping keyword gives a modest boost
-	sc := base + 2.0*float64(overlap)
-	frags = append(frags, frag{s: s, kws: kws, sc: sc})
-}
-
-	if len(frags) == 0 {
+	if len(scored) == 0 {
 		return ""
 	}
 
-	// Rank by score, keep top-N until ~targetChars
-	sort.Slice(frags, func(i, j int) bool { return frags[i].sc > frags[j].sc })
+	// Sort by score (highest first)
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
 
-	seenKW := map[string]struct{}{}
-	var b strings.Builder
-	sep := ""
-	for _, f := range frags {
-		// Deduplicate keywords globally, keep order per fragment
-		out := make([]string, 0, len(f.kws))
-		for _, kw := range f.kws {
-			if _, ok := seenKW[kw]; ok {
-				continue
-			}
-			seenKW[kw] = struct{}{}
-			out = append(out, kw)
-		}
-		if len(out) == 0 {
-			continue
-		}
-		line := strings.Join(out, " ")
-		// Try to add this fragment respecting char budget
-		next := sep + line
-		if b.Len()+len(next) > targetChars {
+	// Build summary by taking top-scored sentences until we hit target length
+	var result strings.Builder
+	totalChars := 0
+	
+	for _, sent := range scored {
+		// Would this sentence fit?
+		sentLen := len(sent.text)
+		if totalChars > 0 && totalChars+sentLen+1 > targetChars {
 			break
 		}
-		b.WriteString(next)
-		sep = "; "
+		
+		// Add sentence
+		if totalChars > 0 {
+			result.WriteString(" ")
+		}
+		result.WriteString(sent.text)
+		totalChars += sentLen + 1
+		
+		// Stop if we have enough content (at least 3 good sentences or hit target)
+		if result.Len() >= targetChars*0.8 && strings.Count(result.String(), ".") >= 3 {
+			break
+		}
 	}
-	s := b.String()
-	if s == "" {
-		// Fallback: squeeze top sentence(s) to target
-		s = squeezeToChars(strings.Join(sentences, " "), targetChars)
+
+	summary := result.String()
+	
+	// Fallback if we got nothing useful
+	if summary == "" && len(sentences) > 0 {
+		// Just take the first few sentences up to target
+		return squeezeToChars(strings.Join(sentences[:min(3, len(sentences))], " "), targetChars)
 	}
-	return s
+
+	return summary
 }
 
 // buildQueryTokensForRanking turns a raw query string into a set of
@@ -743,4 +754,11 @@ func squeezeToChars(s string, limit int) string {
 		cut = limit
 	}
 	return strings.TrimSpace(s[:cut]) + "..."
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
