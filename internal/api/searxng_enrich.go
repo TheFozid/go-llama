@@ -169,12 +169,22 @@ queryTokens := buildQueryTokensForRanking(query)
 	
 	// Use enriched only if it's significantly better (at least 15 points higher)
 	var finalSnippet string
-	if enrichedScore >= fallbackScore+15 {
+	useEnriched := false
+	
+	if enrichedScore >= fallbackScore+10 {
+		// Enriched is significantly better
+		useEnriched = true
+	} else if fallbackScore < 50 && enrichedScore > fallbackScore {
+		// Fallback is poor quality, use enriched even if only slightly better
+		useEnriched = true
+	}
+	
+	if useEnriched {
 		finalSnippet = summary
-		log.Printf("✅ Using enriched snippet (score: %d vs %d): %s", enrichedScore, fallbackScore, urlStr)
+		log.Printf("✅ Enriched (score: %d) vs SearXNG (score: %d): %s", enrichedScore, fallbackScore, urlStr)
 	} else {
 		finalSnippet = fallbackSnippet
-		log.Printf("⚠️ Fallback to SearXNG snippet (score: %d vs %d): %s", fallbackScore, enrichedScore, urlStr)
+		log.Printf("⚠️ SearXNG (score: %d) vs Enriched (score: %d): %s", fallbackScore, enrichedScore, urlStr)
 	}
 	
 	// Cache the result
