@@ -48,10 +48,20 @@ var (
 	cacheMu     sync.RWMutex
 )
 
+// Paragraph represents a single paragraph with metadata
+type Paragraph struct {
+	Text     string
+	Position int
+	Length   int
+}
+
+// ScoredParagraph pairs a paragraph with its relevance score
+type ScoredParagraph struct {
+	Para  Paragraph
+	Score float64
+}
+
 // enrichAndSummarize fetches a URL and returns a compact, LLM-optimized summary
-// of the main static HTML content (~500–1000 chars). It biases the summary toward
-// the given query when provided, helping small LLMs focus on relevant text. If
-// anything fails, it returns the provided fallback snippet.
 func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 	// Check cache first
 	cacheKey := urlStr + "|" + query
@@ -71,7 +81,6 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 	}
 	req.Header.Set("User-Agent", "Go-Llama/1.1 (+https://github.com/TheFozid/go-llama)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1")
-// */
 
 	resp, err := enrichHTTPClient.Do(req)
 	if err != nil {
@@ -88,19 +97,18 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 	ct := resp.Header.Get("Content-Type")
 	mt, params, err := mime.ParseMediaType(ct)
 	if err != nil {
-		mt = "" // be conservative; will check HTML markers below
+		mt = ""
 	}
 	if mt != "" && !strings.Contains(mt, "text/html") && !strings.Contains(mt, "application/xhtml+xml") {
 		return fallbackSnippet
 	}
 
-	// Read up to 2 MiB to keep memory bounded
+	// Read up to 2 MiB
 	const maxRead = 2 << 20
 	buf := make([]byte, maxRead)
 	n, _ := resp.Body.Read(buf)
 	body := buf[:n]
 
-	// If there might be more, keep reading with a cap (avoid partial tags)
 	for n < maxRead {
 		m, err := resp.Body.Read(buf[n:])
 		n += m
@@ -110,7 +118,7 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 	}
 	body = buf[:n]
 
-	// Decode charset if specified and not utf-8
+	// Decode charset
 	decoded := body
 	if cs, ok := params["charset"]; ok && !strings.EqualFold(cs, "utf-8") {
 		r, err := charset.NewReaderLabel(cs, bytes.NewReader(body))
@@ -120,7 +128,6 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 			}
 		}
 	}
-	// Fallback: try to detect encoding heuristically if mt is HTML-ish
 	if len(decoded) == 0 && (mt == "" || strings.Contains(mt, "html")) {
 		if enc, name, _ := charset.DetermineEncoding(body, ct); !strings.EqualFold(name, "utf-8") {
 			r := enc.NewDecoder().Reader(bytes.NewReader(body))
@@ -135,50 +142,42 @@ func enrichAndSummarize(urlStr, fallbackSnippet, query string) string {
 
 	html := string(decoded)
 
-	// Parse & extract main content FIRST
-	mainText := extractMainContent(html)
-	mainText = strings.TrimSpace(compactWhitespace(mainText))
+	// Extract paragraphs as separate units
+	paragraphs := extractParagraphs(html)
 
-	// If we got good content, use it regardless of framework detection
-	if utf8.RuneCountInString(mainText) >= 200 {
-		// We have content - proceed with summarization
-		// (The framework detection doesn't matter if content exists)
-	} else {
-		// Only NOW check if it's dynamic (explains why we got no content)
+	// If extraction failed or too dynamic, check
+	if len(paragraphs) == 0 {
 		if looksDynamic(html) {
-			// It's a SPA with no server-rendered content
+			log.Printf("⚠️ Skipping dynamic site: %s", urlStr)
 			return fallbackSnippet
 		}
-		// Not dynamic but still no content - generic failure
 		return fallbackSnippet
 	}
 
-// Build query tokens for relevance weighting (may be empty)
-queryTokens := buildQueryTokensForRanking(query)
+	// Build query tokens for relevance scoring
+	queryTokens := buildQueryTokensForRanking(query)
 
-// Produce LLM-optimized compressed summary (~500–1000 chars),
-// biased toward content overlapping with the query tokens.
-	summary := summarizeForLLM(mainText, 1000, queryTokens)
-	if summary == "" {
+	// Apply intelligent differential compression
+	summary := intelligentSummarize(paragraphs, 1000, queryTokens)
+
+	if summary == "" || utf8.RuneCountInString(summary) < 100 {
 		return fallbackSnippet
 	}
-	
+
 	// Quality check: compare our enriched snippet vs SearXNG's original
 	enrichedScore := scoreSnippetQuality(summary, query)
 	fallbackScore := scoreSnippetQuality(fallbackSnippet, query)
-	
-	// Use enriched only if it's significantly better (at least 15 points higher)
+
+	// Use enriched only if it's better (at least 10 points higher, or if fallback is poor)
 	var finalSnippet string
 	useEnriched := false
-	
+
 	if enrichedScore >= fallbackScore+10 {
-		// Enriched is significantly better
 		useEnriched = true
 	} else if fallbackScore < 50 && enrichedScore > fallbackScore {
-		// Fallback is poor quality, use enriched even if only slightly better
 		useEnriched = true
 	}
-	
+
 	if useEnriched {
 		finalSnippet = summary
 		log.Printf("✅ Enriched (score: %d) vs SearXNG (score: %d): %s", enrichedScore, fallbackScore, urlStr)
@@ -186,7 +185,7 @@ queryTokens := buildQueryTokensForRanking(query)
 		finalSnippet = fallbackSnippet
 		log.Printf("⚠️ SearXNG (score: %d) vs Enriched (score: %d): %s", fallbackScore, enrichedScore, urlStr)
 	}
-	
+
 	// Cache the result
 	cacheMu.Lock()
 	if len(enrichCache) > 100 {
@@ -194,24 +193,278 @@ queryTokens := buildQueryTokensForRanking(query)
 	}
 	enrichCache[cacheKey] = finalSnippet
 	cacheMu.Unlock()
-	
-	return finalSnippet
 
+	return finalSnippet
+}
+
+// extractParagraphs extracts all substantial paragraphs from the page
+func extractParagraphs(html string) []Paragraph {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil
+	}
+
+	// Remove junk
+	doc.Find("script, style, noscript, iframe, svg, canvas, template, link, meta, form, button, input, select, textarea").Remove()
+	doc.Find("nav, footer, aside, header, .nav, .menu, .footer, .sidebar, .comments, .comment, .related, .share, .social").Remove()
+
+	// Find main content container (prioritize semantic tags)
+	var mainContainer *goquery.Selection
+	mainContainer = doc.Find("article").First()
+	if mainContainer.Length() == 0 {
+		mainContainer = doc.Find("main, [role='main']").First()
+	}
+	if mainContainer.Length() == 0 {
+		mainContainer = doc.Find(".article-body, .article-content, .post-content, .entry-content, .story-body, .post-body").First()
+	}
+	if mainContainer.Length() == 0 {
+		mainContainer = doc.Find("body")
+	}
+
+	// Extract all paragraphs
+	var paragraphs []Paragraph
+	position := 0
+
+	mainContainer.Find("p").Each(func(i int, p *goquery.Selection) {
+		text := strings.TrimSpace(compactWhitespace(p.Text()))
+
+		// Skip very short paragraphs
+		if utf8.RuneCountInString(text) < 30 {
+			return
+		}
+
+		// Skip paragraphs that are mostly links
+		linkText := ""
+		p.Find("a").Each(func(_ int, a *goquery.Selection) {
+			linkText += a.Text()
+		})
+		linkRatio := float64(len(linkText)) / float64(len(text))
+		if linkRatio > 0.6 {
+			return
+		}
+
+		paragraphs = append(paragraphs, Paragraph{
+			Text:     text,
+			Position: position,
+			Length:   utf8.RuneCountInString(text),
+		})
+		position++
+	})
+
+	return paragraphs
+}
+
+// scoreParagraphRelevance scores a paragraph based on query relevance and quality
+func scoreParagraphRelevance(para Paragraph, queryTokens []string) float64 {
+	text := strings.ToLower(para.Text)
+	score := 0.0
+
+	// 1. Query term coverage (most important)
+	queryHits := 0
+	totalQueryTerms := len(queryTokens)
+	for _, token := range queryTokens {
+		if strings.Contains(text, token) {
+			queryHits++
+		}
+	}
+	if totalQueryTerms > 0 {
+		coverage := float64(queryHits) / float64(totalQueryTerms)
+		score += coverage * 50.0 // Up to 50 points
+	}
+
+	// 2. Position bias (earlier paragraphs often more relevant)
+	if para.Position == 0 {
+		score += 20.0
+	} else if para.Position == 1 {
+		score += 15.0
+	} else if para.Position == 2 {
+		score += 10.0
+	} else if para.Position <= 5 {
+		score += 5.0
+	}
+
+	// 3. Information density (numbers, dates, proper nouns)
+	hasNumbers := strings.ContainsAny(text, "0123456789")
+	if hasNumbers {
+		score += 10.0
+	}
+
+	// Count capitalized words (likely proper nouns)
+	words := strings.Fields(para.Text)
+	properNouns := 0
+	for _, word := range words {
+		if len(word) > 1 && unicode.IsUpper(rune(word[0])) {
+			properNouns++
+		}
+	}
+	if len(words) > 0 {
+		properNounRatio := float64(properNouns) / float64(len(words))
+		score += properNounRatio * 15.0
+	}
+
+	// 4. Length bonus (prefer substantial paragraphs)
+	if para.Length >= 100 && para.Length <= 300 {
+		score += 10.0
+	} else if para.Length > 50 {
+		score += 5.0
+	}
+
+	return score
+}
+
+// compressParagraph applies differential compression based on relevance rank
+func compressParagraph(para Paragraph, rankPercentile float64, queryTokens []string) string {
+	if rankPercentile >= 0.8 {
+		// Top 20%: Keep almost verbatim
+		return para.Text
+
+	} else if rankPercentile >= 0.4 {
+		// Middle 40%: Extract 1-2 key sentences
+		sentences := splitSentences(para.Text)
+		if len(sentences) == 0 {
+			return para.Text
+		}
+
+		// Score each sentence by query relevance
+		type scoredSent struct {
+			text  string
+			score float64
+		}
+		var scored []scoredSent
+
+		qset := make(map[string]bool)
+		for _, qt := range queryTokens {
+			qset[qt] = true
+		}
+
+		for _, sent := range sentences {
+			sentLower := strings.ToLower(sent)
+			hits := 0
+			for token := range qset {
+				if strings.Contains(sentLower, token) {
+					hits++
+				}
+			}
+			scored = append(scored, scoredSent{
+				text:  sent,
+				score: float64(hits),
+			})
+		}
+
+		// Sort by relevance
+		sort.Slice(scored, func(i, j int) bool {
+			return scored[i].score > scored[j].score
+		})
+
+		// Take top 1-2 sentences
+		keepCount := 1
+		if len(scored) >= 3 && rankPercentile >= 0.6 {
+			keepCount = 2
+		}
+
+		var result []string
+		for i := 0; i < keepCount && i < len(scored); i++ {
+			result = append(result, scored[i].text)
+		}
+
+		return strings.Join(result, " ")
+
+	} else {
+		// Bottom 40%: Heavy compression or discard
+		sentLower := strings.ToLower(para.Text)
+		queryHits := 0
+		for _, token := range queryTokens {
+			if strings.Contains(sentLower, token) {
+				queryHits++
+			}
+		}
+
+		if queryHits >= 2 {
+			// Has some relevance, keep one sentence
+			sentences := splitSentences(para.Text)
+			if len(sentences) > 0 {
+				return sentences[0]
+			}
+		}
+
+		// Otherwise discard
+		return ""
+	}
+}
+
+// intelligentSummarize applies content-aware differential compression
+func intelligentSummarize(paras []Paragraph, targetChars int, queryTokens []string) string {
+	if len(paras) == 0 {
+		return ""
+	}
+
+	// Score all paragraphs
+	var scored []ScoredParagraph
+	for _, para := range paras {
+		score := scoreParagraphRelevance(para, queryTokens)
+		scored = append(scored, ScoredParagraph{
+			Para:  para,
+			Score: score,
+		})
+	}
+
+	// Sort by score to determine percentiles
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].Score > scored[j].Score
+	})
+
+	// Calculate percentile for each
+	percentiles := make(map[int]float64)
+	for i, sp := range scored {
+		percentile := 1.0 - (float64(i) / float64(len(scored)))
+		percentiles[sp.Para.Position] = percentile
+	}
+
+	// Re-sort by original position to maintain narrative flow
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].Para.Position < scored[j].Para.Position
+	})
+
+	// Compress each paragraph based on its rank
+	var compressed []string
+	totalChars := 0
+
+	for _, sp := range scored {
+		percentile := percentiles[sp.Para.Position]
+		compressedPara := compressParagraph(sp.Para, percentile, queryTokens)
+
+		if compressedPara == "" {
+			continue
+		}
+
+		// Check if approaching limit
+		if totalChars+len(compressedPara) > targetChars && totalChars > targetChars/2 {
+			break
+		}
+
+		compressed = append(compressed, compressedPara)
+		totalChars += len(compressedPara)
+	}
+
+	if len(compressed) == 0 {
+		return ""
+	}
+
+	return strings.Join(compressed, " ")
 }
 
 // scoreSnippetQuality rates a snippet based on information density and relevance
-// Returns a score from 0-100 (higher is better)
 func scoreSnippetQuality(snippet, query string) int {
 	if snippet == "" {
 		return 0
 	}
-	
+
 	snippet = strings.ToLower(strings.TrimSpace(snippet))
 	query = strings.ToLower(strings.TrimSpace(query))
-	
+
 	score := 0
-	
-	// Length score (prefer 100-500 chars, penalize too short or too long)
+
+	// Length score
 	length := len(snippet)
 	if length >= 100 && length <= 500 {
 		score += 30
@@ -220,10 +473,10 @@ func scoreSnippetQuality(snippet, query string) int {
 	} else if length > 500 && length <= 1000 {
 		score += 20
 	} else if length < 50 {
-		score += 5 // Too short
+		score += 5
 	}
-	
-	// Query term coverage (do we mention the search terms?)
+
+	// Query term coverage
 	queryTokens := strings.Fields(query)
 	hitCount := 0
 	for _, token := range queryTokens {
@@ -233,24 +486,24 @@ func scoreSnippetQuality(snippet, query string) int {
 	}
 	if len(queryTokens) > 0 {
 		coverage := float64(hitCount) / float64(len(queryTokens))
-		score += int(coverage * 30) // Up to 30 points for query coverage
+		score += int(coverage * 30)
 	}
-	
-	// Sentence structure (prefer complete sentences)
+
+	// Sentence structure
 	sentenceCount := strings.Count(snippet, ".") + strings.Count(snippet, "!") + strings.Count(snippet, "?")
 	if sentenceCount >= 2 && sentenceCount <= 5 {
-		score += 20 // Good: 2-5 sentences
+		score += 20
 	} else if sentenceCount == 1 {
-		score += 10 // OK: 1 sentence
+		score += 10
 	}
-	
-	// Information density indicators
+
+	// Information density
 	hasNumbers := strings.ContainsAny(snippet, "0123456789")
 	if hasNumbers {
-		score += 10 // Numbers often indicate specific facts
+		score += 10
 	}
-	
-	// Penalize junk indicators
+
+	// Penalize junk
 	junkPhrases := []string{
 		"click here", "subscribe", "sign up", "register", "login",
 		"cookie", "javascript", "browser", "search for", "powered by",
@@ -262,377 +515,29 @@ func scoreSnippetQuality(snippet, query string) int {
 			junkCount++
 		}
 	}
-	score -= (junkCount * 15) // Heavy penalty for junk
-	
-	// Ensure score is in 0-100 range
+	score -= (junkCount * 15)
+
 	if score < 0 {
 		score = 0
 	}
 	if score > 100 {
 		score = 100
 	}
-	
+
 	return score
 }
 
-// looksDynamic returns true if HTML likely requires client-side JS rendering.
-// The logic is tuned to avoid false positives on pre-rendered static pages
-// that use modern front-end wrappers (like BBC, Guardian, etc.).
-func looksDynamic(html string) bool {
-	// Work only with the first ~120 KB; enough for head+initial body
-	headCutoff := 120 * 1024
-	if len(html) > headCutoff {
-		html = html[:headCutoff]
-	}
-	lower := strings.ToLower(html)
-
-	// Count <script> tags quickly
-	scriptCount := strings.Count(lower, "<script")
-	if scriptCount == 0 {
-		return false // no scripts → definitely static
-	}
-
-	// SPA / dynamic framework indicators
-	spaMarkers := []string{
-		"reactdom.render", "__next", "next-data", "next.config",
-		"vite", "webpackjsonp", "vue.runtime", "nuxt", "svelte",
-		"astro", "hydration", "data-reactroot", "data-hydration",
-		"window.__app__", "window.__data__", "app.mount(",
-	}
-	matches := 0
-	for _, m := range spaMarkers {
-		if strings.Contains(lower, m) {
-			matches++
-		}
-	}
-
-	// Hard JS-requires markers
-	if strings.Contains(lower, "please enable javascript") ||
-		strings.Contains(lower, "requires javascript") ||
-		strings.Contains(lower, "enable your browser to view this") {
-		return true
-	}
-
-	// If we detect multiple framework markers, assume SPA
-	if matches >= 2 {
-		return true
-	}
-
-	// Moderate script density can be fine (analytics, ads, etc.)
-	// Only skip if extreme and little visible text.
-	textCount := countLetters(lower)
-	if scriptCount > 40 && textCount < 1200 {
-		return true
-	}
-
-	// Avoid penalizing static builds that use an <div id="root"> wrapper
-	// unless we also see hydration markers or no readable content.
-	if strings.Contains(lower, "id=\"root\"") || strings.Contains(lower, "id='root'") ||
-		strings.Contains(lower, "id=\"app\"") || strings.Contains(lower, "id='app'") {
-		// Check if there's meaningful text (a few hundred letters)
-		if textCount > 1500 {
-			return false
-		}
-		if matches >= 1 {
-			return true
-		}
-	}
-
-	// Check for pre-rendered content markers (likely has real content despite framework)
-	if strings.Contains(lower, "article") || 
-	   strings.Contains(lower, "<main") ||
-	   strings.Count(lower, "<p>") > 5 {
-		return false
-	}
-
-	// Looks fine — treat as static
-	return false
-}
-
-
-
-// extractMainContent finds the primary content block using text/link-density scoring
-// (Readability/Boilerpipe-like), with multiple fallbacks for convoluted layouts.
-func extractMainContent(html string) string {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return ""
-	}
-
-	// Remove obvious non-content elements by tag
-	doc.Find("script, style, noscript, iframe, svg, canvas, template, link, meta, form, button, input, select, textarea").Remove()
-
-	// Remove hidden elements (style attrs / ARIA / hidden attr)
-	doc.Find("[hidden], [aria-hidden=true], [style*=\"display:none\"], [style*=\"visibility:hidden\"]").Each(func(_ int, s *goquery.Selection) {
-		s.Remove()
-	})
-
-	// Conservative class/id filters (token-aware; avoid substring collisions like 'ad' in 'education')
-	dropTokens := []string{
-		"header", "footer", "nav", "aside", "sidebar", "breadcrumb", "menu",
-		"cookie", "consent", "banner", "advert", "ads", "promo", "share",
-		"social", "subscribe", "signup", "login", "modal", "popup", "newsletter",
-		"comments", "comment", "related", "recommend", "sponsored",
-		"paywall", "paywall-overlay", "overlay", "lightbox", "toolbar",
-	}
-	for _, t := range dropTokens {
-		selector := fmt.Sprintf("[class~=\"\\b%s\\b\"], [id~=\"\\b%s\\b\"]", t, t)
-		doc.Find(selector).Each(func(_ int, s *goquery.Selection) {
-			s.Remove()
-		})
-	}
-
-	// Candidate containers to score - prioritize semantic tags and common article classes
-	// First try semantic HTML5 and known article containers
-	candidates := doc.Find("article, main, [role='main'], .article-body, .article-content, .post-body, .post-content, .entry-content, .story-body, .content-body")
-	
-	// If we didn't find good semantic candidates, fall back to broader search
-	if candidates.Length() == 0 {
-		candidates = doc.Find(".content, .post, .entry, .article, .story, .page-content, section")
-	}
-	
-	// Last resort: search all divs (but this often gets junk)
-	if candidates.Length() == 0 {
-		candidates = doc.Find("div")
-	}
-
-	type block struct {
-		el        *goquery.Selection
-		text      string
-		lenRunes  int
-		linkRatio float64
-		score     float64
-	}
-	var blocks []block
-
-	candidates.Each(func(_ int, s *goquery.Selection) {
-		txt := nodeVisibleText(s)
-		txt = strings.TrimSpace(compactWhitespace(txt))
-		
-		// Require minimum length (increased from 150 to 200)
-		if utf8.RuneCountInString(txt) < 200 {
-			return
-		}
-		
-		// Skip blocks with too many links (likely navigation)
-		linkTxt := nodeLinkText(s)
-		total := float64(len(txt))
-		lr := 0.0
-		if total > 0 {
-			lr = float64(len(linkTxt)) / total
-		}
-		if lr > 0.5 { // More than 50% links = probably navigation/footer
-			return
-		}
-		
-		// Count paragraphs - real articles have multiple paragraphs
-		pCount := s.Find("p").Length()
-		
-		// Score the block
-		score := densityScore(txt, lr)
-		
-		// Boost score for blocks with multiple paragraphs (article indicator)
-		if pCount >= 3 {
-			score *= 1.5
-		}
-		
-		// Boost score for semantic article tags
-		if s.Is("article") || s.Is("main") || s.Is("[role='main']") {
-			score *= 1.3
-		}
-		
-		blocks = append(blocks, block{
-			el:        s,
-			text:      txt,
-			lenRunes:  utf8.RuneCountInString(txt),
-			linkRatio: lr,
-			score:     score,
-		})
-	})
-
-	if len(blocks) == 0 {
-		// Coarse fallback: concatenate paragraphs in document order
-		return fallbackParagraphs(doc)
-	}
-
-	// Pick top K blocks by score and merge nearby siblings to avoid fragmentation
-	sort.Slice(blocks, func(i, j int) bool { return blocks[i].score > blocks[j].score })
-	topK := 5
-	if topK > len(blocks) {
-		topK = len(blocks)
-	}
-	best := blocks[:topK]
-
-	var merged strings.Builder
-	
-	// Take top 3 blocks to get comprehensive content without massive duplication
-	// Don't merge siblings - causes 2-3x text repetition when blocks are adjacent
-	seen := map[string]bool{}
-	blocksToUse := 3
-	if blocksToUse > len(best) {
-		blocksToUse = len(best)
-	}
-	
-	for i := 0; i < blocksToUse; i++ {
-		b := best[i]
-		// Avoid adding exact duplicate blocks
-		if seen[b.text] {
-			continue
-		}
-		seen[b.text] = true
-		
-		merged.WriteString(b.text)
-		merged.WriteString(" ")
-	}
-
-	out := strings.TrimSpace(compactWhitespace(merged.String()))
-	if utf8.RuneCountInString(out) >= 200 {
-		return out
-	}
-	// Final fallback
-	return fallbackParagraphs(doc)
-}
-
-func summarizeForLLM(text string, targetChars int, queryTokens []string) string {
-	if targetChars <= 0 {
-		targetChars = 1000  // Increased default since length isn't the priority
-	}
-	text = normalizeQuotes(compactWhitespace(text))
-
-	// Split into sentences
-	sentences := splitSentences(text)
-	if len(sentences) == 0 {
-		sentences = []string{text}
-	}
-
-	// Score each sentence based on relevance and information density
-	type scoredSentence struct {
-		text  string
-		score float64
-	}
-	
-	var scored []scoredSentence
-	
-	// Prebuild a set for query tokens for fast overlap checks
-	qset := map[string]struct{}{}
-	for _, qt := range queryTokens {
-		qset[qt] = struct{}{}
-	}
-
-	// Deduplicate sentences BEFORE scoring to prevent duplicates inflating scores
-	seenSentences := make(map[string]bool)
-
-	for _, s := range sentences {
-		s = strings.TrimSpace(s)
-		if len(s) < 20 {  // Skip very short sentences
-			continue
-		}
-		
-		// Skip duplicate sentences (normalize for comparison)
-		sNormalized := strings.ToLower(s)
-		if seenSentences[sNormalized] {
-			continue
-		}
-		seenSentences[sNormalized] = true
-		
-		// Extract keywords for scoring
-		kws := keywordsFrom(s)
-		if len(kws) == 0 {
-			continue
-		}
-
-		// Base score: information density (numbers, proper nouns, unique terms)
-		baseScore := infoDensityScore(s, kws)
-		
-		// Boost score for query relevance
-		overlap := 0
-		if len(qset) > 0 {
-			for _, kw := range kws {
-				if _, ok := qset[kw]; ok {
-					overlap++
-				}
-			}
-		}
-		
-		// Query-relevant sentences get significant boost
-		finalScore := baseScore + (3.0 * float64(overlap))
-		
-		scored = append(scored, scoredSentence{
-			text:  s,
-			score: finalScore,
-		})
-	}
-
-	if len(scored) == 0 {
-		return ""
-	}
-
-	// Sort by score (highest first)
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
-	})
-
-	// Build summary by taking top-scored sentences until we hit target length
-	var result strings.Builder
-	totalChars := 0
-	addedSentences := make(map[string]bool) // Safety layer - shouldn't be needed but ensures no duplicates
-	
-	for _, sent := range scored {
-		// Double-check we haven't added this sentence already
-		sentNormalized := strings.ToLower(strings.TrimSpace(sent.text))
-		if addedSentences[sentNormalized] {
-			continue
-		}
-		
-		// Would this sentence fit?
-		sentLen := len(sent.text)
-		if totalChars > 0 && totalChars+sentLen+1 > targetChars {
-			break
-		}
-		
-		// Add sentence
-		if totalChars > 0 {
-			result.WriteString(" ")
-		}
-		result.WriteString(sent.text)
-		addedSentences[sentNormalized] = true
-		totalChars += sentLen + 1
-		
-		// Stop if we have enough content (at least 3 good sentences or hit target)
-		if result.Len() >= int(float64(targetChars)*0.8) && strings.Count(result.String(), ".") >= 3 {
-			break
-		}
-	}
-
-	summary := result.String()
-	
-	// Fallback if we got nothing useful
-	if summary == "" && len(sentences) > 0 {
-		// Just take the first few sentences up to target
-		return squeezeToChars(strings.Join(sentences[:min(3, len(sentences))], " "), targetChars)
-	}
-
-	return summary
-}
-
-// buildQueryTokensForRanking turns a raw query string into a set of
-// stemmed, de-duplicated tokens for relevance scoring. It explicitly
-// strips search operators like "site:example.com" and raw URLs so
-// they don't pollute the ranking.
+// buildQueryTokensForRanking turns a raw query into tokens for relevance scoring
 func buildQueryTokensForRanking(query string) []string {
 	if query == "" {
 		return nil
 	}
 
-	// Remove site: filters (e.g. "site:bbc.co.uk") and raw URLs
 	q := siteFilterRe.ReplaceAllString(query, " ")
 	q = urlFilterRe.ReplaceAllString(q, " ")
-
-	// Normalize whitespace and case
 	q = strings.ToLower(strings.TrimSpace(q))
 	q = spaceReGlobal.ReplaceAllString(q, " ")
 
-	// Tokenize using the same tokenRe / stemming / stopwords as content
 	toks := tokenReGlobal.FindAllString(q, -1)
 	if len(toks) == 0 {
 		return nil
@@ -658,14 +563,70 @@ func buildQueryTokensForRanking(query string) []string {
 		seen[stem] = struct{}{}
 		out = append(out, stem)
 	}
-	if len(out) == 0 {
-		return nil
-	}
 	return out
 }
 
+// looksDynamic returns true if HTML likely requires client-side JS rendering
+func looksDynamic(html string) bool {
+	headCutoff := 120 * 1024
+	if len(html) > headCutoff {
+		html = html[:headCutoff]
+	}
+	lower := strings.ToLower(html)
 
-// -------- helpers (I/O, text scoring, tokenization) --------
+	scriptCount := strings.Count(lower, "<script")
+	if scriptCount == 0 {
+		return false
+	}
+
+	spaMarkers := []string{
+		"reactdom.render", "__next", "next-data", "next.config",
+		"vite", "webpackjsonp", "vue.runtime", "nuxt", "svelte",
+		"astro", "hydration", "data-reactroot", "data-hydration",
+		"window.__app__", "window.__data__", "app.mount(",
+	}
+	matches := 0
+	for _, m := range spaMarkers {
+		if strings.Contains(lower, m) {
+			matches++
+		}
+	}
+
+	if strings.Contains(lower, "please enable javascript") ||
+		strings.Contains(lower, "requires javascript") ||
+		strings.Contains(lower, "enable your browser to view this") {
+		return true
+	}
+
+	if matches >= 2 {
+		return true
+	}
+
+	textCount := countLetters(lower)
+	if scriptCount > 40 && textCount < 1200 {
+		return true
+	}
+
+	if strings.Contains(lower, "id=\"root\"") || strings.Contains(lower, "id='root'") ||
+		strings.Contains(lower, "id=\"app\"") || strings.Contains(lower, "id='app'") {
+		if textCount > 1500 {
+			return false
+		}
+		if matches >= 1 {
+			return true
+		}
+	}
+
+	if strings.Contains(lower, "article") ||
+		strings.Contains(lower, "<main") ||
+		strings.Count(lower, "<p>") > 5 {
+		return false
+	}
+
+	return false
+}
+
+// Helper functions
 
 func ioReadAllCap(r io.Reader, cap int) ([]byte, error) {
 	var out bytes.Buffer
@@ -699,94 +660,24 @@ func countLetters(s string) int {
 	return n
 }
 
-func nodeVisibleText(sel *goquery.Selection) string {
-	// Extract text but avoid alt/title duplication
-	// Keep <p>, <li>, <h1..h6>, <blockquote>, <pre>, <code>
-	var b strings.Builder
-	sel.Find("p, li, h1, h2, h3, h4, h5, h6, blockquote, pre, code").Each(func(_ int, s *goquery.Selection) {
-		t := s.Text()
-		t = strings.TrimSpace(t)
-		if t != "" {
-			b.WriteString(t)
-			if !strings.HasSuffix(t, ".") && !strings.HasSuffix(t, "!") && !strings.HasSuffix(t, "?") {
-				b.WriteString(". ")
-			} else {
-				b.WriteString(" ")
-			}
-		}
-	})
-	// If empty, fallback to the node's full text
-	if b.Len() == 0 {
-		return sel.Text()
-	}
-	return b.String()
-}
-
-func nodeLinkText(sel *goquery.Selection) string {
-	var b strings.Builder
-	sel.Find("a").Each(func(_ int, a *goquery.Selection) {
-		t := strings.TrimSpace(a.Text())
-		if t != "" {
-			b.WriteString(t)
-			b.WriteString(" ")
-		}
-	})
-	return b.String()
-}
-
-func densityScore(text string, linkRatio float64) float64 {
-	// Text length (log-scaled), punctuation density, low link ratio
-	l := float64(utf8.RuneCountInString(text))
-	if l <= 0 {
-		return 0
-	}
-	punct := 0
-	for _, r := range text {
-		if r == '.' || r == ',' || r == ';' || r == ':' {
-			punct++
-		}
-	}
-	pd := float64(punct) / l
-	score := (1.0 + 2.2*pd) * (l / (1.0 + 3.0*linkRatio))
-	return score
-}
-
-func fallbackParagraphs(doc *goquery.Document) string {
-	var b strings.Builder
-	count := 0
-	doc.Find("p").Each(func(_ int, p *goquery.Selection) {
-		t := strings.TrimSpace(compactWhitespace(p.Text()))
-		if utf8.RuneCountInString(t) >= 40 {
-			if count > 0 {
-				b.WriteString(" ")
-			}
-			b.WriteString(t)
-			count++
-		}
-	})
-	return b.String()
-}
-
 func compactWhitespace(s string) string {
-    return spaceReGlobal.ReplaceAllString(s, " ")
+	return spaceReGlobal.ReplaceAllString(s, " ")
 }
 
 func normalizeQuotes(s string) string {
-	// Normalize various unicode quotes to ASCII
-replacer := strings.NewReplacer(
-    "’", "'",
-    "‘", "'",
-    "“", `"`,
-    "”", `"`,
-    "–", "-",
-    "—", "-",
-    "…", "...",
-)
+	replacer := strings.NewReplacer(
+		"'", "'",
+		"'", "'",
+		""", `"`,
+		""", `"`,
+		"–", "-",
+		"—", "-",
+		"…", "...",
+	)
 	return replacer.Replace(s)
 }
 
 func splitSentences(s string) []string {
-	// Simple splitter respecting common terminators and preserving boundaries
 	m := sentenceReGlobal.FindAllString(s, -1)
 	if len(m) == 0 {
 		return []string{s}
@@ -811,53 +702,9 @@ var stopwords = map[string]struct{}{
 	"no": {}, "nor": {}, "not": {}, "only": {}, "own": {}, "same": {}, "than": {}, "too": {}, "very": {}, "can": {}, "could": {},
 	"should": {}, "would": {}, "may": {}, "might": {}, "will": {}, "shall": {}, "do": {}, "does": {}, "did": {}, "done": {},
 	"have": {}, "has": {}, "had": {}, "having": {}, "also": {}, "via": {}, "using": {}, "use": {},
-	"we": {}, "our": {}, "you": {}, "your": {}, "they": {}, "their": {}, "he": {}, "she": {}, "it’s": {}, "i": {},
+	"we": {}, "our": {}, "you": {}, "your": {}, "they": {}, "their": {}, "he": {}, "she": {}, "it's": {}, "i": {},
 	"here": {}, "there": {}, "when": {}, "where": {}, "why": {}, "how": {}, "what": {},
 	"article": {}, "read": {}, "click": {}, "share": {}, "subscribe": {}, "login": {}, "sign": {}, "privacy": {}, "policy": {}, "terms": {},
-}
-
-
-func keywordsFrom(s string) []string {
-	lower := strings.ToLower(s)
-	toks := tokenReGlobal.FindAllString(lower, -1)
-	if len(toks) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(toks))
-	seen := map[string]struct{}{}
-	for _, t := range toks {
-		t = strings.Trim(t, "-_/")
-		if t == "" {
-			continue
-		}
-		if _, stop := stopwords[t]; stop {
-			continue
-		}
-		// Drop very short tokens unless numeric
-		if len(t) < 2 && !isNumeric(t) {
-			continue
-		}
-		stem := lightStem(t)
-		if _, ok := seen[stem]; ok {
-			continue
-		}
-		seen[stem] = struct{}{}
-		out = append(out, stem)
-	}
-	return out
-}
-
-func infoDensityScore(sent string, kws []string) float64 {
-	// Score favors numbers, uppercase acronyms, and unique keywords
-	numbers := 0
-	acronyms := 0
-	for _, r := range sent {
-		if unicode.IsDigit(r) {
-			numbers++
-		}
-	}
-	acronyms = len(acronymReGlobal.FindAllString(sent, -1))
-	return float64(len(kws)) + 1.5*float64(numbers) + 2.0*float64(acronyms)
 }
 
 func isNumeric(s string) bool {
@@ -869,7 +716,6 @@ func isNumeric(s string) bool {
 	return len(s) > 0
 }
 
-// very light stemmer: drop common English suffixes; safe for LLM compression
 func lightStem(s string) string {
 	for _, suf := range []string{"ing", "ers", "er", "ies", "ied", "ly", "ed", "s"} {
 		if len(s) > len(suf)+2 && strings.HasSuffix(s, suf) {
@@ -877,21 +723,6 @@ func lightStem(s string) string {
 		}
 	}
 	return s
-}
-
-func squeezeToChars(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-	// try to cut on a boundary
-	cut := limit
-	for cut > 0 && !unicode.IsSpace(rune(s[cut-1])) {
-		cut--
-	}
-	if cut < limit/2 {
-		cut = limit
-	}
-	return strings.TrimSpace(s[:cut]) + "..."
 }
 
 func min(a, b int) int {
