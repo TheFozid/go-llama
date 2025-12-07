@@ -415,7 +415,7 @@ currentTime := time.Now().UTC().Format("2006-01-02 15:04")
 
 if willSearch {
     systemInstruction = fmt.Sprintf(
-        "Today is %s UTC. You are a helpful assistant with access to current web search results retrieved today. Answer using the provided information and cite sources as [1], [2].",
+        "Today is %s UTC. You are a helpful assistant with access to current web search results retrieved today. The search results below contain the facts you need. Answer using ONLY the provided information and cite sources as [1], [2]. Do not say you cannot access information that is explicitly provided.",
         currentTime,
     )
 } else {
