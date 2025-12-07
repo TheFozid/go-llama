@@ -525,13 +525,13 @@ for _, r := range ranked {
 		}
 			}
 		
-		// Inject web context RIGHT AFTER system prompt if we have sources
+		// Inject web context as USER message RIGHT AFTER system prompt if we have sources
 		if len(sources) > 0 {
 			var webContextBuilder strings.Builder
 			currentDate := time.Now().UTC().Format("2006-01-02")
-			webContextBuilder.WriteString("SEARCH RESULTS (retrieved ")
+			webContextBuilder.WriteString("Here are search results retrieved on ")
 			webContextBuilder.WriteString(currentDate)
-			webContextBuilder.WriteString("):\n\n")
+			webContextBuilder.WriteString(":\n\n")
 			
 			for i, src := range sources {
 				webContextBuilder.WriteString("[")
@@ -541,13 +541,13 @@ for _, r := range ranked {
 				webContextBuilder.WriteString("\n\n")
 			}
 			
-			webContextBuilder.WriteString("You MUST answer using ONLY these search results. Cite sources as [1], [2]. Do not claim you cannot access this information.")
+			webContextBuilder.WriteString("Use these results to answer my question. Cite sources as [1], [2].")
 			
 			webContext := webContextBuilder.String()
 			
-			// Insert RIGHT AFTER system message (position 1)
+			// Insert as USER message RIGHT AFTER system message (position 1)
 			webContextMsg := map[string]string{
-				"role":    "system",
+				"role":    "user",  // ← Changed from "system" to "user"
 				"content": webContext,
 			}
 			llmMessages = append(llmMessages[:1], append([]map[string]string{webContextMsg}, llmMessages[1:]...)...)
