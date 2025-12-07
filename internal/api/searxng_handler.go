@@ -100,18 +100,18 @@ func SearxNGSearchHandler(cfg *config.Config) gin.HandlerFunc {
 				keepTop = len(ranked)
 			}
 
-			for i := 0; i < keepTop; i++ {
-				r := ranked[i]
-				if r.Title == "" || r.URL == "" {
-					continue
-				}
-				snippet := enrichAndSummarize(r.URL, r.Content, searchQuery)
-				sources = append(sources, SearxNGSource{
-					Title:   r.Title,
-					URL:     r.URL,
-					Snippet: snippet,
-				})
-			}
+for i := 0; i < keepTop; i++ {
+    r := ranked[i]
+    if r.Title == "" || r.URL == "" {
+        continue
+    }
+    // Use SearxNG's original snippet directly
+    sources = append(sources, SearxNGSource{
+        Title:   r.Title,
+        URL:     r.URL,
+        Snippet: r.Content, // Use original snippet, no enrichment
+    })
+}
 		}
 
 		// --- 2. Format context for LLM ---

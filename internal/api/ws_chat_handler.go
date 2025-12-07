@@ -479,59 +479,19 @@ if err := json.NewDecoder(httpResp.Body).Decode(&searxResp); err == nil {
 		// 2) Rank those (returns top 80%, removing junk)
 		ranked := rankAndFilterResults(combinedPrompt, tmpResults)
 
-		// Keep all ranked results (they're already filtered to 80% best)
-		keepTop := len(ranked)
-		if keepTop < 1 {
-			keepTop = 1
-		}
+// Use SearxNG snippets directly (already ranked and filtered to top 80%)
+for _, r := range ranked {
+    if r.Title != "" && r.URL != "" {
+        sources = append(sources, map[string]string{
+            "title":   r.Title,
+            "url":     r.URL,
+            "snippet": r.Content, // Use SearxNG's original snippet
+        })
+        // Debug: Log what we're sending to LLM
+        log.Printf("📄 Source [%s]: %s", r.Title, r.Content[:min(len(r.Content), 100)])
+    }
+}
 
-		// Parallel enrichment for better performance
-		type enrichResult struct {
-			index   int
-			title   string
-			url     string
-			snippet string
-		}
-
-		enrichChan := make(chan enrichResult, keepTop)
-		var wg sync.WaitGroup
-
-		for i := 0; i < keepTop; i++ {
-			wg.Add(1)
-			go func(idx int, r SearxResult) {
-				defer wg.Done()
-				enrichedSnippet := enrichAndSummarize(r.URL, r.Content, searchQuery)
-				enrichChan <- enrichResult{
-					index:   idx,
-					title:   r.Title,
-					url:     r.URL,
-					snippet: enrichedSnippet,
-				}
-			}(i, ranked[i])
-		}
-
-		go func() {
-			wg.Wait()
-			close(enrichChan)
-		}()
-
-		// Collect results in original order
-		enriched := make([]enrichResult, keepTop)
-		for res := range enrichChan {
-			enriched[res.index] = res
-		}
-
-		for _, e := range enriched {
-			if e.title != "" && e.url != "" {
-				sources = append(sources, map[string]string{
-					"title":   e.title,
-					"url":     e.url,
-					"snippet": e.snippet,
-				})
-				// Debug: Log what we're actually sending to LLM
-				log.Printf("📄 Source [%s]: %s", e.title, e.snippet[:min(len(e.snippet), 500)])
-			}
-		}
 	}
 }
 
