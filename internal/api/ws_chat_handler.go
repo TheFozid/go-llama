@@ -22,17 +22,69 @@ import (
 	"go-llama/internal/db"
 )
 
-// extractURLFromPrompt finds and removes URLs from prompt, returning (cleanedPrompt, extractedURL)
-func extractURLFromPrompt(prompt string) (string, string) {
+
+// extractSiteFilter extracts a single site filter from the prompt for search optimization.
+// Priority: actual URL > text-based site reference (e.g., "on reddit")
+// Returns: (cleanedPrompt, siteHost)
+func extractSiteFilter(prompt string) (string, string) {
+	// Step 1: Check for actual URLs first (highest priority)
 	urlPattern := regexp.MustCompile(`https?://[^\s]+|(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*`)
 	urls := urlPattern.FindAllString(prompt, -1)
-	cleanedPrompt := urlPattern.ReplaceAllString(prompt, " ")
-	cleanedPrompt = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(cleanedPrompt, " "))
 	
 	if len(urls) > 0 {
-		return cleanedPrompt, urls[0]
+		// Extract host from first URL found
+		parsed, err := url.Parse(urls[0])
+		if err == nil && parsed.Host != "" {
+			// Remove URL from prompt and return
+			cleanedPrompt := urlPattern.ReplaceAllString(prompt, " ")
+			cleanedPrompt = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(cleanedPrompt, " "))
+			return cleanedPrompt, parsed.Host
+		}
 	}
-	return cleanedPrompt, ""
+	
+	// Step 2: No URL found, check for text-based site references
+	sitePatterns := map[*regexp.Regexp]string{
+		regexp.MustCompile(`(?i)\bon reddit\b`):           "reddit.com",
+		regexp.MustCompile(`(?i)\bfrom reddit\b`):         "reddit.com",
+		regexp.MustCompile(`(?i)\bin reddit\b`):           "reddit.com",
+		regexp.MustCompile(`(?i)\bon stackoverflow\b`):    "stackoverflow.com",
+		regexp.MustCompile(`(?i)\bfrom stackoverflow\b`):  "stackoverflow.com",
+		regexp.MustCompile(`(?i)\bon stack overflow\b`):   "stackoverflow.com",
+		regexp.MustCompile(`(?i)\bon github\b`):           "github.com",
+		regexp.MustCompile(`(?i)\bfrom github\b`):         "github.com",
+		regexp.MustCompile(`(?i)\bon twitter\b`):          "twitter.com",
+		regexp.MustCompile(`(?i)\bfrom twitter\b`):        "twitter.com",
+		regexp.MustCompile(`(?i)\bon youtube\b`):          "youtube.com",
+		regexp.MustCompile(`(?i)\bfrom youtube\b`):        "youtube.com",
+		regexp.MustCompile(`(?i)\bon wikipedia\b`):        "wikipedia.org",
+		regexp.MustCompile(`(?i)\bfrom wikipedia\b`):      "wikipedia.org",
+		regexp.MustCompile(`(?i)\bon hackernews\b`):       "news.ycombinator.com",
+		regexp.MustCompile(`(?i)\bon hacker news\b`):      "news.ycombinator.com",
+		regexp.MustCompile(`(?i)\bsite:([a-zA-Z0-9.-]+)`): "$1", // Explicit site: operator
+	}
+	
+	cleanedPrompt := prompt
+	for pattern, domain := range sitePatterns {
+		if pattern.MatchString(cleanedPrompt) {
+			// Handle site: operator specially (capture group)
+			if strings.Contains(pattern.String(), "site:") {
+				matches := pattern.FindStringSubmatch(cleanedPrompt)
+				if len(matches) > 1 {
+					cleanedPrompt = pattern.ReplaceAllString(cleanedPrompt, "")
+					cleanedPrompt = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(cleanedPrompt, " "))
+					return cleanedPrompt, matches[1]
+				}
+			} else {
+				// Remove the site reference phrase
+				cleanedPrompt = pattern.ReplaceAllString(cleanedPrompt, "")
+				cleanedPrompt = strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(cleanedPrompt, " "))
+				return cleanedPrompt, domain
+			}
+		}
+	}
+	
+	// No site filter found
+	return prompt, ""
 }
 
 // --- Auto Web Search Logic ---
@@ -408,12 +460,15 @@ if autoSearch && !req.WebSearch {
 				searxngURL = "http://localhost:8888/search"
 			}
 
+
+// Build search query only if web search is triggered
+var searchQuery string
+var siteFilter string
+
 // Build combined search context (last up to 3 user messages)
-// with character limit to avoid processing huge concatenations
 var userPrompts []string
 combinedLength := 0
 const maxCombinedChars = 500
-
 for i := len(messages) - 1; i >= 0 && len(userPrompts) < 3; i-- {
     if messages[i].Sender == "user" {
         if combinedLength + len(messages[i].Content) > maxCombinedChars {
@@ -423,29 +478,20 @@ for i := len(messages) - 1; i >= 0 && len(userPrompts) < 3; i-- {
         combinedLength += len(messages[i].Content)
     }
 }
-
 combinedPrompt := strings.Join(userPrompts, " ")
 
-// --- Extract URL from prompt first ---
-cleanedFromURL, extractedURL := extractURLFromPrompt(combinedPrompt)
+// Extract site filter (URL or text-based site reference)
+searchQuery, siteFilter = extractSiteFilter(combinedPrompt)
 
-// --- Then detect site-specific search phrases ---
-cleanPrompt, siteDomain := extractSiteQuery(cleanedFromURL)
-searchQuery := cleanPrompt
+// Compress long queries
 if len(strings.Fields(searchQuery)) > 20 {
     searchQuery = compressForSearch(searchQuery)
 }
 
-// Apply site filter: prioritize extracted URL, then detected domain
-if extractedURL != "" {
-    parsed, err := url.Parse(extractedURL)
-    if err == nil && parsed.Host != "" {
-        searchQuery = "site:" + parsed.Host + " " + searchQuery
-    }
-} else if siteDomain != "" {
-    searchQuery = "site:" + siteDomain + " " + searchQuery
+// Prepend site filter if found
+if siteFilter != "" {
+    searchQuery = "site:" + siteFilter + " " + searchQuery
 }
-
 
 httpResp, err := http.Get(searxngURL + "?q=" + url.QueryEscape(searchQuery) + "&format=json")
 			if err == nil && httpResp.StatusCode == 200 {
