@@ -525,6 +525,32 @@ for _, r := range ranked {
 }
 			}
 			
+		// Inject web context RIGHT AFTER system prompt if we have sources
+		if len(sources) > 0 {
+			var webContextBuilder strings.Builder
+			currentDate := time.Now().UTC().Format("2006-01-02")
+			webContextBuilder.WriteString("SEARCH RESULTS (retrieved ")
+			webContextBuilder.WriteString(currentDate)
+			webContextBuilder.WriteString("):\n\n")
+			
+			for i, src := range sources {
+				webContextBuilder.WriteString("[")
+				webContextBuilder.WriteString(strconv.Itoa(i+1))
+				webContextBuilder.WriteString("] ")
+				webContextBuilder.WriteString(src["snippet"])
+				webContextBuilder.WriteString("\n\n")
+			}
+			
+			webContextBuilder.WriteString("You MUST answer using ONLY these search results. Cite sources as [1], [2]. Do not claim you cannot access this information.")
+			
+			webContext := webContextBuilder.String()
+			
+			// Insert RIGHT AFTER system message (position 1)
+			llmMessages = append(llmMessages[:1], append([]map[string]string{
+				{"role": "system", "content": webContext},
+			}, llmMessages[1:]...)...)
+		}
+	}
 			// 🟡 Graceful fallback if no results
 			if (req.WebSearch || autoSearch) && len(sources) == 0 {
 				fallbackMsg := "Web search returned no results."
@@ -534,32 +560,6 @@ for _, r := range ranked {
 				})
 			}
 			
-
-if len(sources) > 0 {
-	var webContextBuilder strings.Builder
-	currentDate := time.Now().UTC().Format("2006-01-02")
-	webContextBuilder.WriteString("CURRENT INFORMATION (searched ")
-	webContextBuilder.WriteString(currentDate)
-	webContextBuilder.WriteString("):\n\n")
-	
-	for i, src := range sources {
-		webContextBuilder.WriteString("[")
-		webContextBuilder.WriteString(strconv.Itoa(i+1))
-		webContextBuilder.WriteString("] ")
-		webContextBuilder.WriteString(src["snippet"])
-		webContextBuilder.WriteString("\n\n")
-	}
-	
-	webContextBuilder.WriteString("These are facts retrieved today. Use them to answer the user's question.")
-	
-	webContext := webContextBuilder.String()
-
-	llmMessages = append(llmMessages, map[string]string{
-		"role":    "system",
-		"content": webContext,
-	})
-}
-
 		}
 
 		payload := map[string]interface{}{
