@@ -521,10 +521,10 @@ for _, r := range ranked {
         log.Printf("📄 Source [%s]: %s", r.Title, r.Content[:min(len(r.Content), 100)])
     }
 }
-	}
-}
 			}
-			
+		}
+			}
+		
 		// Inject web context RIGHT AFTER system prompt if we have sources
 		if len(sources) > 0 {
 			var webContextBuilder strings.Builder
@@ -546,21 +546,22 @@ for _, r := range ranked {
 			webContext := webContextBuilder.String()
 			
 			// Insert RIGHT AFTER system message (position 1)
-			llmMessages = append(llmMessages[:1], append([]map[string]string{
-				{"role": "system", "content": webContext},
-			}, llmMessages[1:]...)...)
+			webContextMsg := map[string]string{
+				"role":    "system",
+				"content": webContext,
+			}
+			llmMessages = append(llmMessages[:1], append([]map[string]string{webContextMsg}, llmMessages[1:]...)...)
+		}
+		
+		// 🟡 Graceful fallback if no results
+		if (req.WebSearch || autoSearch) && len(sources) == 0 {
+			fallbackMsg := "Web search returned no results."
+			llmMessages = append(llmMessages, map[string]string{
+				"role":    "system",
+				"content": fallbackMsg,
+			})
 		}
 	}
-			// 🟡 Graceful fallback if no results
-			if (req.WebSearch || autoSearch) && len(sources) == 0 {
-				fallbackMsg := "Web search returned no results."
-				llmMessages = append(llmMessages, map[string]string{
-					"role":    "system",
-					"content": fallbackMsg,
-				})
-			}
-			
-		}
 
 		payload := map[string]interface{}{
 			"model":    modelConfig.Name,
