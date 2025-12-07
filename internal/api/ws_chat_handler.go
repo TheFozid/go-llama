@@ -362,67 +362,52 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		var allMessages []chat.Message
-		if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
-			conn.WriteJSON(map[string]string{"error": "failed to fetch chat history"})
-			return
-		}
-		contextSize := modelConfig.ContextSize
-		if contextSize == 0 {
-			contextSize = 2048 // Fallback default
-		}
-		
-		// We'll adjust context size after we know if web search is happening
-		// For now, build with full context and adjust later if needed
-		messages := chat.BuildSlidingWindow(allMessages, contextSize)
+var allMessages []chat.Message
+if err := db.DB.Where("chat_id = ?", chatInst.ID).Order("created_at asc").Find(&allMessages).Error; err != nil {
+	conn.WriteJSON(map[string]string{"error": "failed to fetch chat history"})
+	return
+}
+contextSize := modelConfig.ContextSize
+if contextSize == 0 {
+	contextSize = 2048 // Fallback default
+}
 
-		var llmMessages []map[string]string
-		for _, m := range messages {
-			role := "user"
-			if m.Sender == "bot" {
-				role = "assistant"
-			}
-			llmMessages = append(llmMessages, map[string]string{
-				"role":    role,
-				"content": m.Content,
-			})
-		}
+// Determine if web search will happen FIRST (call shouldAutoSearch only once)
+autoSearch := false
+if !req.WebSearch {
+	autoSearch = shouldAutoSearch(cfg, req.Prompt)
+}
+willSearch := req.WebSearch || autoSearch
 
-		// Estimate web context size if search will happen
-		// Calculate based on actual results for better space utilization
-		webContextSize := 0
-		willSearch := req.WebSearch || shouldAutoSearch(cfg, req.Prompt)
-		if willSearch {
-			// Initial rough estimate before we have actual sources
-			estimatedResults := cfg.SearxNG.MaxResults / 2 // We keep top 50%
-			if estimatedResults < 1 {
-				estimatedResults = 1
-			}
-			// Estimate: ~50 tokens per result (title + snippet + URL) + overhead
-			webContextSize = (estimatedResults * 50) + 50
-		}
-		
-		// Rebuild sliding window if we need to account for web context
-		if webContextSize > 0 {
-			adjustedContextSize := contextSize - webContextSize
-			if adjustedContextSize < 512 {
-				adjustedContextSize = 512 // Minimum context for history
-			}
-			messages = chat.BuildSlidingWindow(allMessages, adjustedContextSize)
-			
-			// Rebuild llmMessages with adjusted history
-			llmMessages = []map[string]string{}
-			for _, m := range messages {
-				role := "user"
-				if m.Sender == "bot" {
-					role = "assistant"
-				}
-				llmMessages = append(llmMessages, map[string]string{
-					"role":    role,
-					"content": m.Content,
-				})
-			}
-		}
+// Calculate effective context size accounting for web search
+effectiveContextSize := contextSize
+if willSearch {
+	// Estimate web context size before we have actual sources
+	estimatedResults := cfg.SearxNG.MaxResults / 2 // We keep top 50%
+	if estimatedResults < 1 {
+		estimatedResults = 1
+	}
+	webContextSize := (estimatedResults * 50) + 50
+	effectiveContextSize = contextSize - webContextSize
+	if effectiveContextSize < 512 {
+		effectiveContextSize = 512 // Minimum context for history
+	}
+}
+
+// Build sliding window ONCE with correct size
+messages := chat.BuildSlidingWindow(allMessages, effectiveContextSize)
+
+var llmMessages []map[string]string
+for _, m := range messages {
+	role := "user"
+	if m.Sender == "bot" {
+		role = "assistant"
+	}
+	llmMessages = append(llmMessages, map[string]string{
+		"role":    role,
+		"content": m.Content,
+	})
+}
 
 // Single, concise system instruction optimized for small models (1B-10B)
 currentTime := time.Now().UTC().Format("2006-01-02 15:04")
@@ -438,18 +423,8 @@ if req.Prompt == "" {
 	return
 }
 
-// --- AUTO WEB SEARCH DECISION ---
-autoSearch := false
-
-if !req.WebSearch {
-if shouldAutoSearch(cfg, req.Prompt) {
-        autoSearch = true
-    }
-}
-
-
 // Notify UI if auto triggered
-if autoSearch && !req.WebSearch {
+if autoSearch {
 	conn.WriteJSON(map[string]string{"auto_search": "true"})
 }
 
@@ -465,17 +440,17 @@ if autoSearch && !req.WebSearch {
 var searchQuery string
 var siteFilter string
 
-// Build combined search context (last up to 3 user messages)
+// Build combined search context (last up to 3 user messages from full history)
 var userPrompts []string
 combinedLength := 0
 const maxCombinedChars = 500
-for i := len(messages) - 1; i >= 0 && len(userPrompts) < 3; i-- {
-    if messages[i].Sender == "user" {
-        if combinedLength + len(messages[i].Content) > maxCombinedChars {
+for i := len(allMessages) - 1; i >= 0 && len(userPrompts) < 3; i-- {
+    if allMessages[i].Sender == "user" {
+        if combinedLength + len(allMessages[i].Content) > maxCombinedChars {
             break
         }
-        userPrompts = append([]string{messages[i].Content}, userPrompts...)
-        combinedLength += len(messages[i].Content)
+        userPrompts = append([]string{allMessages[i].Content}, userPrompts...)
+        combinedLength += len(allMessages[i].Content)
     }
 }
 combinedPrompt := strings.Join(userPrompts, " ")
@@ -537,52 +512,8 @@ for _, r := range ranked {
         log.Printf("📄 Source [%s]: %s", r.Title, r.Content[:min(len(r.Content), 100)])
     }
 }
-
 	}
 }
-
-
-			}
-
-			// Recalculate actual web context size now that we have real sources
-			if len(sources) > 0 {
-				// Calculate actual token usage from sources
-				actualWebSize := 0
-				for _, src := range sources {
-					// Rough estimate: title + snippet + URL ≈ 4 chars per token
-					actualWebSize += (len(src["title"]) + len(src["snippet"]) + len(src["url"])) / 4
-				}
-				actualWebSize += 50 // Overhead for formatting
-				
-				// If actual size is very different from estimate, rebuild sliding window
-				if actualWebSize < webContextSize-200 || actualWebSize > webContextSize+200 {
-					adjustedContextSize := contextSize - 50 - actualWebSize - 100 // system msg + web + safety
-					if adjustedContextSize < 512 {
-						adjustedContextSize = 512
-					}
-					
-					messages = chat.BuildSlidingWindow(allMessages, adjustedContextSize)
-					
-					// Rebuild llmMessages with better-fitted history
-					llmMessages = []map[string]string{}
-					currentTime := time.Now().UTC().Format("2006-01-02 15:04")
-					systemInstruction := fmt.Sprintf("Today is %s UTC. Be direct and helpful.", currentTime)
-					llmMessages = append(llmMessages, map[string]string{
-						"role":    "system",
-						"content": systemInstruction,
-					})
-					
-					for _, m := range messages {
-						role := "user"
-						if m.Sender == "bot" {
-							role = "assistant"
-						}
-						llmMessages = append(llmMessages, map[string]string{
-							"role":    role,
-							"content": m.Content,
-						})
-					}
-				}
 			}
 			
 			// 🟡 Graceful fallback if no results
