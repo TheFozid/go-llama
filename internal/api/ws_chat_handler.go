@@ -409,9 +409,18 @@ for _, m := range messages {
 	})
 }
 
-// Single, concise system instruction optimized for small models (1B-10B)
+// Build context-aware system instruction
+var systemInstruction string
 currentTime := time.Now().UTC().Format("2006-01-02 15:04")
-systemInstruction := fmt.Sprintf("Today is %s UTC. Be direct and helpful.", currentTime)
+
+if willSearch {
+    systemInstruction = fmt.Sprintf(
+        "Today is %s UTC. You are a helpful assistant with access to current web search results retrieved today. Answer using the provided information and cite sources as [1], [2].",
+        currentTime,
+    )
+} else {
+    systemInstruction = fmt.Sprintf("Today is %s UTC. Be direct and helpful.", currentTime)
+}
 
 llmMessages = append([]map[string]string{
     {"role": "system", "content": systemInstruction},
@@ -526,26 +535,31 @@ for _, r := range ranked {
 			}
 			
 
-			if len(sources) > 0 {
-				var webContextBuilder strings.Builder
-				currentDate := time.Now().UTC().Format("2006-01-02")
-				webContextBuilder.WriteString(fmt.Sprintf("Current information (searched %s):\n\n", currentDate))
-				for i, src := range sources {
-					webContextBuilder.WriteString("[")
-					webContextBuilder.WriteString(strconv.Itoa(i+1))
-					webContextBuilder.WriteString("] ")
-					webContextBuilder.WriteString(src["snippet"])
-					webContextBuilder.WriteString("\n\n")
-				}
-				webContextBuilder.WriteString("This is the most current information available. Answer based on these search results. Cite sources as [1], [2].")
-				
-				webContext := webContextBuilder.String()
+if len(sources) > 0 {
+	var webContextBuilder strings.Builder
+	currentDate := time.Now().UTC().Format("2006-01-02")
+	webContextBuilder.WriteString("CURRENT INFORMATION (searched ")
+	webContextBuilder.WriteString(currentDate)
+	webContextBuilder.WriteString("):\n\n")
+	
+	for i, src := range sources {
+		webContextBuilder.WriteString("[")
+		webContextBuilder.WriteString(strconv.Itoa(i+1))
+		webContextBuilder.WriteString("] ")
+		webContextBuilder.WriteString(src["snippet"])
+		webContextBuilder.WriteString("\n\n")
+	}
+	
+	webContextBuilder.WriteString("These are facts retrieved today. Use them to answer the user's question.")
+	
+	webContext := webContextBuilder.String()
 
-				llmMessages = append(llmMessages, map[string]string{
-					"role":    "system",
-					"content": webContext,
-				})
-			}
+	llmMessages = append(llmMessages, map[string]string{
+		"role":    "system",
+		"content": webContext,
+	})
+}
+
 		}
 
 		payload := map[string]interface{}{
