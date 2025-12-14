@@ -11,6 +11,7 @@ type Chat struct {
 	UserID       uint           `json:"user_id"`
 	ModelName    string         `json:"model_name"`     // LLM model assigned to this chat
 	LlmSessionID string         `json:"llm_session_id"` // LLM session token/id for context
+    UseGrowerAI  bool			`json:"use_grower_ai" gorm:"default:false"`
 	CreatedAt    time.Time      `json:"createdAt"`
 	UpdatedAt    time.Time      `json:"updatedAt"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`

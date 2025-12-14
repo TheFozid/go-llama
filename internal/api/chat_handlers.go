@@ -19,6 +19,78 @@ import (
 	"gorm.io/gorm"
 )
 
+// Add this function to chat_handlers.go
+func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Chat, content string, userID uint) {
+	// Save user's message first
+	userMsg := chat.Message{
+		ChatID:    chatInst.ID,
+		Sender:    "user",
+		Content:   content,
+		CreatedAt: time.Now(),
+	}
+	if err := db.DB.Create(&userMsg).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save message"})
+		return
+	}
+
+	// TODO: This is where the GrowerAI memory system will be integrated
+	// For now, we'll create a placeholder response to make the system functional
+	
+	// Find the configured model (GrowerAI still uses an LLM for reasoning)
+	var modelConfig *config.LLMConfig
+	for i := range cfg.LLMs {
+		if cfg.LLMs[i].Name == chatInst.ModelName {
+			modelConfig = &cfg.LLMs[i]
+			break
+		}
+	}
+	if modelConfig == nil && len(cfg.LLMs) > 0 {
+		modelConfig = &cfg.LLMs[0]
+		chatInst.ModelName = modelConfig.Name
+	}
+	if modelConfig == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no models available"})
+		return
+	}
+
+	// Placeholder: For now, just respond indicating GrowerAI mode is active
+	// Later this will:
+	// 1. Retrieve relevant memories from Qdrant
+	// 2. Inject them into context
+	// 3. Call LLM with enhanced context
+	// 4. Evaluate what to store in memory
+	// 5. Store important information
+	
+	botReply := fmt.Sprintf("🧠 GrowerAI Mode Active\n\nI received your message: \"%s\"\n\n"+
+		"The perpetual learning system is currently in development. When complete, I will:\n"+
+		"- Remember our conversations across sessions\n"+
+		"- Build long-term memory with tiered storage\n"+
+		"- Learn and improve from accumulated experience\n"+
+		"- Develop emergent intelligence over time", content)
+
+	// Save bot message
+	botMsg := chat.Message{
+		ChatID:    chatInst.ID,
+		Sender:    "bot",
+		Content:   botReply,
+		CreatedAt: time.Now(),
+	}
+	if err := db.DB.Create(&botMsg).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save bot message"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"reply": map[string]interface{}{
+			"id":        botMsg.ID,
+			"sender":    "bot",
+			"content":   botReply,
+			"createdAt": botMsg.CreatedAt,
+			"grower_ai": true, // Flag to indicate this was a GrowerAI response
+		},
+	})
+}
+
 // Helper to extract user ID from context
 func getUserIDFromContext(c *gin.Context) (uint, bool) {
 	idVal, exists := c.Get("userId")
@@ -52,60 +124,64 @@ func ListLLMsHandler(cfg *config.Config) gin.HandlerFunc {
 }
 
 // Create a new chat, allow model selection
+// In internal/api/chat_handlers.go, update CreateChatHandler:
 func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userID, ok := getUserIDFromContext(c)
-		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
+    return func(c *gin.Context) {
+        userID, ok := getUserIDFromContext(c)
+        if !ok {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+            return
+        }
 
-		var req struct {
-			Title     string `json:"title"`
-			ModelName string `json:"model_name"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
-			return
-		}
+        var req struct {
+            Title       string `json:"title"`
+            ModelName   string `json:"model_name"`
+            UseGrowerAI bool   `json:"use_grower_ai"` // NEW
+        }
+        if err := c.ShouldBindJSON(&req); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+            return
+        }
 
-		modelName := req.ModelName
-		if modelName == "" && len(cfg.LLMs) > 0 {
-			modelName = cfg.LLMs[0].Name
-		}
+        modelName := req.ModelName
+        if modelName == "" && len(cfg.LLMs) > 0 {
+            modelName = cfg.LLMs[0].Name
+        }
 
-		// Check model exists
-		modelExists := false
-		for _, m := range cfg.LLMs {
-			if m.Name == modelName {
-				modelExists = true
-				break
-			}
-		}
-		if !modelExists {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "model not available"})
-			return
-		}
+        // Check model exists
+        modelExists := false
+        for _, m := range cfg.LLMs {
+            if m.Name == modelName {
+                modelExists = true
+                break
+            }
+        }
+        if !modelExists {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "model not available"})
+            return
+        }
 
-		chatInst := chat.Chat{
-			Title:        req.Title,
-			UserID:       userID,
-			ModelName:    modelName,
-			LlmSessionID: "",
-			CreatedAt:    time.Now(),
-		}
-		if err := db.DB.Create(&chatInst).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create chat"})
-			return
-		}
+        chatInst := chat.Chat{
+            Title:        req.Title,
+            UserID:       userID,
+            ModelName:    modelName,
+            LlmSessionID: "",
+            UseGrowerAI:  req.UseGrowerAI, // NEW
+            CreatedAt:    time.Now(),
+        }
+        if err := db.DB.Create(&chatInst).Error; err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create chat"})
+            return
+        }
 
-		c.JSON(http.StatusCreated, gin.H{
-			"id":        chatInst.ID,
-			"title":     chatInst.Title,
-			"model":     chatInst.ModelName,
-			"createdAt": chatInst.CreatedAt,
-		})
-	}
+        c.JSON(http.StatusCreated, gin.H{
+            "id":           chatInst.ID,
+            "title":        chatInst.Title,
+            "model":        chatInst.ModelName,
+            "use_grower_ai": chatInst.UseGrowerAI, // NEW
+            "createdAt":    chatInst.CreatedAt,
+        })
+    }
 }
 
 // List all chats for the current user (only chats with at least one user message)
@@ -300,6 +376,14 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+if chatInst.UseGrowerAI {
+    // Route to GrowerAI memory system instead of standard LLM
+    // This is where you'll integrate the memory evaluation loop
+    // For now, we can add a placeholder or call a separate handler
+    HandleGrowerAIMessage(c, cfg, &chatInst, req.Content, userID)
+    return
+}
+
 		// Save user's message
 		userMsg := chat.Message{
 			ChatID:    chatInst.ID,
@@ -444,7 +528,8 @@ func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
 				webContextBuilder.WriteString(fmt.Sprintf("[%d] %s\n\n", 
 					i+1, src["snippet"]))
 			}
-			webContextBuilder.WriteString("This is the most current information available. Answer based on these search results. Cite sources as [1], [2].")
+			webContextBuilder.WriteString("This is the most current information available. Answer based on these search results. Cite sources as [1], [2]."
+			)
 			
 			webContext := webContextBuilder.String()
 

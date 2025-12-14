@@ -95,29 +95,35 @@ document.addEventListener("DOMContentLoaded", function () {
         document.getElementById("historySidebar").classList.add("d-none");
         ensureInitialChat().then(loadChatHistory);
 
-        document.getElementById("newChatBtn").onclick = function () {
-            const modal = new bootstrap.Modal(document.getElementById("modelModal"));
-            const select = document.getElementById("modelModalSelect");
-            select.innerHTML = "";
-            modelsCache.forEach(m => {
-                const o = document.createElement("option");
-                o.value = m.name;
-                o.textContent = m.name;
-                select.appendChild(o);
-            });
-            modal.show();
+document.getElementById("newChatBtn").onclick = function () {
+    const modal = new bootstrap.Modal(document.getElementById("modelModal"));
+    const select = document.getElementById("modelModalSelect");
+    select.innerHTML = "";
+    modelsCache.forEach(m => {
+        const o = document.createElement("option");
+        o.value = m.name;
+        o.textContent = m.name;
+        select.appendChild(o);
+    });
+    
+    // Reset toggle
+    document.getElementById("growerAIToggle").checked = false;
+    
+    modal.show();
 
-            document.getElementById("modelForm").onsubmit = async function (e) {
-                e.preventDefault();
-                const modelName = select.value;
-                modal.hide();
-                const chat = await createChat(modelName);
-                if (chat.id) {
-                    loadChatHistory();
-                    switchChat(chat.id, modelName);
-                }
-            };
-        };
+    document.getElementById("modelForm").onsubmit = async function (e) {
+        e.preventDefault();
+        const modelName = select.value;
+        const useGrowerAI = document.getElementById("growerAIToggle").checked;
+        modal.hide();
+        
+        const chat = await createChat(modelName, useGrowerAI);
+        if (chat.id) {
+            loadChatHistory();
+            switchChat(chat.id, modelName);
+        }
+    };
+};
 
 document.getElementById("toggleHistoryBtn").onclick = function () {
     const sidebar = document.getElementById("historySidebar");
@@ -476,11 +482,14 @@ async function getChatHistory() {
 async function getChatMessages(chatId) {
     return await apiFetch(`/chats/${chatId}/messages`, { method: "GET" });
 }
-async function createChat(modelName) {
+async function createChat(modelName, useGrowerAI = false) {
     return await apiFetch("/chats", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_name: modelName })
+        body: JSON.stringify({ 
+            model_name: modelName,
+            use_grower_ai: useGrowerAI 
+        })
     });
 }
 async function sendMessage(chatId, content, webSearch) {
