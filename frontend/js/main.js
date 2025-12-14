@@ -316,14 +316,6 @@ function autoResizePrompt() {
             if (!isModelAvailable) {
                 // Show model selection modal and force user to pick a new model
                 const modal = new bootstrap.Modal(document.getElementById("modelModal"));
-                const select = document.getElementById("modelModalSelect");
-                select.innerHTML = "";
-                modelsCache.forEach(m => {
-                    const o = document.createElement("option");
-                    o.value = m.name;
-                    o.textContent = m.name;
-                    select.appendChild(o);
-                });
                 modal.show();
 
                 document.getElementById("modelForm").onsubmit = async function (e2) {
