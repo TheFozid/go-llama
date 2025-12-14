@@ -99,44 +99,38 @@ document.getElementById("newChatBtn").onclick = function () {
     const modal = new bootstrap.Modal(document.getElementById("modelModal"));
     const systemChoices = document.getElementById("systemChoices");
     
-    // Clear previous selections
-    systemChoices.innerHTML = "";
-    
-    // Add GrowerAI option first
-    const growerAIOption = document.createElement("button");
-    growerAIOption.type = "button";
-    growerAIOption.className = "list-group-item list-group-item-action";
-    growerAIOption.innerHTML = `
-        <div class="d-flex w-100 justify-content-between">
-            <h6 class="mb-1">GrowerAI</h6>
-            <small class="text-muted">Perpetual Learning</small>
-        </div>
-        <p class="mb-1"><small>Continuous memory system with Qwen 2.5 3B + embeddings</small></p>
-    `;
-    growerAIOption.dataset.system = "growerai";
-    growerAIOption.dataset.model = ""; // Will be set by backend
-    systemChoices.appendChild(growerAIOption);
-    
-    // Add separator
-    const separator = document.createElement("div");
-    separator.className = "list-group-item disabled";
-    separator.innerHTML = "<small class='text-muted'>Standard LLM Models</small>";
-    systemChoices.appendChild(separator);
-    
-    // Add standard model options
-    modelsCache.forEach(m => {
-        const modelOption = document.createElement("button");
-        modelOption.type = "button";
-        modelOption.className = "list-group-item list-group-item-action";
-        modelOption.innerHTML = `
-            <div class="d-flex w-100 justify-content-between">
-                <h6 class="mb-1">${m.name}</h6>
-            </div>
-        `;
-        modelOption.dataset.system = "standard";
-        modelOption.dataset.model = m.name;
-        systemChoices.appendChild(modelOption);
-    });
+// Clear previous selections
+systemChoices.innerHTML = "";
+
+// Add standard model options FIRST
+modelsCache.forEach(m => {
+    const modelOption = document.createElement("button");
+    modelOption.type = "button";
+    modelOption.className = "list-group-item list-group-item-action";
+    modelOption.innerHTML = `<h6 class="mb-1">${m.name}</h6>`;
+    modelOption.dataset.system = "standard";
+    modelOption.dataset.model = m.name;
+    systemChoices.appendChild(modelOption);
+});
+
+// Add separator
+const separator = document.createElement("div");
+separator.className = "list-group-item disabled";
+separator.innerHTML = "<small class='text-muted'>Advanced</small>";
+systemChoices.appendChild(separator);
+
+// Add GrowerAI option LAST
+const growerAIOption = document.createElement("button");
+growerAIOption.type = "button";
+growerAIOption.className = "list-group-item list-group-item-action";
+growerAIOption.innerHTML = `
+    <div class="d-flex w-100 justify-content-between">
+        <h6 class="mb-1">GrowerAI</h6>
+    </div>
+`;
+growerAIOption.dataset.system = "growerai";
+growerAIOption.dataset.model = "";
+systemChoices.appendChild(growerAIOption);
     
     // Handle selection
     let selectedSystem = null;
@@ -164,8 +158,6 @@ document.getElementById("newChatBtn").onclick = function () {
         }
         
         const useGrowerAI = selectedSystem === "growerai";
-        // For GrowerAI, backend will determine the model
-        // For standard, use the selected model
         const modelName = useGrowerAI ? "" : selectedModel;
         
         modal.hide();
@@ -328,7 +320,7 @@ document.getElementById("promptForm").onsubmit = function (e) {
         growerAIOption.className = "list-group-item list-group-item-action";
         growerAIOption.innerHTML = `
             <div class="d-flex w-100 justify-content-between">
-                <h6 class="mb-1">🧠 GrowerAI</h6>
+                <h6 class="mb-1">GrowerAI</h6>
                 <small class="text-muted">Perpetual Learning</small>
             </div>
         `;
