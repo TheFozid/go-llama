@@ -106,34 +106,37 @@
       </div>
     </div>
     <!-- New Chat Model Selection Modal -->
-    <div class="modal fade" id="modelModal" tabindex="-1">
-      <div class="modal-dialog">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title">Select Model for New Chat</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-          </div>
-          <div class="modal-body">
-            <form id="modelForm">
-              <div class="mb-3">
-                <label for="modelModalSelect" class="form-label">Model</label>
-                <select id="modelModalSelect" class="form-select"></select>
-              </div>
+<div class="modal fade" id="modelModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Select System for New Chat</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="modelForm">
           <div class="mb-3">
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" id="growerAIToggle">
-              <label class="form-check-label" for="growerAIToggle">
-                <strong>GrowerAI</strong> - Perpetual learning system
-                <small class="d-block text-muted">Continuous memory across all conversations</small>
-              </label>
-            </div>
+            <label class="form-label">Choose System</label>
+            <select id="systemSelect" class="form-select mb-3">
+              <option value="standard">Standard LLM</option>
+              <option value="growerai">GrowerAI (Perpetual Learning)</option>
+            </select>
           </div>
-              <button type="submit" class="btn btn-primary w-100">OK</button>
-            </form>
+          <div class="mb-3" id="modelSelectContainer">
+            <label for="modelModalSelect" class="form-label">Model</label>
+            <select id="modelModalSelect" class="form-select"></select>
           </div>
-        </div>
+          <div class="alert alert-info" id="growerAIInfo" style="display:none;">
+            <small>
+              <strong>GrowerAI:</strong> Continuous memory system that learns and remembers across all conversations.
+            </small>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">Create Chat</button>
+        </form>
       </div>
     </div>
+  </div>
+</div>
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="{{ .subpath }}/js/main.js"></script>

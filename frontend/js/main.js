@@ -97,24 +97,42 @@ document.addEventListener("DOMContentLoaded", function () {
 
 document.getElementById("newChatBtn").onclick = function () {
     const modal = new bootstrap.Modal(document.getElementById("modelModal"));
-    const select = document.getElementById("modelModalSelect");
-    select.innerHTML = "";
+    const modelSelect = document.getElementById("modelModalSelect");
+    const systemSelect = document.getElementById("systemSelect");
+    const modelContainer = document.getElementById("modelSelectContainer");
+    const growerAIInfo = document.getElementById("growerAIInfo");
+    
+    // Populate model dropdown
+    modelSelect.innerHTML = "";
     modelsCache.forEach(m => {
         const o = document.createElement("option");
         o.value = m.name;
         o.textContent = m.name;
-        select.appendChild(o);
+        modelSelect.appendChild(o);
     });
     
-    // Reset toggle
-    document.getElementById("growerAIToggle").checked = false;
+    // Reset to standard mode
+    systemSelect.value = "standard";
+    modelContainer.style.display = "block";
+    growerAIInfo.style.display = "none";
+    
+    // Handle system selection change
+    systemSelect.onchange = function() {
+        if (systemSelect.value === "growerai") {
+            modelContainer.style.display = "block"; // Still need a model for reasoning
+            growerAIInfo.style.display = "block";
+        } else {
+            modelContainer.style.display = "block";
+            growerAIInfo.style.display = "none";
+        }
+    };
     
     modal.show();
 
     document.getElementById("modelForm").onsubmit = async function (e) {
         e.preventDefault();
-        const modelName = select.value;
-        const useGrowerAI = document.getElementById("growerAIToggle").checked;
+        const modelName = modelSelect.value;
+        const useGrowerAI = systemSelect.value === "growerai";
         modal.hide();
         
         const chat = await createChat(modelName, useGrowerAI);
