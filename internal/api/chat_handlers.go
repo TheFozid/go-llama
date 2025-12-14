@@ -136,7 +136,7 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
         var req struct {
             Title       string `json:"title"`
             ModelName   string `json:"model_name"`
-            UseGrowerAI bool   `json:"use_grower_ai"` // NEW
+            UseGrowerAI bool   `json:"use_grower_ai"`
         }
         if err := c.ShouldBindJSON(&req); err != nil {
             c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -144,8 +144,29 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
         }
 
         modelName := req.ModelName
-        if modelName == "" && len(cfg.LLMs) > 0 {
-            modelName = cfg.LLMs[0].Name
+        
+        // If GrowerAI is selected, force specific model
+        if req.UseGrowerAI {
+            // GrowerAI uses Qwen 2.5 3B - find it in config
+            modelName = "qwen2.5:3b" // Or whatever your Qwen model is named
+            // Alternatively, search for it:
+            found := false
+            for _, m := range cfg.LLMs {
+                if strings.Contains(strings.ToLower(m.Name), "qwen") {
+                    modelName = m.Name
+                    found = true
+                    break
+                }
+            }
+            if !found && len(cfg.LLMs) > 0 {
+                // Fallback to first model if Qwen not found
+                modelName = cfg.LLMs[0].Name
+            }
+        } else {
+            // Standard mode: use provided model or default
+            if modelName == "" && len(cfg.LLMs) > 0 {
+                modelName = cfg.LLMs[0].Name
+            }
         }
 
         // Check model exists
@@ -166,7 +187,7 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
             UserID:       userID,
             ModelName:    modelName,
             LlmSessionID: "",
-            UseGrowerAI:  req.UseGrowerAI, // NEW
+            UseGrowerAI:  req.UseGrowerAI,
             CreatedAt:    time.Now(),
         }
         if err := db.DB.Create(&chatInst).Error; err != nil {
@@ -175,11 +196,11 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
         }
 
         c.JSON(http.StatusCreated, gin.H{
-            "id":           chatInst.ID,
-            "title":        chatInst.Title,
-            "model":        chatInst.ModelName,
-            "use_grower_ai": chatInst.UseGrowerAI, // NEW
-            "createdAt":    chatInst.CreatedAt,
+            "id":            chatInst.ID,
+            "title":         chatInst.Title,
+            "model_name":    chatInst.ModelName,
+            "use_grower_ai": chatInst.UseGrowerAI,
+            "createdAt":     chatInst.CreatedAt,
         })
     }
 }

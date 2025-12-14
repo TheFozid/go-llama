@@ -97,48 +97,83 @@ document.addEventListener("DOMContentLoaded", function () {
 
 document.getElementById("newChatBtn").onclick = function () {
     const modal = new bootstrap.Modal(document.getElementById("modelModal"));
-    const modelSelect = document.getElementById("modelModalSelect");
-    const systemSelect = document.getElementById("systemSelect");
-    const modelContainer = document.getElementById("modelSelectContainer");
-    const growerAIInfo = document.getElementById("growerAIInfo");
+    const systemChoices = document.getElementById("systemChoices");
     
-    // Populate model dropdown
-    modelSelect.innerHTML = "";
+    // Clear previous selections
+    systemChoices.innerHTML = "";
+    
+    // Add GrowerAI option first
+    const growerAIOption = document.createElement("button");
+    growerAIOption.type = "button";
+    growerAIOption.className = "list-group-item list-group-item-action";
+    growerAIOption.innerHTML = `
+        <div class="d-flex w-100 justify-content-between">
+            <h6 class="mb-1">GrowerAI</h6>
+            <small class="text-muted">Perpetual Learning</small>
+        </div>
+        <p class="mb-1"><small>Continuous memory system with Qwen 2.5 3B + embeddings</small></p>
+    `;
+    growerAIOption.dataset.system = "growerai";
+    growerAIOption.dataset.model = ""; // Will be set by backend
+    systemChoices.appendChild(growerAIOption);
+    
+    // Add separator
+    const separator = document.createElement("div");
+    separator.className = "list-group-item disabled";
+    separator.innerHTML = "<small class='text-muted'>Standard LLM Models</small>";
+    systemChoices.appendChild(separator);
+    
+    // Add standard model options
     modelsCache.forEach(m => {
-        const o = document.createElement("option");
-        o.value = m.name;
-        o.textContent = m.name;
-        modelSelect.appendChild(o);
+        const modelOption = document.createElement("button");
+        modelOption.type = "button";
+        modelOption.className = "list-group-item list-group-item-action";
+        modelOption.innerHTML = `
+            <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1">${m.name}</h6>
+            </div>
+        `;
+        modelOption.dataset.system = "standard";
+        modelOption.dataset.model = m.name;
+        systemChoices.appendChild(modelOption);
     });
     
-    // Reset to standard mode
-    systemSelect.value = "standard";
-    modelContainer.style.display = "block";
-    growerAIInfo.style.display = "none";
+    // Handle selection
+    let selectedSystem = null;
+    let selectedModel = null;
     
-    // Handle system selection change
-    systemSelect.onchange = function() {
-        if (systemSelect.value === "growerai") {
-            modelContainer.style.display = "block"; // Still need a model for reasoning
-            growerAIInfo.style.display = "block";
-        } else {
-            modelContainer.style.display = "block";
-            growerAIInfo.style.display = "none";
-        }
-    };
+    systemChoices.querySelectorAll('button[data-system]').forEach(btn => {
+        btn.onclick = function() {
+            // Remove active from all
+            systemChoices.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            // Add active to clicked
+            this.classList.add('active');
+            selectedSystem = this.dataset.system;
+            selectedModel = this.dataset.model;
+        };
+    });
     
     modal.show();
 
     document.getElementById("modelForm").onsubmit = async function (e) {
         e.preventDefault();
-        const modelName = modelSelect.value;
-        const useGrowerAI = systemSelect.value === "growerai";
+        
+        if (!selectedSystem) {
+            alert("Please select a system");
+            return;
+        }
+        
+        const useGrowerAI = selectedSystem === "growerai";
+        // For GrowerAI, backend will determine the model
+        // For standard, use the selected model
+        const modelName = useGrowerAI ? "" : selectedModel;
+        
         modal.hide();
         
         const chat = await createChat(modelName, useGrowerAI);
         if (chat.id) {
             loadChatHistory();
-            switchChat(chat.id, modelName);
+            switchChat(chat.id, chat.model_name || modelName);
         }
     };
 };
