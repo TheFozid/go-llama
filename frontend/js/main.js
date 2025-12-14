@@ -305,49 +305,90 @@ function autoResizePrompt() {
             autoResizePrompt();
         }
 
-        document.getElementById("promptForm").onsubmit = function (e) {
-            e.preventDefault();
-            const input = document.getElementById("promptInput");
-            const prompt = input.value.trim();
-            if (!prompt || !activeChatId) return;
 
-            // Check if the model is still available
-            const isModelAvailable = modelsCache.some(m => m.name === activeModel);
-            if (!isModelAvailable) {
-                // Show model selection modal and force user to pick a new model
-                const modal = new bootstrap.Modal(document.getElementById("modelModal"));
-                modal.show();
+document.getElementById("promptForm").onsubmit = function (e) {
+    e.preventDefault();
+    const input = document.getElementById("promptInput");
+    const prompt = input.value.trim();
+    if (!prompt || !activeChatId) return;
 
-                document.getElementById("modelForm").onsubmit = async function (e2) {
-                    e2.preventDefault();
-                    const newModel = select.value;
-                    modal.hide();
-                    // Update the chat's model on the backend
-                    await apiFetch(`/chats/${activeChatId}`, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ model_name: newModel })
-                    });
-                    activeModel = newModel;
-                    document.getElementById("currentModel").textContent = activeModel;
-                    // Now send the prompt
-                    input.value = "";
-                    autoResizePrompt();
-                    const chatMessagesDiv = document.getElementById("chatMessages");
-                    const userDiv = document.createElement("div");
-                    userDiv.className = "user";
-                    const userBubble = document.createElement("div");
-                    userBubble.className = "message";
-                    userBubble.textContent = prompt;
-                    userDiv.appendChild(userBubble);
-                    chatMessagesDiv.appendChild(userDiv);
-                    chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
-                    startStreamingResponse(prompt);
-                };
-                // Don't send prompt yet, wait for model selection
+    // Check if the model is still available
+    const isModelAvailable = modelsCache.some(m => m.name === activeModel);
+    if (!isModelAvailable) {
+        // Show model selection modal and force user to pick a new model
+        const modal = new bootstrap.Modal(document.getElementById("modelModal"));
+        const systemChoices = document.getElementById("systemChoices");
+        
+        // Clear previous selections
+        systemChoices.innerHTML = "";
+        
+        // Add GrowerAI option
+        const growerAIOption = document.createElement("button");
+        growerAIOption.type = "button";
+        growerAIOption.className = "list-group-item list-group-item-action";
+        growerAIOption.innerHTML = `
+            <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1">🧠 GrowerAI</h6>
+                <small class="text-muted">Perpetual Learning</small>
+            </div>
+        `;
+        growerAIOption.dataset.system = "growerai";
+        growerAIOption.dataset.model = "";
+        systemChoices.appendChild(growerAIOption);
+        
+        // Add separator
+        const separator = document.createElement("div");
+        separator.className = "list-group-item disabled";
+        separator.innerHTML = "<small class='text-muted'>Standard LLM Models</small>";
+        systemChoices.appendChild(separator);
+        
+        // Add standard model options
+        modelsCache.forEach(m => {
+            const modelOption = document.createElement("button");
+            modelOption.type = "button";
+            modelOption.className = "list-group-item list-group-item-action";
+            modelOption.innerHTML = `<h6 class="mb-1">${m.name}</h6>`;
+            modelOption.dataset.system = "standard";
+            modelOption.dataset.model = m.name;
+            systemChoices.appendChild(modelOption);
+        });
+        
+        // Handle selection
+        let selectedSystem = null;
+        let selectedModel = null;
+        
+        systemChoices.querySelectorAll('button[data-system]').forEach(btn => {
+            btn.onclick = function() {
+                systemChoices.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                selectedSystem = this.dataset.system;
+                selectedModel = this.dataset.model;
+            };
+        });
+        
+        modal.show();
+
+        document.getElementById("modelForm").onsubmit = async function (e2) {
+            e2.preventDefault();
+            
+            if (!selectedSystem) {
+                alert("Please select a system");
                 return;
             }
-
+            
+            const newModel = selectedSystem === "growerai" ? "" : selectedModel;
+            modal.hide();
+            
+            // Update the chat's model on the backend
+            await apiFetch(`/chats/${activeChatId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model_name: newModel || modelsCache[0].name })
+            });
+            activeModel = newModel || modelsCache[0].name;
+            document.getElementById("currentModel").textContent = activeModel;
+            
+            // Now send the prompt
             input.value = "";
             autoResizePrompt();
             const chatMessagesDiv = document.getElementById("chatMessages");
@@ -361,6 +402,23 @@ function autoResizePrompt() {
             chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
             startStreamingResponse(prompt);
         };
+        // Don't send prompt yet, wait for model selection
+        return;
+    }
+
+    input.value = "";
+    autoResizePrompt();
+    const chatMessagesDiv = document.getElementById("chatMessages");
+    const userDiv = document.createElement("div");
+    userDiv.className = "user";
+    const userBubble = document.createElement("div");
+    userBubble.className = "message";
+    userBubble.textContent = prompt;
+    userDiv.appendChild(userBubble);
+    chatMessagesDiv.appendChild(userDiv);
+    chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+    startStreamingResponse(prompt);
+};
 
         getChatHistory().then(chats => {
             if (Array.isArray(chats) && chats.length > 0) {
