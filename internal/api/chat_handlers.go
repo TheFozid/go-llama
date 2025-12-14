@@ -528,9 +528,7 @@ if chatInst.UseGrowerAI {
 				webContextBuilder.WriteString(fmt.Sprintf("[%d] %s\n\n", 
 					i+1, src["snippet"]))
 			}
-			webContextBuilder.WriteString("This is the most current information available. Answer based on these search results. Cite sources as [1], [2]."
-			)
-			
+			webContextBuilder.WriteString("This is the most current information available. Answer based on these search results. Cite sources as [1], [2].)
 			webContext := webContextBuilder.String()
 
 			llmMessages = append(llmMessages, map[string]string{
