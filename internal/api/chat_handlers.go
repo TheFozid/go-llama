@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"memory"
 	"log"
 	"net/url"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"go-llama/internal/chat"
 	"go-llama/internal/config"
 	"go-llama/internal/db"
+	"go-llama/internal/memory"
 	"gorm.io/gorm"
 )
 
