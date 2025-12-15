@@ -46,8 +46,9 @@ type Config struct {
 		Password string `json:"password"`
 		DB       int    `json:"db"`
 	} `json:"redis"`
-	LLMs []LLMConfig `json:"llms"`
-	SearxNG struct {
+	LLMs     []LLMConfig    `json:"llms"`
+	GrowerAI GrowerAIConfig `json:"growerai"`
+	SearxNG  struct {
 		URL        string `json:"url"`
 		MaxResults int    `json:"max_results"`
 	} `json:"searxng"`
