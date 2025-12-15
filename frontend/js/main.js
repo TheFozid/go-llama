@@ -305,7 +305,9 @@ document.getElementById("promptForm").onsubmit = function (e) {
     if (!prompt || !activeChatId) return;
 
     // Check if the model is still available
-    const isModelAvailable = modelsCache.some(m => m.name === activeModel);
+    const isGrowerAI = activeModel === "";
+    const isModelAvailable = isGrowerAI || modelsCache.some(m => m.name === activeModel);
+    
     if (!isModelAvailable) {
         // Show model selection modal and force user to pick a new model
         const modal = new bootstrap.Modal(document.getElementById("modelModal"));
