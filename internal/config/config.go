@@ -14,6 +14,23 @@ type LLMConfig struct {
 	ContextSize int    `json:"context_size"`
 }
 
+type GrowerAIConfig struct {
+	ReasoningModel struct {
+		Name        string `json:"name"`
+		URL         string `json:"url"`
+		ContextSize int    `json:"context_size"`
+	} `json:"reasoning_model"`
+	EmbeddingModel struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	} `json:"embedding_model"`
+	Qdrant struct {
+		URL        string `json:"url"`
+		Collection string `json:"collection"`
+		APIKey     string `json:"api_key"`
+	} `json:"qdrant"`
+}
+
 type Config struct {
 	Server struct {
 		Host      string `json:"host"`

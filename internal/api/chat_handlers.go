@@ -34,39 +34,33 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
 	}
 
 	// TODO: This is where the GrowerAI memory system will be integrated
-	// For now, we'll create a placeholder response to make the system functional
+	// For now, we'll create a placeholder response using the configured models
 	
-	// Find the configured model (GrowerAI still uses an LLM for reasoning)
-	var modelConfig *config.LLMConfig
-	for i := range cfg.LLMs {
-		if cfg.LLMs[i].Name == chatInst.ModelName {
-			modelConfig = &cfg.LLMs[i]
-			break
-		}
-	}
-	if modelConfig == nil && len(cfg.LLMs) > 0 {
-		modelConfig = &cfg.LLMs[0]
-		chatInst.ModelName = modelConfig.Name
-	}
-	if modelConfig == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "no models available"})
+	// Validate GrowerAI is configured
+	if cfg.GrowerAI.ReasoningModel.URL == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "GrowerAI not configured"})
 		return
 	}
 
-	// Placeholder: For now, just respond indicating GrowerAI mode is active
-	// Later this will:
-	// 1. Retrieve relevant memories from Qdrant
-	// 2. Inject them into context
-	// 3. Call LLM with enhanced context
-	// 4. Evaluate what to store in memory
-	// 5. Store important information
+	// Placeholder: Later this will:
+	// 1. Retrieve relevant memories from Qdrant (cfg.GrowerAI.Qdrant)
+	// 2. Generate embeddings (cfg.GrowerAI.EmbeddingModel)
+	// 3. Inject them into context
+	// 4. Call LLM with enhanced context (cfg.GrowerAI.ReasoningModel)
+	// 5. Evaluate what to store in memory
+	// 6. Store important information
 	
-	botReply := fmt.Sprintf("🧠 GrowerAI Mode Active\n\nI received your message: \"%s\"\n\n"+
-		"The perpetual learning system is currently in development. When complete, I will:\n"+
-		"- Remember our conversations across sessions\n"+
-		"- Build long-term memory with tiered storage\n"+
-		"- Learn and improve from accumulated experience\n"+
-		"- Develop emergent intelligence over time", content)
+	botReply := fmt.Sprintf("🧠 GrowerAI Mode Active\n\n"+
+		"I received your message: \"%s\"\n\n"+
+		"Configuration:\n"+
+		"- Reasoning: %s\n"+
+		"- Embeddings: %s\n"+
+		"- Vector Store: %s\n\n"+
+		"The perpetual learning system is currently in development.", 
+		content,
+		cfg.GrowerAI.ReasoningModel.Name,
+		cfg.GrowerAI.EmbeddingModel.Name,
+		cfg.GrowerAI.Qdrant.Collection)
 
 	// Save bot message
 	botMsg := chat.Message{
@@ -86,11 +80,10 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
 			"sender":    "bot",
 			"content":   botReply,
 			"createdAt": botMsg.CreatedAt,
-			"grower_ai": true, // Flag to indicate this was a GrowerAI response
+			"grower_ai": true,
 		},
 	})
 }
-
 // Helper to extract user ID from context
 func getUserIDFromContext(c *gin.Context) (uint, bool) {
 	idVal, exists := c.Get("userId")
@@ -145,23 +138,13 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
 
         modelName := req.ModelName
         
-        // If GrowerAI is selected, force specific model
+        // If GrowerAI is selected, use the configured reasoning model
         if req.UseGrowerAI {
-            // GrowerAI uses Qwen 2.5 3B - find it in config
-            modelName = "qwen2.5:3b" // Or whatever your Qwen model is named
-            // Alternatively, search for it:
-            found := false
-            for _, m := range cfg.LLMs {
-                if strings.Contains(strings.ToLower(m.Name), "qwen") {
-                    modelName = m.Name
-                    found = true
-                    break
-                }
+            if cfg.GrowerAI.ReasoningModel.Name == "" {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "GrowerAI not configured"})
+                return
             }
-            if !found && len(cfg.LLMs) > 0 {
-                // Fallback to first model if Qwen not found
-                modelName = cfg.LLMs[0].Name
-            }
+            modelName = cfg.GrowerAI.ReasoningModel.Name
         } else {
             // Standard mode: use provided model or default
             if modelName == "" && len(cfg.LLMs) > 0 {
@@ -169,17 +152,20 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
             }
         }
 
-        // Check model exists
-        modelExists := false
-        for _, m := range cfg.LLMs {
-            if m.Name == modelName {
-                modelExists = true
-                break
+        // For GrowerAI, we don't need to check if model exists in LLMs list
+        // For standard mode, validate model exists
+        if !req.UseGrowerAI {
+            modelExists := false
+            for _, m := range cfg.LLMs {
+                if m.Name == modelName {
+                    modelExists = true
+                    break
+                }
             }
-        }
-        if !modelExists {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "model not available"})
-            return
+            if !modelExists {
+                c.JSON(http.StatusBadRequest, gin.H{"error": "model not available"})
+                return
+            }
         }
 
         chatInst := chat.Chat{
@@ -204,7 +190,6 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
         })
     }
 }
-
 // List all chats for the current user (only chats with at least one user message)
 func ListChatsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {

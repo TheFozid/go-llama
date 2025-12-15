@@ -35,8 +35,28 @@
       "context_size": 4096
     }
   ],
+  "growerai": {
+    "reasoning_model": {
+      "name": "qwen2.5:3b",
+      "url": "http://192.168.1.4:11434/v1/chat/completions",
+      "context_size": 2048
+    },
+    "embedding_model": {
+      "name": "all-minilm-l6-v2",
+      "url": "http://192.168.1.4:11435/v1/embeddings"
+    },
+    "qdrant": {
+      "url": "http://qdrant:6333",
+      "collection": "growerai_memory",
+      "api_key": ""
+    }
+  },
   "searxng": {
     "url": "http://192.168.1.4:8123/search",
     "max_results": 10
+  }
+  "auth": {
+    "token_ttl_minutes": 1440,
+    "revoke_on_logout": true
   }
 }
