@@ -76,10 +76,11 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 	}
 
 	for _, idx := range indexes {
+		fieldType := idx.typ
 		_, err = s.client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: s.collectionName,
 			FieldName:      idx.field,
-			FieldType:      qdrant.NewFieldType(idx.typ),
+			FieldType:      &fieldType,
 			Wait:           boolPtr(true),
 		})
 		if err != nil {
