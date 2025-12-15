@@ -12,7 +12,7 @@ import (
 
 // Storage handles all vector database operations
 type Storage struct {
-	client         qdrant.Client
+	client         *qdrant.Client
 	collectionName string
 }
 
@@ -71,12 +71,17 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		{"tier", qdrant.PayloadSchemaType_Keyword},
 		{"user_id", qdrant.PayloadSchemaType_Keyword},
 		{"is_collective", qdrant.PayloadSchemaType_Bool},
-		{"created_at", qdrant.PayloadSchemaType_Datetime},
+		{"created_at", qdrant.PayloadSchemaType_Integer},
 		{"importance_score", qdrant.PayloadSchemaType_Float},
 	}
 
 	for _, idx := range indexes {
-		err = s.client.CreateFieldIndex(ctx, s.collectionName, idx.field, idx.typ, nil, true)
+		err = s.client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
+			CollectionName: s.collectionName,
+			FieldName:      idx.field,
+			FieldType:      &idx.typ,
+			Wait:           boolPtr(true),
+		})
 		if err != nil {
 			return fmt.Errorf("failed to create index for %s: %w", idx.field, err)
 		}
@@ -112,7 +117,7 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 	}
 
 	point := &qdrant.PointStruct{
-		Id:      qdrant.NewIDNum(uuid.New().ID()),
+		Id:      qdrant.NewIDUUID(uuid.New().String()),
 		Vectors: qdrant.NewVectors(memory.Embedding...),
 		Payload: qdrant.NewValueMap(payload),
 	}
@@ -128,7 +133,6 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 // Search performs semantic search for relevant memories
 func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbedding []float32) ([]RetrievalResult, error) {
 	// Build filter
-	var filter *qdrant.Filter
 	var must []*qdrant.Condition
 
 	if query.UserID != nil && query.IncludePersonal {
@@ -136,13 +140,14 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	}
 
 	if query.IncludeCollective {
-		must = append(must, qdrant.NewMatch("is_collective", true))
+		must = append(must, qdrant.NewMatch("is_collective", "true"))
 	}
 
 	if query.Tier != nil {
 		must = append(must, qdrant.NewMatch("tier", string(*query.Tier)))
 	}
 
+	var filter *qdrant.Filter
 	if len(must) > 0 {
 		filter = &qdrant.Filter{
 			Must: must,
@@ -154,7 +159,7 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 		CollectionName: s.collectionName,
 		Query:          qdrant.NewQuery(queryEmbedding...),
 		Filter:         filter,
-		Limit:          uint64ptr(uint64(query.Limit)),
+		Limit:          uint64Ptr(uint64(query.Limit)),
 		WithPayload:    qdrant.NewWithPayload(true),
 	})
 
@@ -165,7 +170,7 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	// Convert results
 	results := make([]RetrievalResult, 0, len(searchResult))
 	for _, point := range searchResult {
-		if point.Score < query.MinScore {
+		if float64(point.Score) < query.MinScore {
 			continue
 		}
 
@@ -177,13 +182,6 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	}
 
 	return results, nil
-}
-
-// UpdateAccess updates access metadata for a memory
-func (s *Storage) UpdateAccess(ctx context.Context, memoryID string) error {
-	// Implementation for updating access count and timestamp
-	// This is a simplified version - you'd need to fetch, update, and store
-	return nil
 }
 
 // pointToMemory converts a Qdrant point to a Memory struct
@@ -238,6 +236,10 @@ func getFloatFromPayload(payload map[string]*qdrant.Value, key string) float64 {
 	return 0.0
 }
 
-func uint64ptr(v uint64) *uint64 {
+func uint64Ptr(v uint64) *uint64 {
+	return &v
+}
+
+func boolPtr(v bool) *bool {
 	return &v
 }
