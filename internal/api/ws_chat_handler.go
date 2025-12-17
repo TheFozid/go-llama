@@ -849,11 +849,11 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	userIDStr := fmt.Sprintf("%d", userID)
 	query := memory.RetrievalQuery{
 		Query:             content,
-		UserID:            &userIDStr,
+		UserID:            nil,
 		IncludePersonal:   true,
 		IncludeCollective: true,
 		Limit:             5,
-		MinScore:          0.5,
+		MinScore:          0.3,
 	}
 
 	log.Printf("[GrowerAI-WS] Searching memory (user=%s, min_score=0.5)...", userIDStr)
