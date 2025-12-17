@@ -851,7 +851,7 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 		Query:             content,
 		UserID:            nil,
 		IncludePersonal:   true,
-		IncludeCollective: true,
+		IncludeCollective: false,
 		Limit:             5,
 		MinScore:          0.3,
 	}
