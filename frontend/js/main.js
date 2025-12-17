@@ -304,10 +304,26 @@ document.getElementById("promptForm").onsubmit = function (e) {
     const prompt = input.value.trim();
     if (!prompt || !activeChatId) return;
 
-    // Check if the model is still available
-    const isGrowerAI = activeModel === "";
-    const isModelAvailable = isGrowerAI || modelsCache.some(m => m.name === activeModel);
-    
+    // Skip model validation for GrowerAI chats
+    if (window.isGrowerAIChat) {
+        input.value = "";
+        autoResizePrompt();
+        const chatMessagesDiv = document.getElementById("chatMessages");
+        const userDiv = document.createElement("div");
+        userDiv.className = "user";
+        const userBubble = document.createElement("div");
+        userBubble.className = "message";
+        userBubble.textContent = prompt;
+        userDiv.appendChild(userBubble);
+        chatMessagesDiv.appendChild(userDiv);
+        chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+        startStreamingResponse(prompt);
+        return;
+    }
+
+    // Check if the model is still available (for standard LLM chats)
+    const isModelAvailable = modelsCache.some(m => m.name === activeModel);
+
     if (!isModelAvailable) {
         // Show model selection modal and force user to pick a new model
         const modal = new bootstrap.Modal(document.getElementById("modelModal"));
@@ -414,14 +430,15 @@ document.getElementById("promptForm").onsubmit = function (e) {
     startStreamingResponse(prompt);
 };
 
-        getChatHistory().then(chats => {
-            if (Array.isArray(chats) && chats.length > 0) {
-                activeChatId = chats[0].id;
-                activeModel = chats[0].model_name;
-                document.getElementById("currentModel").textContent = activeModel;
-                switchChat(activeChatId, activeModel);
-            }
-        });
+getChatHistory().then(chats => {
+    if (Array.isArray(chats) && chats.length > 0) {
+        activeChatId = chats[0].id;
+        activeModel = chats[0].model_name;
+        window.isGrowerAIChat = chats[0].use_grower_ai || false;
+        document.getElementById("currentModel").textContent = window.isGrowerAIChat ? "🧠 GrowerAI" : activeModel;
+        switchChat(activeChatId, activeModel, window.isGrowerAIChat);
+    }
+});
 
         if (!window.marked) {
             const script = document.createElement("script");
@@ -724,7 +741,7 @@ li.innerHTML = `
 `;
         li.onclick = (e) => {
             if (e.target.classList.contains("edit-title-btn") || e.target.classList.contains("delete-chat-btn")) return;
-            switchChat(chat.id, chat.model_name);
+			switchChat(chat.id, chat.model_name, chat.use_grower_ai);
         };
         li.querySelector(".edit-title-btn").onclick = (e) => {
             e.stopPropagation();
@@ -769,10 +786,12 @@ if (chat.id === activeChatId) {
 }
 window.loadChatHistory = loadChatHistory;
 
-async function switchChat(chatId, modelName) {
+async function switchChat(chatId, modelName, useGrowerAI) {
     activeChatId = chatId;
     activeModel = modelName;
-    document.getElementById("currentModel").textContent = modelName || "";
+    window.isGrowerAIChat = useGrowerAI || false;
+    
+    document.getElementById("currentModel").textContent = useGrowerAI ? "GrowerAI" : (modelName || "");
     const chatMessages = await getChatMessages(chatId);
     renderMessages(chatMessages);
     if (!chatMessages || chatMessages.length === 0) {
