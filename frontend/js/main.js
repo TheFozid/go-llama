@@ -165,7 +165,7 @@ systemChoices.appendChild(growerAIOption);
         const chat = await createChat(modelName, useGrowerAI);
         if (chat.id) {
             loadChatHistory();
-            switchChat(chat.id, chat.model_name || modelName);
+			switchChat(chat.id, chat.model_name || modelName, chat.use_grower_ai || useGrowerAI);
         }
     };
 };
