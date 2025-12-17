@@ -4,6 +4,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,10 @@ type Storage struct {
 
 // NewStorage creates a new storage instance
 func NewStorage(qdrantURL string, collectionName string, apiKey string) (*Storage, error) {
+	// Strip http:// or https:// prefix as Qdrant client doesn't expect it
+	qdrantURL = strings.TrimPrefix(qdrantURL, "http://")
+	qdrantURL = strings.TrimPrefix(qdrantURL, "https://")
+	
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host:   qdrantURL,
 		APIKey: apiKey,
