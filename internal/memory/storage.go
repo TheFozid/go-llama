@@ -19,13 +19,21 @@ type Storage struct {
 
 // NewStorage creates a new storage instance
 func NewStorage(qdrantURL string, collectionName string, apiKey string) (*Storage, error) {
-	// Strip http:// or https:// prefix as Qdrant client doesn't expect it
+	// Strip http:// or https:// prefix and any port
 	qdrantURL = strings.TrimPrefix(qdrantURL, "http://")
 	qdrantURL = strings.TrimPrefix(qdrantURL, "https://")
 	
+	// Remove port if present - we'll set it explicitly
+	host := qdrantURL
+	if idx := strings.Index(qdrantURL, ":"); idx != -1 {
+		host = qdrantURL[:idx]
+	}
+	
 	client, err := qdrant.NewClient(&qdrant.Config{
-		Host:   qdrantURL,
+		Host:   host,
+		Port:   6334,  // gRPC port
 		APIKey: apiKey,
+		UseTLS: false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Qdrant client: %w", err)
