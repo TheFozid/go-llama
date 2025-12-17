@@ -856,7 +856,7 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 		MinScore:          0.3,
 	}
 
-	log.Printf("[GrowerAI-WS] Searching memory (user=%s, min_score=0.5)...", userIDStr)
+	log.Printf("[GrowerAI-WS] Searching memory (user=%s, min_score=0.3)...", userIDStr)
 	results, err := storage.Search(ctx, query, queryEmbedding)
 	if err != nil {
 		log.Printf("[GrowerAI-WS] WARNING: Memory search failed: %v", err)

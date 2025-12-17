@@ -146,16 +146,22 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 
 // Search performs semantic search for relevant memories
 func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbedding []float32) ([]RetrievalResult, error) {
+	log.Printf("[Storage] Search called - Limit: %d, MinScore: %.2f, IncludeCollective: %v", 
+		query.Limit, query.MinScore, query.IncludeCollective)
 	// Build filter
 	var must []*qdrant.Condition
 
 	if query.UserID != nil && query.IncludePersonal {
 		must = append(must, qdrant.NewMatch("user_id", *query.UserID))
+		log.Printf("[Storage] Added user_id filter: %s", *query.UserID)
 	}
 
 	if query.IncludeCollective {
 		must = append(must, qdrant.NewMatch("is_collective", "true"))
+		log.Printf("[Storage] Added is_collective filter")
 	}
+
+	log.Printf("[Storage] Total filter conditions: %d", len(must))
 
 	if query.Tier != nil {
 		must = append(must, qdrant.NewMatch("tier", string(*query.Tier)))
