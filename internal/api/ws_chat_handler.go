@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"go-llama/internal/auth"
 	"go-llama/internal/chat"
+	"go-llama/internal/memory"
 	"go-llama/internal/config"
 	"go-llama/internal/db"
 )
@@ -332,6 +333,13 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 			conn.WriteJSON(map[string]string{"error": "chat not found"})
 			return
 		}
+
+// Check if this is a GrowerAI chat
+if chatInst.UseGrowerAI {
+    // Handle GrowerAI via WebSocket
+    handleGrowerAIWebSocket(conn, cfg, &chatInst, req.Prompt, userID)
+    return
+}
 
 		userMsg := chat.Message{
 			ChatID:    chatInst.ID,
@@ -798,6 +806,177 @@ var geoTokens = map[string]bool{
     "ukraine":true, "ukrainian":true, "kyiv":true,
     "brazil":true, "brazilian":true, "brasilia":true,
 }
+
+// handleGrowerAIWebSocket processes GrowerAI messages via WebSocket with streaming
+func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, content string, userID uint) {
+	log.Printf("[GrowerAI-WS] Processing message from user %d in chat %d", userID, chatInst.ID)
+	
+	if cfg.GrowerAI.ReasoningModel.URL == "" {
+		conn.WriteJSON(map[string]string{"error": "GrowerAI not configured"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Initialize memory components
+	log.Printf("[GrowerAI-WS] Initializing embedder: %s", cfg.GrowerAI.EmbeddingModel.URL)
+	embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+	
+	log.Printf("[GrowerAI-WS] Initializing storage: %s/%s", cfg.GrowerAI.Qdrant.URL, cfg.GrowerAI.Qdrant.Collection)
+	storage, err := memory.NewStorage(
+		cfg.GrowerAI.Qdrant.URL,
+		cfg.GrowerAI.Qdrant.Collection,
+		cfg.GrowerAI.Qdrant.APIKey,
+	)
+	if err != nil {
+		log.Printf("[GrowerAI-WS] ERROR: Failed to initialize storage: %v", err)
+		conn.WriteJSON(map[string]string{"error": "memory system unavailable"})
+		return
+	}
+
+	// Generate embedding for user's message
+	log.Printf("[GrowerAI-WS] Generating embedding for query: %s", truncate(content, 50))
+	queryEmbedding, err := embedder.Embed(ctx, content)
+	if err != nil {
+		log.Printf("[GrowerAI-WS] ERROR: Failed to generate embedding: %v", err)
+		conn.WriteJSON(map[string]string{"error": "embedding generation failed"})
+		return
+	}
+	log.Printf("[GrowerAI-WS] ✓ Generated %d-dimensional embedding", len(queryEmbedding))
+
+	// Search memory for relevant context
+	userIDStr := fmt.Sprintf("%d", userID)
+	query := memory.RetrievalQuery{
+		Query:             content,
+		UserID:            &userIDStr,
+		IncludePersonal:   true,
+		IncludeCollective: true,
+		Limit:             5,
+		MinScore:          0.5,
+	}
+
+	log.Printf("[GrowerAI-WS] Searching memory (user=%s, min_score=0.5)...", userIDStr)
+	results, err := storage.Search(ctx, query, queryEmbedding)
+	if err != nil {
+		log.Printf("[GrowerAI-WS] WARNING: Memory search failed: %v", err)
+		results = []memory.RetrievalResult{}
+	}
+	log.Printf("[GrowerAI-WS] ✓ Found %d relevant memories", len(results))
+
+	// Build context with retrieved memories
+	var contextBuilder strings.Builder
+	contextBuilder.WriteString("You are GrowerAI, an AI system that learns and improves from conversations.\n\n")
+	
+	if len(results) > 0 {
+		contextBuilder.WriteString("=== RELEVANT MEMORIES ===\n")
+		for i, result := range results {
+			log.Printf("[GrowerAI-WS]   Memory %d: score=%.3f, tier=%s, age=%s", 
+				i+1, result.Score, result.Memory.Tier, 
+				time.Since(result.Memory.CreatedAt).Round(time.Minute))
+			contextBuilder.WriteString(fmt.Sprintf("[Memory %d - %.0f%% relevant - from %s ago]\n%s\n\n",
+				i+1,
+				result.Score*100,
+				time.Since(result.Memory.CreatedAt).Round(time.Minute),
+				result.Memory.Content))
+		}
+		contextBuilder.WriteString("=== END MEMORIES ===\n\n")
+	} else {
+		log.Printf("[GrowerAI-WS]   No relevant memories found")
+	}
+
+	contextBuilder.WriteString(fmt.Sprintf("User's current message: %s\n\n", content))
+	contextBuilder.WriteString("Respond naturally, incorporating relevant context from memories if available.")
+
+	// Call LLM with enhanced context (streaming)
+	llmMessages := []map[string]string{
+		{
+			"role":    "system",
+			"content": contextBuilder.String(),
+		},
+	}
+
+	payload := map[string]interface{}{
+		"model":    cfg.GrowerAI.ReasoningModel.Name,
+		"messages": llmMessages,
+		"stream":   true,
+	}
+
+	log.Printf("[GrowerAI-WS] Calling LLM with streaming: %s", cfg.GrowerAI.ReasoningModel.URL)
+	
+	var botResponse string
+	var toksPerSec float64
+	err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
+	if err != nil {
+		log.Printf("[GrowerAI-WS] ERROR: LLM streaming failed: %v", err)
+		conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
+		return
+	}
+
+	log.Printf("[GrowerAI-WS] ✓ LLM response received (%d chars, %.1f tok/s)", len(botResponse), toksPerSec)
+
+	// Evaluate what to store in memory
+	shouldStore := len(content) > 20 && len(botResponse) > 20
+	
+	if shouldStore {
+		log.Printf("[GrowerAI-WS] Evaluating memory storage...")
+		
+		memoryContent := fmt.Sprintf("User asked: %s\nAssistant responded: %s", 
+			content, truncate(botResponse, 200))
+		
+		memEmbedding, err := embedder.Embed(ctx, memoryContent)
+		if err != nil {
+			log.Printf("[GrowerAI-WS] WARNING: Failed to generate memory embedding: %v", err)
+		} else {
+			importanceScore := 0.5
+			if len(content) > 100 {
+				importanceScore += 0.2
+			}
+			if len(results) > 0 {
+				importanceScore += 0.1
+			}
+			
+			mem := &memory.Memory{
+				Content:         memoryContent,
+				Tier:            memory.TierRecent,
+				UserID:          &userIDStr,
+				IsCollective:    false,
+				CreatedAt:       time.Now(),
+				LastAccessedAt:  time.Now(),
+				AccessCount:     0,
+				ImportanceScore: importanceScore,
+				Embedding:       memEmbedding,
+				Metadata: map[string]interface{}{
+					"chat_id": chatInst.ID,
+				},
+			}
+			
+			if err := storage.Store(ctx, mem); err != nil {
+				log.Printf("[GrowerAI-WS] WARNING: Failed to store memory: %v", err)
+			} else {
+				log.Printf("[GrowerAI-WS] ✓ Stored memory (id=%s, importance=%.2f)", 
+					mem.ID, mem.ImportanceScore)
+			}
+		}
+	} else {
+		log.Printf("[GrowerAI-WS] Skipping memory storage (message too short)")
+	}
+
+	// Save bot message to database
+	botResponseWithStats := botResponse + "\n\n_Tokens/sec: " + fmt.Sprintf("%.2f", toksPerSec) + "_"
+	botMsg := chat.Message{
+		ChatID:    chatInst.ID,
+		Sender:    "bot",
+		Content:   botResponseWithStats,
+		CreatedAt: time.Now(),
+	}
+	if err := db.DB.Create(&botMsg).Error; err != nil {
+		log.Printf("[GrowerAI-WS] WARNING: Failed to save bot message: %v", err)
+	}
+
+	log.Printf("[GrowerAI-WS] ✓ Message processing complete")
+}
+
 // Compress long prompts into clean search queries
 func compressForSearch(prompt string) string {
     words := strings.Fields(prompt)
