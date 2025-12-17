@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
