@@ -120,6 +120,7 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"last_accessed_at": memory.LastAccessedAt.Unix(),
 		"access_count":     memory.AccessCount,
 		"importance_score": memory.ImportanceScore,
+		"memory_id":        memory.ID, // Store memory ID for lookups
 	}
 
 	if memory.UserID != nil {
@@ -132,7 +133,7 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 	}
 
 	point := &qdrant.PointStruct{
-		Id:      qdrant.NewIDUUID(uuid.New().String()),
+		Id:      qdrant.NewIDUUID(memory.ID), // Use memory ID as point ID
 		Vectors: qdrant.NewVectors(memory.Embedding...),
 		Payload: qdrant.NewValueMap(payload),
 	}
@@ -262,5 +263,117 @@ func uint64Ptr(v uint64) *uint64 {
 }
 
 func boolPtr(v bool) *bool {
+	return &v
+}
+
+// FindMemoriesForCompression finds memories eligible for compression based on age and tier
+func (s *Storage) FindMemoriesForCompression(ctx context.Context, currentTier MemoryTier, ageDays int, limit int) ([]Memory, error) {
+	cutoffTime := time.Now().AddDate(0, 0, -ageDays).Unix()
+	
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("tier", string(currentTier)),
+			&qdrant.Condition{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "created_at",
+						Range: &qdrant.Range{
+							Lt: floatPtr(float64(cutoffTime)),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.collectionName,
+		Filter:         filter,
+		Limit:          uint32Ptr(uint32(limit)),
+		WithPayload:    qdrant.NewWithPayload(true),
+	})
+	
+	if err != nil {
+		return nil, fmt.Errorf("scroll failed: %w", err)
+	}
+
+	memories := make([]Memory, 0, len(scrollResult))
+	for _, point := range scrollResult {
+		memory := s.pointToMemoryFromScroll(point)
+		memories = append(memories, memory)
+	}
+
+	return memories, nil
+}
+
+// UpdateMemory updates an existing memory in the database
+func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
+	// Find the point ID first by searching with the memory ID stored in metadata
+	// For now, we'll use Upsert which will update if exists
+	// Note: We need the original point ID, which we should store in Memory struct
+	
+	payload := map[string]interface{}{
+		"content":          memory.Content,
+		"compressed_from":  memory.CompressedFrom,
+		"tier":             string(memory.Tier),
+		"is_collective":    memory.IsCollective,
+		"created_at":       memory.CreatedAt.Unix(),
+		"last_accessed_at": memory.LastAccessedAt.Unix(),
+		"access_count":     memory.AccessCount,
+		"importance_score": memory.ImportanceScore,
+		"memory_id":        memory.ID, // Store memory ID in payload for lookups
+	}
+
+	if memory.UserID != nil {
+		payload["user_id"] = *memory.UserID
+	}
+
+	for k, v := range memory.Metadata {
+		payload[k] = v
+	}
+
+	point := &qdrant.PointStruct{
+		Id:      qdrant.NewIDUUID(memory.ID), // Use memory ID as point ID
+		Vectors: qdrant.NewVectors(memory.Embedding...),
+		Payload: qdrant.NewValueMap(payload),
+	}
+
+	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: s.collectionName,
+		Points:         []*qdrant.PointStruct{point},
+	})
+
+	return err
+}
+
+// Helper to convert scroll point to memory
+func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
+	payload := point.Payload
+
+	memory := Memory{
+		ID:              getStringFromPayload(payload, "memory_id"),
+		Content:         getStringFromPayload(payload, "content"),
+		CompressedFrom:  getStringFromPayload(payload, "compressed_from"),
+		Tier:            MemoryTier(getStringFromPayload(payload, "tier")),
+		IsCollective:    getBoolFromPayload(payload, "is_collective"),
+		CreatedAt:       time.Unix(getIntFromPayload(payload, "created_at"), 0),
+		LastAccessedAt:  time.Unix(getIntFromPayload(payload, "last_accessed_at"), 0),
+		AccessCount:     int(getIntFromPayload(payload, "access_count")),
+		ImportanceScore: getFloatFromPayload(payload, "importance_score"),
+		Metadata:        make(map[string]interface{}),
+	}
+
+	if userID := getStringFromPayload(payload, "user_id"); userID != "" {
+		memory.UserID = &userID
+	}
+
+	return memory
+}
+
+func floatPtr(v float64) *float64 {
+	return &v
+}
+
+func uint32Ptr(v uint32) *uint32 {
 	return &v
 }

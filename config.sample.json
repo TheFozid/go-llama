@@ -49,6 +49,21 @@
       "url": "http://qdrant:6333",
       "collection": "growerai_memory",
       "api_key": ""
+    },
+    "compression": {
+      "enabled": true,
+      "model": {
+        "name": "qwen2.5:3b",
+        "url": "http://192.168.1.4:11434/v1/chat/completions"
+      },
+      "schedule_hours": 24,
+      "tier_rules": {
+        "recent_to_medium_days": 7,
+        "medium_to_long_days": 30,
+        "long_to_ancient_days": 180
+      },
+      "importance_modifier": 2,
+      "access_modifier": 1.5
     }
   },
   "searxng": {

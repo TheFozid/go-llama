@@ -29,6 +29,21 @@ type GrowerAIConfig struct {
 		Collection string `json:"collection"`
 		APIKey     string `json:"api_key"`
 	} `json:"qdrant"`
+	Compression struct {
+		Enabled       bool `json:"enabled"`
+		Model         struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		} `json:"model"`
+		ScheduleHours int `json:"schedule_hours"`
+		TierRules     struct {
+			RecentToMediumDays int `json:"recent_to_medium_days"`
+			MediumToLongDays   int `json:"medium_to_long_days"`
+			LongToAncientDays  int `json:"long_to_ancient_days"`
+		} `json:"tier_rules"`
+		ImportanceMod float64 `json:"importance_modifier"`
+		AccessMod     float64 `json:"access_modifier"`
+	} `json:"compression"`
 }
 
 type Config struct {
