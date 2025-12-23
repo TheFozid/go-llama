@@ -614,3 +614,44 @@ func floatPtr(v float64) *float64 {
 func uint32Ptr(v uint32) *uint32 {
 	return &v
 }
+
+// FindUntaggedMemories retrieves memories that haven't been tagged yet (OutcomeTag is empty)
+func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memory, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	// Query for memories where outcome_tag is empty or null
+	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.collection,
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				{
+					ConditionOneOf: &qdrant.Condition_IsEmpty{
+						IsEmpty: &qdrant.IsEmptyCondition{
+							Key: "outcome_tag",
+						},
+					},
+				},
+			},
+		},
+		Limit:      qdrant.PtrOf(uint32(limit)),
+		WithPayload: qdrant.NewWithPayload(true),
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to scroll untagged memories: %w", err)
+	}
+
+	memories := make([]*Memory, 0, len(scrollResult))
+	for _, point := range scrollResult {
+		mem, err := pointToMemoryFromScroll(point)
+		if err != nil {
+			log.Printf("WARNING: Failed to convert point to memory: %v", err)
+			continue
+		}
+		memories = append(memories, mem)
+	}
+
+	return memories, nil
+}

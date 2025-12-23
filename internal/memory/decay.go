@@ -12,6 +12,7 @@ type DecayWorker struct {
 	storage       *Storage
 	compressor    *Compressor
 	embedder      *Embedder
+	tagger        *Tagger
 	scheduleHours int
 	tierRules     TierRules
 	importanceMod float64
@@ -31,6 +32,7 @@ func NewDecayWorker(
 	storage *Storage,
 	compressor *Compressor,
 	embedder *Embedder,
+	tagger *Tagger,
 	scheduleHours int,
 	tierRules TierRules,
 	importanceMod float64,
@@ -40,6 +42,7 @@ func NewDecayWorker(
 		storage:       storage,
 		compressor:    compressor,
 		embedder:      embedder,
+		tagger:        tagger,
 		scheduleHours: scheduleHours,
 		tierRules:     tierRules,
 		importanceMod: importanceMod,
@@ -81,6 +84,15 @@ func (w *DecayWorker) runCompressionCycle() {
 
 	ctx := context.Background()
 
+	// PHASE 1: Tag untagged memories (NEW)
+	log.Println("[DecayWorker] PHASE 1: Tagging untagged memories...")
+	if err := w.tagger.TagMemories(ctx, w.storage); err != nil {
+		log.Printf("[DecayWorker] ERROR in tagging phase: %v", err)
+	}
+
+	// PHASE 2: Compress old memories
+	log.Println("[DecayWorker] PHASE 2: Compressing old memories...")
+
 	// Compress Recent -> Medium
 	w.compressTier(ctx, TierRecent, TierMedium, w.tierRules.RecentToMediumDays)
 
@@ -99,7 +111,7 @@ func (w *DecayWorker) compressTier(ctx context.Context, fromTier, toTier MemoryT
 	log.Printf("[DecayWorker] Processing %s -> %s (base age: %d days)", fromTier, toTier, baseAgeDays)
 
 	// Find memories eligible for compression (limit to 100 per tier per run)
-	memories, err := w.storage.FindMemoriesForCompression(ctx, fromTier, baseAgeDays, 100)
+	memories, err := w.storage.FindMemoriesForCompression(ctx, fromTier, baseAgeDays, w.importanceMod, w.accessMod, 100)
 	if err != nil {
 		log.Printf("[DecayWorker] ERROR: Failed to find memories for compression: %v", err)
 		return
