@@ -154,12 +154,13 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"validation_count":  memory.ValidationCount,
 		
 		// Phase 4: Memory Linking (converted to ListValue)
-		"related_memories":  qdrant.NewValueList(relatedMemoriesList...),
-		"concept_tags":      qdrant.NewValueList(conceptTagsList...),
+		"related_memories":  qdrant.NewValueList(relatedMemoriesList),
+		"concept_tags":      qdrant.NewValueList(conceptTagsList),
 		
 		// Phase 4: Temporal & Conflict
 		"temporal_resolution": memory.TemporalResolution,
-		"conflict_flags":      qdrant.NewValueList(conflictFlagsList...),
+		"conflict_flags":      qdrant.NewValueList(conflictFlagsList),
+		
 		// Phase 4: Principles
 		"principle_rating":  memory.PrincipleRating,
 	}
