@@ -1,6 +1,11 @@
 services:
   postgres:
     image: postgres:16  # Latest stable
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gollama -d gollama"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: always
     environment:
       POSTGRES_DB: SAMPLE
@@ -26,8 +31,10 @@ services:
     ports:
       - "8070:8070"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - ./config.json:/app/config.json
 

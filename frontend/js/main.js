@@ -162,10 +162,15 @@ systemChoices.appendChild(growerAIOption);
         
         modal.hide();
         
+        // Clear GrowerAI message memory when creating new GrowerAI chat
+        if (useGrowerAI) {
+            window.growerAIMessages = [];
+        }
+        
         const chat = await createChat(modelName, useGrowerAI);
         if (chat.id) {
             loadChatHistory();
-			switchChat(chat.id, chat.model_name || modelName, chat.use_grower_ai || useGrowerAI);
+            switchChat(chat.id, chat.model_name || modelName, chat.use_grower_ai || useGrowerAI);
         }
     };
 };
@@ -304,10 +309,11 @@ document.getElementById("promptForm").onsubmit = function (e) {
     const prompt = input.value.trim();
     if (!prompt || !activeChatId) return;
 
-    // Skip model validation for GrowerAI chats
+    // Handle GrowerAI chats (skip model validation, store in memory)
     if (window.isGrowerAIChat) {
         input.value = "";
         autoResizePrompt();
+        
         const chatMessagesDiv = document.getElementById("chatMessages");
         const userDiv = document.createElement("div");
         userDiv.className = "user";
@@ -317,6 +323,14 @@ document.getElementById("promptForm").onsubmit = function (e) {
         userDiv.appendChild(userBubble);
         chatMessagesDiv.appendChild(userDiv);
         chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
+        
+        // Store user message in memory
+        window.growerAIMessages.push({
+            sender: "user",
+            content: prompt,
+            created_at: new Date().toISOString()
+        });
+        
         startStreamingResponse(prompt);
         return;
     }
@@ -451,6 +465,8 @@ getChatHistory().then(chats => {
 // --- Expose globals ---
 window.activeChatId = null;
 window.activeModel = null;
+window.isGrowerAIChat = false;
+window.growerAIMessages = []; // NEW: Store GrowerAI messages in frontend memory
 let modelsCache = [];
 
 // --- Helper to get WebSocket URL ---
@@ -741,7 +757,7 @@ li.innerHTML = `
 `;
         li.onclick = (e) => {
             if (e.target.classList.contains("edit-title-btn") || e.target.classList.contains("delete-chat-btn")) return;
-			switchChat(chat.id, chat.model_name, chat.use_grower_ai);
+            switchChat(chat.id, chat.model_name, chat.use_grower_ai);
         };
         li.querySelector(".edit-title-btn").onclick = (e) => {
             e.stopPropagation();
@@ -769,7 +785,7 @@ li.innerHTML = `
             const remaining = await getChatHistory();
 if (chat.id === activeChatId) {
     if (remaining.length > 0) {
-        switchChat(remaining[0].id, remaining[0].model_name);
+        switchChat(remaining[0].id, remaining[0].model_name, remaining[0].use_grower_ai);
     } else {
         // No remaining chats: clear chat window
         document.getElementById("chatMessages").innerHTML = "";
@@ -777,6 +793,8 @@ if (chat.id === activeChatId) {
         showGreetingIfEmpty();
         activeChatId = null;
         activeModel = null;
+        window.isGrowerAIChat = false;
+        window.growerAIMessages = [];
         document.getElementById("currentModel").textContent = "";
     }
 }
@@ -792,6 +810,24 @@ async function switchChat(chatId, modelName, useGrowerAI) {
     window.isGrowerAIChat = useGrowerAI || false;
     
     document.getElementById("currentModel").textContent = useGrowerAI ? "GrowerAI" : (modelName || "");
+    
+    // For GrowerAI chats: use in-memory messages, skip database
+    if (useGrowerAI) {
+        // Initialize empty message array for this chat if it doesn't exist
+        if (!window.growerAIMessages) {
+            window.growerAIMessages = [];
+        }
+        
+        renderMessages(window.growerAIMessages);
+        
+        // Show greeting only if no messages yet
+        if (window.growerAIMessages.length === 0) {
+            showGreetingIfEmpty();
+        }
+        return;
+    }
+    
+    // For standard LLM chats: fetch from database as normal
     const chatMessages = await getChatMessages(chatId);
     renderMessages(chatMessages);
     if (!chatMessages || chatMessages.length === 0) {
@@ -818,7 +854,7 @@ function startStreamingResponse(prompt) {
         window.lastWS.send(JSON.stringify({
             chatId: window.activeChatId,
             prompt: prompt,
-		web_search: false
+            web_search: false
         }));
         document.getElementById("sendBtn").style.display = "none";
         document.getElementById("stopBtn").style.display = "inline-block";
@@ -903,6 +939,18 @@ if (msg.auto_search) {
 
             renderStreaming(finalMd, window.lastWS.sources, true);
 
+            // For GrowerAI, store bot response in memory instead of reloading
+            if (window.isGrowerAIChat) {
+                window.growerAIMessages.push({
+                    sender: "bot",
+                    content: finalMd,
+                    created_at: new Date().toISOString()
+                });
+                // No need to reload chat history or messages for GrowerAI
+                return;
+            }
+
+            // For standard LLM chats: reload from database
             loadChatHistory();
             getChatMessages(window.activeChatId).then(async (messages) => {
                 renderMessages(messages);
