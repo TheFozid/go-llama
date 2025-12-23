@@ -314,23 +314,17 @@ document.getElementById("promptForm").onsubmit = function (e) {
         input.value = "";
         autoResizePrompt();
         
-        const chatMessagesDiv = document.getElementById("chatMessages");
-        const userDiv = document.createElement("div");
-        userDiv.className = "user";
-        const userBubble = document.createElement("div");
-        userBubble.className = "message";
-        userBubble.textContent = prompt;
-        userDiv.appendChild(userBubble);
-        chatMessagesDiv.appendChild(userDiv);
-        chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
-        
-        // Store user message in memory
+        // Store user message in memory FIRST
         window.growerAIMessages.push({
             sender: "user",
             content: prompt,
             created_at: new Date().toISOString()
         });
         
+        // Re-render all messages from memory (including new user message)
+        renderMessages(window.growerAIMessages);
+        
+        // Start streaming (this will add the thinking placeholder AFTER the messages)
         startStreamingResponse(prompt);
         return;
     }
@@ -937,20 +931,30 @@ if (msg.auto_search) {
             }
             finalMd += `\n\n_Tokens/sec: ${toksPerSec}_`;
 
-            renderStreaming(finalMd, window.lastWS.sources, true);
-
-            // For GrowerAI, store bot response in memory instead of reloading
+            // For GrowerAI: finalize the streaming bubble, then add to memory
             if (window.isGrowerAIChat) {
+                // Render final content in the streaming bubble
+                renderStreaming(finalMd, window.lastWS.sources, true);
+                
+                // Store bot response in memory
                 window.growerAIMessages.push({
                     sender: "bot",
                     content: finalMd,
                     created_at: new Date().toISOString()
                 });
-                // No need to reload chat history or messages for GrowerAI
+                
+                // Remove the streamingBubble ID so it becomes a permanent message
+                const bubble = document.getElementById("streamingBubble");
+                if (bubble) {
+                    bubble.removeAttribute("id");
+                }
+                
                 return;
             }
 
-            // For standard LLM chats: reload from database
+            // For standard LLM chats: render and reload from database
+            renderStreaming(finalMd, window.lastWS.sources, true);
+            
             loadChatHistory();
             getChatMessages(window.activeChatId).then(async (messages) => {
                 renderMessages(messages);
