@@ -122,19 +122,19 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 	}
 
 	// Convert string slices to Qdrant ListValue
-	relatedMemoriesList := make([]*qdrant.Value, len(memory.RelatedMemories))
+	relatedMemoriesValues := make([]*qdrant.Value, len(memory.RelatedMemories))
 	for i, rm := range memory.RelatedMemories {
-		relatedMemoriesList[i] = qdrant.NewValueString(rm)
+		relatedMemoriesValues[i] = qdrant.NewValueString(rm)
 	}
 	
-	conceptTagsList := make([]*qdrant.Value, len(memory.ConceptTags))
+	conceptTagsValues := make([]*qdrant.Value, len(memory.ConceptTags))
 	for i, ct := range memory.ConceptTags {
-		conceptTagsList[i] = qdrant.NewValueString(ct)
+		conceptTagsValues[i] = qdrant.NewValueString(ct)
 	}
 	
-	conflictFlagsList := make([]*qdrant.Value, len(memory.ConflictFlags))
+	conflictFlagsValues := make([]*qdrant.Value, len(memory.ConflictFlags))
 	for i, cf := range memory.ConflictFlags {
-		conflictFlagsList[i] = qdrant.NewValueString(cf)
+		conflictFlagsValues[i] = qdrant.NewValueString(cf)
 	}
 
 	payload := map[string]interface{}{
@@ -154,12 +154,12 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"validation_count":  memory.ValidationCount,
 		
 		// Phase 4: Memory Linking (converted to ListValue)
-		"related_memories":  qdrant.NewValueList(relatedMemoriesList),
-		"concept_tags":      qdrant.NewValueList(conceptTagsList),
+		"related_memories":  &qdrant.ListValue{Values: relatedMemoriesValues},
+		"concept_tags":      &qdrant.ListValue{Values: conceptTagsValues},
 		
 		// Phase 4: Temporal & Conflict
 		"temporal_resolution": memory.TemporalResolution,
-		"conflict_flags":      qdrant.NewValueList(conflictFlagsList),
+		"conflict_flags":      &qdrant.ListValue{Values: conflictFlagsValues},
 		
 		// Phase 4: Principles
 		"principle_rating":  memory.PrincipleRating,
