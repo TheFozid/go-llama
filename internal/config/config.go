@@ -43,7 +43,33 @@ type GrowerAIConfig struct {
 		} `json:"tier_rules"`
 		ImportanceMod float64 `json:"importance_modifier"`
 		AccessMod     float64 `json:"access_modifier"`
+		// Phase 4: Merge windows for cluster-based compression
+		MergeWindowRecent int `json:"merge_window_recent"` // Days
+		MergeWindowMedium int `json:"merge_window_medium"` // Days
+		MergeWindowLong   int `json:"merge_window_long"`   // Days
 	} `json:"compression"`
+	
+	// Phase 4: Principles System (10 Commandments)
+	Principles struct {
+		AdminSlots             []int   `json:"admin_slots"`               // Slots 1-3: admin-controlled
+		AIManagedSlots         []int   `json:"ai_managed_slots"`          // Slots 4-10: AI-managed
+		EvolutionScheduleHours int     `json:"evolution_schedule_hours"`  // How often to evolve principles
+		MinRatingThreshold     float64 `json:"min_rating_threshold"`      // Minimum rating to become a principle
+	} `json:"principles"`
+	
+	// Phase 4: Personality Control
+	Personality struct {
+		GoodBehaviorBias  float64 `json:"good_behavior_bias"`   // 0.0-1.0: prioritize good-tagged memories
+		AllowDisagreement bool    `json:"allow_disagreement"`   // Can AI refuse/challenge requests?
+		TrustLearningRate float64 `json:"trust_learning_rate"`  // How fast trust scores adjust (0.0-1.0)
+	} `json:"personality"`
+	
+	// Phase 4: Memory Linking (Neural Network)
+	Linking struct {
+		SimilarityThreshold float64 `json:"similarity_threshold"` // Min similarity to create link (0.0-1.0)
+		MaxLinksPerMemory   int     `json:"max_links_per_memory"` // Limit graph size
+		LinkDecayRate       float64 `json:"link_decay_rate"`      // How fast unused links weaken
+	} `json:"linking"`
 }
 
 type Config struct {
@@ -93,9 +119,61 @@ func LoadConfig(path string) (*Config, error) {
 			cfgErr = errors.New("jwtSecret must be set in config")
 			return
 		}
+		
+		// Apply defaults for Phase 4 settings if not provided
+		applyGrowerAIDefaults(&c.GrowerAI)
+		
 		cfg = &c
 	})
 	return cfg, cfgErr
+}
+
+// applyGrowerAIDefaults sets sensible defaults for Phase 4 configuration
+func applyGrowerAIDefaults(gai *GrowerAIConfig) {
+	// Compression merge windows
+	if gai.Compression.MergeWindowRecent == 0 {
+		gai.Compression.MergeWindowRecent = 3 // 3 days
+	}
+	if gai.Compression.MergeWindowMedium == 0 {
+		gai.Compression.MergeWindowMedium = 7 // 7 days
+	}
+	if gai.Compression.MergeWindowLong == 0 {
+		gai.Compression.MergeWindowLong = 30 // 30 days
+	}
+	
+	// Principles system
+	if len(gai.Principles.AdminSlots) == 0 {
+		gai.Principles.AdminSlots = []int{1, 2, 3}
+	}
+	if len(gai.Principles.AIManagedSlots) == 0 {
+		gai.Principles.AIManagedSlots = []int{4, 5, 6, 7, 8, 9, 10}
+	}
+	if gai.Principles.EvolutionScheduleHours == 0 {
+		gai.Principles.EvolutionScheduleHours = 168 // 1 week
+	}
+	if gai.Principles.MinRatingThreshold == 0 {
+		gai.Principles.MinRatingThreshold = 0.75
+	}
+	
+	// Personality control
+	if gai.Personality.GoodBehaviorBias == 0 {
+		gai.Personality.GoodBehaviorBias = 0.60 // 60% good bias
+	}
+	if gai.Personality.TrustLearningRate == 0 {
+		gai.Personality.TrustLearningRate = 0.05
+	}
+	// AllowDisagreement defaults to false (zero value)
+	
+	// Memory linking
+	if gai.Linking.SimilarityThreshold == 0 {
+		gai.Linking.SimilarityThreshold = 0.70
+	}
+	if gai.Linking.MaxLinksPerMemory == 0 {
+		gai.Linking.MaxLinksPerMemory = 10
+	}
+	if gai.Linking.LinkDecayRate == 0 {
+		gai.Linking.LinkDecayRate = 0.02
+	}
 }
 
 // GetConfig returns the loaded config (must call LoadConfig first)

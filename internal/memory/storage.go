@@ -87,6 +87,9 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		{"is_collective", qdrant.PayloadSchemaType_Bool},
 		{"created_at", qdrant.PayloadSchemaType_Integer},
 		{"importance_score", qdrant.PayloadSchemaType_Float},
+		// Phase 4: New indexes
+		{"outcome_tag", qdrant.PayloadSchemaType_Keyword},
+		{"trust_score", qdrant.PayloadSchemaType_Float},
 	}
 
 	for _, idx := range indexes {
@@ -111,6 +114,13 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		memory.ID = uuid.New().String()
 	}
 
+	// Validate outcome tag if provided
+	if memory.OutcomeTag != "" {
+		if err := ValidateOutcomeTag(memory.OutcomeTag); err != nil {
+			return fmt.Errorf("invalid outcome tag: %w", err)
+		}
+	}
+
 	payload := map[string]interface{}{
 		"content":          memory.Content,
 		"compressed_from":  memory.CompressedFrom,
@@ -121,6 +131,22 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"access_count":     memory.AccessCount,
 		"importance_score": memory.ImportanceScore,
 		"memory_id":        memory.ID, // Store memory ID for lookups
+		
+		// Phase 4: Good/Bad Tagging
+		"outcome_tag":       memory.OutcomeTag,
+		"trust_score":       memory.TrustScore,
+		"validation_count":  memory.ValidationCount,
+		
+		// Phase 4: Memory Linking (stored as JSON arrays)
+		"related_memories":  memory.RelatedMemories,
+		"concept_tags":      memory.ConceptTags,
+		
+		// Phase 4: Temporal & Conflict
+		"temporal_resolution": memory.TemporalResolution,
+		"conflict_flags":      memory.ConflictFlags,
+		
+		// Phase 4: Principles
+		"principle_rating":  memory.PrincipleRating,
 	}
 
 	if memory.UserID != nil {
@@ -163,11 +189,24 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 		log.Printf("[Storage] Added is_collective filter")
 	}
 
-	log.Printf("[Storage] Total filter conditions: %d", len(must))
-
 	if query.Tier != nil {
 		must = append(must, qdrant.NewMatch("tier", string(*query.Tier)))
 	}
+	
+	// Phase 4: Outcome filter
+	if query.OutcomeFilter != nil {
+		must = append(must, qdrant.NewMatch("outcome_tag", string(*query.OutcomeFilter)))
+		log.Printf("[Storage] Added outcome_tag filter: %s", *query.OutcomeFilter)
+	}
+	
+	// Phase 4: Concept tags filter (match any of the provided tags)
+	if len(query.ConceptTags) > 0 {
+		// For simplicity, we'll search for memories that contain ANY of the concept tags
+		// More sophisticated filtering would require custom logic
+		log.Printf("[Storage] Concept tags filtering requested (not yet fully implemented): %v", query.ConceptTags)
+	}
+
+	log.Printf("[Storage] Total filter conditions: %d", len(must))
 
 	var filter *qdrant.Filter
 	if len(must) > 0 {
@@ -211,6 +250,7 @@ func (s *Storage) pointToMemory(point *qdrant.ScoredPoint) Memory {
 	payload := point.Payload
 
 	memory := Memory{
+		ID:              getStringFromPayload(payload, "memory_id"),
 		Content:         getStringFromPayload(payload, "content"),
 		CompressedFrom:  getStringFromPayload(payload, "compressed_from"),
 		Tier:            MemoryTier(getStringFromPayload(payload, "tier")),
@@ -220,6 +260,22 @@ func (s *Storage) pointToMemory(point *qdrant.ScoredPoint) Memory {
 		AccessCount:     int(getIntFromPayload(payload, "access_count")),
 		ImportanceScore: getFloatFromPayload(payload, "importance_score"),
 		Metadata:        make(map[string]interface{}),
+		
+		// Phase 4: Good/Bad Tagging
+		OutcomeTag:      getStringFromPayload(payload, "outcome_tag"),
+		TrustScore:      getFloatFromPayload(payload, "trust_score"),
+		ValidationCount: int(getIntFromPayload(payload, "validation_count")),
+		
+		// Phase 4: Memory Linking
+		RelatedMemories: getStringSliceFromPayload(payload, "related_memories"),
+		ConceptTags:     getStringSliceFromPayload(payload, "concept_tags"),
+		
+		// Phase 4: Temporal & Conflict
+		TemporalResolution: getStringFromPayload(payload, "temporal_resolution"),
+		ConflictFlags:      getStringSliceFromPayload(payload, "conflict_flags"),
+		
+		// Phase 4: Principles
+		PrincipleRating: getFloatFromPayload(payload, "principle_rating"),
 	}
 
 	if userID := getStringFromPayload(payload, "user_id"); userID != "" {
@@ -256,6 +312,25 @@ func getFloatFromPayload(payload map[string]*qdrant.Value, key string) float64 {
 		return val.GetDoubleValue()
 	}
 	return 0.0
+}
+
+// Phase 4: Helper to extract string slices from payload
+func getStringSliceFromPayload(payload map[string]*qdrant.Value, key string) []string {
+	if val, ok := payload[key]; ok {
+		listValue := val.GetListValue()
+		if listValue == nil {
+			return []string{}
+		}
+		
+		result := make([]string, 0, len(listValue.Values))
+		for _, v := range listValue.Values {
+			if str := v.GetStringValue(); str != "" {
+				result = append(result, str)
+			}
+		}
+		return result
+	}
+	return []string{}
 }
 
 func uint64Ptr(v uint64) *uint64 {
@@ -308,9 +383,12 @@ func (s *Storage) FindMemoriesForCompression(ctx context.Context, currentTier Me
 
 // UpdateMemory updates an existing memory in the database
 func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
-	// Find the point ID first by searching with the memory ID stored in metadata
-	// For now, we'll use Upsert which will update if exists
-	// Note: We need the original point ID, which we should store in Memory struct
+	// Validate outcome tag if provided
+	if memory.OutcomeTag != "" {
+		if err := ValidateOutcomeTag(memory.OutcomeTag); err != nil {
+			return fmt.Errorf("invalid outcome tag: %w", err)
+		}
+	}
 	
 	payload := map[string]interface{}{
 		"content":          memory.Content,
@@ -321,7 +399,23 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 		"last_accessed_at": memory.LastAccessedAt.Unix(),
 		"access_count":     memory.AccessCount,
 		"importance_score": memory.ImportanceScore,
-		"memory_id":        memory.ID, // Store memory ID in payload for lookups
+		"memory_id":        memory.ID,
+		
+		// Phase 4: Good/Bad Tagging
+		"outcome_tag":       memory.OutcomeTag,
+		"trust_score":       memory.TrustScore,
+		"validation_count":  memory.ValidationCount,
+		
+		// Phase 4: Memory Linking
+		"related_memories":  memory.RelatedMemories,
+		"concept_tags":      memory.ConceptTags,
+		
+		// Phase 4: Temporal & Conflict
+		"temporal_resolution": memory.TemporalResolution,
+		"conflict_flags":      memory.ConflictFlags,
+		
+		// Phase 4: Principles
+		"principle_rating":  memory.PrincipleRating,
 	}
 
 	if memory.UserID != nil {
@@ -361,6 +455,22 @@ func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 		AccessCount:     int(getIntFromPayload(payload, "access_count")),
 		ImportanceScore: getFloatFromPayload(payload, "importance_score"),
 		Metadata:        make(map[string]interface{}),
+		
+		// Phase 4: Good/Bad Tagging
+		OutcomeTag:      getStringFromPayload(payload, "outcome_tag"),
+		TrustScore:      getFloatFromPayload(payload, "trust_score"),
+		ValidationCount: int(getIntFromPayload(payload, "validation_count")),
+		
+		// Phase 4: Memory Linking
+		RelatedMemories: getStringSliceFromPayload(payload, "related_memories"),
+		ConceptTags:     getStringSliceFromPayload(payload, "concept_tags"),
+		
+		// Phase 4: Temporal & Conflict
+		TemporalResolution: getStringFromPayload(payload, "temporal_resolution"),
+		ConflictFlags:      getStringSliceFromPayload(payload, "conflict_flags"),
+		
+		// Phase 4: Principles
+		PrincipleRating: getFloatFromPayload(payload, "principle_rating"),
 	}
 
 	if userID := getStringFromPayload(payload, "user_id"); userID != "" {
@@ -368,6 +478,117 @@ func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 	}
 
 	return memory
+}
+
+// Phase 4: FindMemoryClusters finds semantically similar memories for clustering
+func (s *Storage) FindMemoryClusters(ctx context.Context, tier MemoryTier, embedding []float32, similarityThreshold float64, limit int) ([]Memory, error) {
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("tier", string(tier)),
+		},
+	}
+
+	searchResult, err := s.client.Query(ctx, &qdrant.QueryPoints{
+		CollectionName: s.collectionName,
+		Query:          qdrant.NewQuery(embedding...),
+		Filter:         filter,
+		Limit:          uint64Ptr(uint64(limit)),
+		WithPayload:    qdrant.NewWithPayload(true),
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("cluster search failed: %w", err)
+	}
+
+	memories := make([]Memory, 0)
+	for _, point := range searchResult {
+		if float64(point.Score) < similarityThreshold {
+			continue
+		}
+		memory := s.pointToMemory(point)
+		memories = append(memories, memory)
+	}
+
+	return memories, nil
+}
+
+// Phase 4: SearchByConceptTags finds memories with specific concept tags
+func (s *Storage) SearchByConceptTags(ctx context.Context, tags []string, limit int) ([]Memory, error) {
+	// Note: Qdrant doesn't natively support array intersection filtering efficiently
+	// For now, we'll retrieve memories and filter in-memory
+	// A production implementation might use a different strategy
+	
+	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.collectionName,
+		Limit:          uint32Ptr(uint32(limit * 2)), // Get more to filter
+		WithPayload:    qdrant.NewWithPayload(true),
+	})
+	
+	if err != nil {
+		return nil, fmt.Errorf("scroll failed: %w", err)
+	}
+
+	memories := make([]Memory, 0)
+	tagSet := make(map[string]bool)
+	for _, tag := range tags {
+		tagSet[tag] = true
+	}
+
+	for _, point := range scrollResult {
+		memory := s.pointToMemoryFromScroll(point)
+		
+		// Check if memory has any of the requested tags
+		hasTag := false
+		for _, memTag := range memory.ConceptTags {
+			if tagSet[memTag] {
+				hasTag = true
+				break
+			}
+		}
+		
+		if hasTag {
+			memories = append(memories, memory)
+			if len(memories) >= limit {
+				break
+			}
+		}
+	}
+
+	return memories, nil
+}
+
+// Phase 4: UpdateAccessMetadata increments access count and updates timestamp
+func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) error {
+	// Retrieve current memory
+	points, err := s.client.Retrieve(ctx, &qdrant.RetrievePoints{
+		CollectionName: s.collectionName,
+		Ids:            []*qdrant.PointId{qdrant.NewIDUUID(memoryID)},
+		WithPayload:    qdrant.NewWithPayload(true),
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to retrieve memory: %w", err)
+	}
+	
+	if len(points) == 0 {
+		return fmt.Errorf("memory not found: %s", memoryID)
+	}
+	
+	// Update access metadata
+	payload := points[0].Payload
+	accessCount := int(getIntFromPayload(payload, "access_count"))
+	
+	// Use SetPayload to update only specific fields
+	_, err = s.client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+		CollectionName: s.collectionName,
+		Points:         []*qdrant.PointId{qdrant.NewIDUUID(memoryID)},
+		Payload: map[string]*qdrant.Value{
+			"access_count":     qdrant.NewValueInt(int64(accessCount + 1)),
+			"last_accessed_at": qdrant.NewValueInt(time.Now().Unix()),
+		},
+	})
+	
+	return err
 }
 
 func floatPtr(v float64) *float64 {

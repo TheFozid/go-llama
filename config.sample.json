@@ -62,14 +62,33 @@
         "medium_to_long_days": 30,
         "long_to_ancient_days": 180
       },
-      "importance_modifier": 2,
-      "access_modifier": 1.5
+      "importance_modifier": 2.0,
+      "access_modifier": 1.5,
+      "merge_window_recent": 3,
+      "merge_window_medium": 7,
+      "merge_window_long": 30
+    },
+    "principles": {
+      "admin_slots": [1, 2, 3],
+      "ai_managed_slots": [4, 5, 6, 7, 8, 9, 10],
+      "evolution_schedule_hours": 168,
+      "min_rating_threshold": 0.75
+    },
+    "personality": {
+      "good_behavior_bias": 0.60,
+      "allow_disagreement": true,
+      "trust_learning_rate": 0.05
+    },
+    "linking": {
+      "similarity_threshold": 0.70,
+      "max_links_per_memory": 10,
+      "link_decay_rate": 0.02
     }
   },
   "searxng": {
     "url": "http://192.168.1.4:8123/search",
     "max_results": 10
-  }
+  },
   "auth": {
     "token_ttl_minutes": 1440,
     "revoke_on_logout": true
