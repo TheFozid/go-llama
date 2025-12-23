@@ -153,13 +153,13 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"trust_score":       memory.TrustScore,
 		"validation_count":  memory.ValidationCount,
 		
-		// Phase 4: Memory Linking (converted to ListValue)
-		"related_memories":  &qdrant.ListValue{Values: relatedMemoriesValues},
-		"concept_tags":      &qdrant.ListValue{Values: conceptTagsValues},
+		// Phase 4: Memory Linking (converted to ListValue wrapped in Value)
+		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
+		"concept_tags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conceptTagsValues}}},
 		
 		// Phase 4: Temporal & Conflict
 		"temporal_resolution": memory.TemporalResolution,
-		"conflict_flags":      &qdrant.ListValue{Values: conflictFlagsValues},
+		"conflict_flags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conflictFlagsValues}}},
 		
 		// Phase 4: Principles
 		"principle_rating":  memory.PrincipleRating,
@@ -405,6 +405,31 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 			return fmt.Errorf("invalid outcome tag: %w", err)
 		}
 	}
+
+// Validate outcome tag if provided
+	if memory.OutcomeTag != "" {
+		if err := ValidateOutcomeTag(memory.OutcomeTag); err != nil {
+			return fmt.Errorf("invalid outcome tag: %w", err)
+		}
+	}
+	
+	// Convert string slices to Qdrant ListValue (ADD THIS SECTION)
+	relatedMemoriesValues := make([]*qdrant.Value, len(memory.RelatedMemories))
+	for i, rm := range memory.RelatedMemories {
+		relatedMemoriesValues[i] = qdrant.NewValueString(rm)
+	}
+	
+	conceptTagsValues := make([]*qdrant.Value, len(memory.ConceptTags))
+	for i, ct := range memory.ConceptTags {
+		conceptTagsValues[i] = qdrant.NewValueString(ct)
+	}
+	
+	conflictFlagsValues := make([]*qdrant.Value, len(memory.ConflictFlags))
+	for i, cf := range memory.ConflictFlags {
+		conflictFlagsValues[i] = qdrant.NewValueString(cf)
+	}
+	
+	payload := map[string]interface{}{
 	
 	payload := map[string]interface{}{
 		"content":          memory.Content,
@@ -422,13 +447,13 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 		"trust_score":       memory.TrustScore,
 		"validation_count":  memory.ValidationCount,
 		
-		// Phase 4: Memory Linking
-		"related_memories":  memory.RelatedMemories,
-		"concept_tags":      memory.ConceptTags,
+		// Phase 4: Memory Linking (converted to ListValue wrapped in Value)
+		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
+		"concept_tags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conceptTagsValues}}},
 		
 		// Phase 4: Temporal & Conflict
 		"temporal_resolution": memory.TemporalResolution,
-		"conflict_flags":      memory.ConflictFlags,
+		"conflict_flags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conflictFlagsValues}}},
 		
 		// Phase 4: Principles
 		"principle_rating":  memory.PrincipleRating,
