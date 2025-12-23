@@ -111,7 +111,7 @@ func (w *DecayWorker) compressTier(ctx context.Context, fromTier, toTier MemoryT
 	log.Printf("[DecayWorker] Processing %s -> %s (base age: %d days)", fromTier, toTier, baseAgeDays)
 
 	// Find memories eligible for compression (limit to 100 per tier per run)
-	memories, err := w.storage.FindMemoriesForCompression(ctx, fromTier, baseAgeDays, w.importanceMod, w.accessMod, 100)
+	memories, err := w.storage.FindMemoriesForCompression(ctx, fromTier, baseAgeDays, 100)
 	if err != nil {
 		log.Printf("[DecayWorker] ERROR: Failed to find memories for compression: %v", err)
 		return

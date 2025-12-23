@@ -623,7 +623,7 @@ func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memor
 
 	// Query for memories where outcome_tag is empty or null
 	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: s.collection,
+		CollectionName: s.collectionName,  // FIXED: was s.collection
 		Filter: &qdrant.Filter{
 			Must: []*qdrant.Condition{
 				{
@@ -645,12 +645,8 @@ func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memor
 
 	memories := make([]*Memory, 0, len(scrollResult))
 	for _, point := range scrollResult {
-		mem, err := pointToMemoryFromScroll(point)
-		if err != nil {
-			log.Printf("WARNING: Failed to convert point to memory: %v", err)
-			continue
-		}
-		memories = append(memories, mem)
+		mem := s.pointToMemoryFromScroll(point)  // FIXED: now calls as method, returns Memory not error
+		memories = append(memories, &mem)        // FIXED: take address since it returns Memory not *Memory
 	}
 
 	return memories, nil
