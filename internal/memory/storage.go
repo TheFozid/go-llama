@@ -121,6 +121,22 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		}
 	}
 
+	// Convert string slices to Qdrant ListValue
+	relatedMemoriesList := make([]*qdrant.Value, len(memory.RelatedMemories))
+	for i, rm := range memory.RelatedMemories {
+		relatedMemoriesList[i] = qdrant.NewValueString(rm)
+	}
+	
+	conceptTagsList := make([]*qdrant.Value, len(memory.ConceptTags))
+	for i, ct := range memory.ConceptTags {
+		conceptTagsList[i] = qdrant.NewValueString(ct)
+	}
+	
+	conflictFlagsList := make([]*qdrant.Value, len(memory.ConflictFlags))
+	for i, cf := range memory.ConflictFlags {
+		conflictFlagsList[i] = qdrant.NewValueString(cf)
+	}
+
 	payload := map[string]interface{}{
 		"content":          memory.Content,
 		"compressed_from":  memory.CompressedFrom,
@@ -130,21 +146,20 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"last_accessed_at": memory.LastAccessedAt.Unix(),
 		"access_count":     memory.AccessCount,
 		"importance_score": memory.ImportanceScore,
-		"memory_id":        memory.ID, // Store memory ID for lookups
+		"memory_id":        memory.ID,
 		
 		// Phase 4: Good/Bad Tagging
 		"outcome_tag":       memory.OutcomeTag,
 		"trust_score":       memory.TrustScore,
 		"validation_count":  memory.ValidationCount,
 		
-		// Phase 4: Memory Linking (stored as JSON arrays)
-		"related_memories":  memory.RelatedMemories,
-		"concept_tags":      memory.ConceptTags,
+		// Phase 4: Memory Linking (converted to ListValue)
+		"related_memories":  qdrant.NewValueList(relatedMemoriesList...),
+		"concept_tags":      qdrant.NewValueList(conceptTagsList...),
 		
 		// Phase 4: Temporal & Conflict
 		"temporal_resolution": memory.TemporalResolution,
-		"conflict_flags":      memory.ConflictFlags,
-		
+		"conflict_flags":      qdrant.NewValueList(conflictFlagsList...),
 		// Phase 4: Principles
 		"principle_rating":  memory.PrincipleRating,
 	}
