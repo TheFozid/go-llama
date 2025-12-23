@@ -405,15 +405,8 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 			return fmt.Errorf("invalid outcome tag: %w", err)
 		}
 	}
-
-// Validate outcome tag if provided
-	if memory.OutcomeTag != "" {
-		if err := ValidateOutcomeTag(memory.OutcomeTag); err != nil {
-			return fmt.Errorf("invalid outcome tag: %w", err)
-		}
-	}
 	
-	// Convert string slices to Qdrant ListValue (ADD THIS SECTION)
+	// Convert string slices to Qdrant ListValue
 	relatedMemoriesValues := make([]*qdrant.Value, len(memory.RelatedMemories))
 	for i, rm := range memory.RelatedMemories {
 		relatedMemoriesValues[i] = qdrant.NewValueString(rm)
@@ -428,8 +421,6 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 	for i, cf := range memory.ConflictFlags {
 		conflictFlagsValues[i] = qdrant.NewValueString(cf)
 	}
-	
-	payload := map[string]interface{}{
 	
 	payload := map[string]interface{}{
 		"content":          memory.Content,
