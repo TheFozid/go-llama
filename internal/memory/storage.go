@@ -143,16 +143,16 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"compressed_from":  qdrant.NewValueString(memory.CompressedFrom),
 		"tier":             qdrant.NewValueString(string(memory.Tier)),
 		"is_collective":    qdrant.NewValueBool(memory.IsCollective),
-		"created_at":       qdrant.NewValueInteger(memory.CreatedAt.Unix()),
-		"last_accessed_at": qdrant.NewValueInteger(memory.LastAccessedAt.Unix()),
-		"access_count":     qdrant.NewValueInteger(int64(memory.AccessCount)),
+		"created_at":       qdrant.NewValueInt(memory.CreatedAt.Unix()),
+		"last_accessed_at": qdrant.NewValueInt(memory.LastAccessedAt.Unix()),
+		"access_count":     qdrant.NewValueInt(int64(memory.AccessCount)),
 		"importance_score": qdrant.NewValueDouble(memory.ImportanceScore),
 		"memory_id":        qdrant.NewValueString(memory.ID),
 		
 		// Phase 4: Good/Bad Tagging
 		"outcome_tag":       qdrant.NewValueString(memory.OutcomeTag),
 		"trust_score":       qdrant.NewValueDouble(memory.TrustScore),
-		"validation_count":  qdrant.NewValueInteger(int64(memory.ValidationCount)),
+		"validation_count":  qdrant.NewValueInt(int64(memory.ValidationCount)),
 		
 		// Phase 4: Memory Linking
 		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
@@ -429,16 +429,16 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 		"compressed_from":  qdrant.NewValueString(memory.CompressedFrom),
 		"tier":             qdrant.NewValueString(string(memory.Tier)),
 		"is_collective":    qdrant.NewValueBool(memory.IsCollective),
-		"created_at":       qdrant.NewValueInteger(memory.CreatedAt.Unix()),
-		"last_accessed_at": qdrant.NewValueInteger(memory.LastAccessedAt.Unix()),
-		"access_count":     qdrant.NewValueInteger(int64(memory.AccessCount)),
+		"created_at":       qdrant.NewValueInt(memory.CreatedAt.Unix()),
+		"last_accessed_at": qdrant.NewValueInt(memory.LastAccessedAt.Unix()),
+		"access_count":     qdrant.NewValueInt(int64(memory.AccessCount)),
 		"importance_score": qdrant.NewValueDouble(memory.ImportanceScore),
 		"memory_id":        qdrant.NewValueString(memory.ID),
 		
 		// Phase 4: Good/Bad Tagging
 		"outcome_tag":       qdrant.NewValueString(memory.OutcomeTag),
 		"trust_score":       qdrant.NewValueDouble(memory.TrustScore),
-		"validation_count":  qdrant.NewValueInteger(int64(memory.ValidationCount)),
+		"validation_count":  qdrant.NewValueInt(int64(memory.ValidationCount)),
 		
 		// Phase 4: Memory Linking
 		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
