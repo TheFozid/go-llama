@@ -35,28 +35,37 @@ func main() {
 		if err != nil {
 			log.Printf("[Main] WARNING: Failed to initialize storage for compression: %v", err)
 		} else {
-			compressor := memory.NewCompressor(
-				cfg.GrowerAI.Compression.Model.URL,
-				cfg.GrowerAI.Compression.Model.Name,
-			)
-			
-			embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
-			
-			tierRules := memory.TierRules{
-				RecentToMediumDays: cfg.GrowerAI.Compression.TierRules.RecentToMediumDays,
-				MediumToLongDays:   cfg.GrowerAI.Compression.TierRules.MediumToLongDays,
-				LongToAncientDays:  cfg.GrowerAI.Compression.TierRules.LongToAncientDays,
-			}
-			
-			worker := memory.NewDecayWorker(
-				storage,
-				compressor,
-				embedder,
-				cfg.GrowerAI.Compression.ScheduleHours,
-				tierRules,
-				cfg.GrowerAI.Compression.ImportanceMod,
-				cfg.GrowerAI.Compression.AccessMod,
-			)
+
+		compressor := memory.NewCompressor(
+			cfg.GrowerAI.Compression.Model.URL,
+			cfg.GrowerAI.Compression.Model.Name,
+		)
+		
+		embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+		
+		// NEW: Initialize tagger (uses same LLM as compressor)
+		tagger := memory.NewTagger(
+			cfg.GrowerAI.Compression.Model.URL,
+			cfg.GrowerAI.Compression.Model.Name,
+			100, // batch size
+		)
+		
+		tierRules := memory.TierRules{
+			RecentToMediumDays: cfg.GrowerAI.Compression.TierRules.RecentToMediumDays,
+			MediumToLongDays:   cfg.GrowerAI.Compression.TierRules.MediumToLongDays,
+			LongToAncientDays:  cfg.GrowerAI.Compression.TierRules.LongToAncientDays,
+		}
+		
+		worker := memory.NewDecayWorker(
+			storage,
+			compressor,
+			embedder,
+			tagger,  // NEW: Pass tagger as 4th argument
+			cfg.GrowerAI.Compression.ScheduleHours,
+			tierRules,
+			cfg.GrowerAI.Compression.ImportanceMod,
+			cfg.GrowerAI.Compression.AccessMod,
+		)
 			
 			// Start worker in background goroutine
 			go worker.Start()
