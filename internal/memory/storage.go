@@ -559,36 +559,52 @@ func (s *Storage) SearchByConceptTags(ctx context.Context, tags []string, limit 
 
 // Phase 4: UpdateAccessMetadata increments access count and updates timestamp
 func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) error {
-	// Retrieve current memory
-	points, err := s.client.Retrieve(ctx, &qdrant.RetrievePoints{
+	// We need to read the full memory, update it, and write it back
+	// This is less efficient but works with the current Qdrant client API
+	
+	// First, search for the memory by ID stored in payload
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("memory_id", memoryID),
+		},
+	}
+
+	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
 		CollectionName: s.collectionName,
-		Ids:            []*qdrant.PointId{qdrant.NewIDUUID(memoryID)},
+		Filter:         filter,
+		Limit:          uint32Ptr(1),
 		WithPayload:    qdrant.NewWithPayload(true),
-	})
-	
-	if err != nil {
-		return fmt.Errorf("failed to retrieve memory: %w", err)
-	}
-	
-	if len(points) == 0 {
-		return fmt.Errorf("memory not found: %s", memoryID)
-	}
-	
-	// Update access metadata
-	payload := points[0].Payload
-	accessCount := int(getIntFromPayload(payload, "access_count"))
-	
-	// Use SetPayload to update only specific fields
-	_, err = s.client.SetPayload(ctx, &qdrant.SetPayloadPoints{
-		CollectionName: s.collectionName,
-		Points:         []*qdrant.PointId{qdrant.NewIDUUID(memoryID)},
-		Payload: map[string]*qdrant.Value{
-			"access_count":     qdrant.NewValueInt(int64(accessCount + 1)),
-			"last_accessed_at": qdrant.NewValueInt(time.Now().Unix()),
+		WithVectors:    &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: true,
+			},
 		},
 	})
 	
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to find memory: %w", err)
+	}
+	
+	if len(scrollResult) == 0 {
+		return fmt.Errorf("memory not found: %s", memoryID)
+	}
+	
+	// Convert to Memory struct
+	point := scrollResult[0]
+	memory := s.pointToMemoryFromScroll(point)
+	
+	// Get vectors from point
+	vectors := point.Vectors.GetVector()
+	if vectors != nil {
+		memory.Embedding = vectors.Data
+	}
+	
+	// Update access metadata
+	memory.AccessCount++
+	memory.LastAccessedAt = time.Now()
+	
+	// Write back using UpdateMemory (which uses Upsert)
+	return s.UpdateMemory(ctx, &memory)
 }
 
 func floatPtr(v float64) *float64 {
