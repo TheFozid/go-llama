@@ -864,6 +864,14 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	}
 	log.Printf("[GrowerAI-WS] ✓ Found %d relevant memories", len(results))
 
+	// NEW: Update access metadata for retrieved memories
+	for _, result := range results {
+		if err := storage.UpdateAccessMetadata(ctx, result.Memory.ID); err != nil {
+			log.Printf("[GrowerAI-WS] WARNING: Failed to update access metadata for memory %s: %v", 
+				result.Memory.ID, err)
+		}
+	}
+
 	// Build context with retrieved memories
 	var contextBuilder strings.Builder
 	contextBuilder.WriteString("You are GrowerAI, an AI system that learns and improves from conversations.\n\n")

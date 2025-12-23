@@ -48,10 +48,12 @@ git add .
 git commit -m "$MSG" || echo "No changes to commit"
 git tag "v$VERSION"
 
-# Build + push images for AMD64 + ARM64
+
+#  --platform linux/amd64,linux/arm64 \
+# Build + push images
 echo "🚀 Building & pushing multi-arch images..."
 docker buildx build \
-  --platform linux/amd64,linux/arm64 \
+  --platform linux/amd64 \
   --cache-from type=registry,ref="$IMAGE_BASE:buildcache" \
   --cache-to type=registry,ref="$IMAGE_BASE:buildcache",mode=max \
   --build-arg BUILDKIT_INLINE_CACHE=1 \
