@@ -205,11 +205,3 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 
 	log.Printf("[GrowerAI-WS] ✓ Message processing complete")
 }
-
-// truncate helper for logging
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -120,14 +121,6 @@ func WSChatHandler(cfg *config.Config) gin.HandlerFunc {
 
 // --- Helper functions ---
 
-func getUserIDFromContext(c *gin.Context) (uint, bool) {
-	val, exists := c.Get("userId")
-	if !exists {
-		return 0, false
-	}
-	userID, ok := val.(uint)
-	return userID, ok
-}
 
 // extractSiteFilter extracts a single site filter from the prompt for search optimization.
 // Priority: actual URL > text-based site reference (e.g., "on reddit")
