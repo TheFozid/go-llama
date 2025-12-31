@@ -4,6 +4,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -209,8 +210,8 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 	var goodMemories []*Memory
 	
 	// Query Qdrant directly for good memories
-	scrollResult, err := storage.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: storage.collectionName,
+scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+	CollectionName: storage.CollectionName,
 		Filter: &qdrant.Filter{
 			Must: []*qdrant.Condition{
 				qdrant.NewMatch("outcome_tag", "good"),
