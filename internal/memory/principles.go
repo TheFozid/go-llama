@@ -2,10 +2,13 @@
 package memory
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/qdrant/go-client/qdrant"
 	"gorm.io/gorm"
 )
 
@@ -105,6 +108,10 @@ func LoadPrinciples(db *gorm.DB) ([]Principle, error) {
 func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) string {
 	var builder strings.Builder
 
+	// Add current date/time context (CRITICAL for temporal awareness)
+	currentTime := time.Now().UTC().Format("2006-01-02 15:04")
+	builder.WriteString(fmt.Sprintf("Today is %s UTC.\n\n", currentTime))
+
 	builder.WriteString("You are GrowerAI, an AI system that learns and improves from experience.\n\n")
 	builder.WriteString("=== YOUR CORE PRINCIPLES ===\n")
 	builder.WriteString("These principles guide all your responses and decisions:\n\n")
@@ -191,29 +198,191 @@ type PrincipleCandidate struct {
 }
 
 // ExtractPrinciples analyzes memory patterns to propose new principles
-// This is called by the background worker (future implementation)
+// This is called by the background worker
 func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64) ([]PrincipleCandidate, error) {
-	// TODO: Phase 4C - Background worker implementation
-	// This function will:
-	// 1. Analyze memories tagged as "good" across all users
-	// 2. Identify repeated patterns and successful strategies
-	// 3. Propose new principles based on validated patterns
-	// 4. Return candidates sorted by rating (highest first)
+	ctx := context.Background()
 	
-	// For now, return empty - will implement in worker phase
-	return []PrincipleCandidate{}, nil
+	log.Printf("[Principles] Extracting principle candidates from memory patterns...")
+	
+	// Step 1: Find all "good" memories across all users
+	// We use SearchByConceptTags with empty tags to get memories, then filter by outcome
+	var goodMemories []*Memory
+	
+	// Query Qdrant directly for good memories
+	scrollResult, err := storage.client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: storage.collectionName,
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				qdrant.NewMatch("outcome_tag", "good"),
+			},
+		},
+		Limit:       qdrant.PtrOf(uint32(500)), // Analyze up to 500 good memories
+		WithPayload: qdrant.NewWithPayload(true),
+	})
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to find good memories: %w", err)
+	}
+	
+	for _, point := range scrollResult {
+		mem := storage.pointToMemoryFromScroll(point)
+		goodMemories = append(goodMemories, &mem)
+	}
+	
+	if len(goodMemories) == 0 {
+		log.Printf("[Principles] No 'good' memories found to analyze")
+		return []PrincipleCandidate{}, nil
+	}
+	
+	log.Printf("[Principles] Analyzing %d 'good' memories for patterns...", len(goodMemories))
+	
+	// Step 2: Group memories by concept tags to find patterns
+	conceptFrequency := make(map[string][]string) // concept -> list of memory IDs
+	
+	for _, mem := range goodMemories {
+		for _, tag := range mem.ConceptTags {
+			conceptFrequency[tag] = append(conceptFrequency[tag], mem.ID)
+		}
+	}
+	
+	// Step 3: Find frequently occurring concept combinations
+	type ConceptPattern struct {
+		Concepts  []string
+		Frequency int
+		Memories  []string
+	}
+	
+	var patterns []ConceptPattern
+	
+	// Find concepts that appear in at least 5 different memories
+	for concept, memoryIDs := range conceptFrequency {
+		if len(memoryIDs) >= 5 {
+			patterns = append(patterns, ConceptPattern{
+				Concepts:  []string{concept},
+				Frequency: len(memoryIDs),
+				Memories:  memoryIDs,
+			})
+		}
+	}
+	
+	if len(patterns) == 0 {
+		log.Printf("[Principles] No recurring patterns found (need at least 5 occurrences)")
+		return []PrincipleCandidate{}, nil
+	}
+	
+	log.Printf("[Principles] Found %d recurring patterns", len(patterns))
+	
+	// Step 4: Use LLM to generate principle candidates from top patterns
+	// Sort patterns by frequency (highest first)
+	sort.Slice(patterns, func(i, j int) bool {
+		return patterns[i].Frequency > patterns[j].Frequency
+	})
+	
+	// Take top 10 patterns
+	if len(patterns) > 10 {
+		patterns = patterns[:10]
+	}
+	
+	candidates := []PrincipleCandidate{}
+	
+	// For now, generate simple principles from patterns
+	// TODO: Could use LLM here to generate more sophisticated principles
+	for _, pattern := range patterns {
+		// Calculate rating based on frequency and validation
+		rating := float64(pattern.Frequency) / float64(len(goodMemories))
+		if rating > 1.0 {
+			rating = 1.0
+		}
+		
+		// Only include if meets minimum threshold
+		if rating < minRatingThreshold {
+			continue
+		}
+		
+		// Generate principle text from concept
+		principleText := fmt.Sprintf("When working with %s, apply strategies that have proven successful in past interactions.", 
+			strings.Join(pattern.Concepts, " and "))
+		
+		candidates = append(candidates, PrincipleCandidate{
+			Content:   principleText,
+			Rating:    rating,
+			Evidence:  pattern.Memories,
+			Frequency: pattern.Frequency,
+		})
+	}
+	
+	log.Printf("[Principles] Generated %d principle candidates (threshold: %.2f)", 
+		len(candidates), minRatingThreshold)
+	
+	return candidates, nil
 }
 
 // EvolvePrinciples updates AI-managed slots (4-10) with highest-rated candidates
 // Only replaces principles if new candidates have higher ratings
 func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThreshold float64) error {
-	// TODO: Phase 4C - Background worker implementation
-	// This function will:
-	// 1. Load current AI-managed principles (slots 4-10)
-	// 2. Compare with candidates
-	// 3. Replace lower-rated principles with higher-rated candidates
-	// 4. Ensure rating >= minRatingThreshold
+	if len(candidates) == 0 {
+		return nil
+	}
 	
-	// For now, no-op - will implement in worker phase
+	log.Printf("[Principles] Evolving AI-managed principles (slots 4-10)...")
+	
+	// Load current AI-managed principles
+	var currentPrinciples []Principle
+	if err := db.Where("is_admin = ?", false).Order("slot ASC").Find(&currentPrinciples).Error; err != nil {
+		return fmt.Errorf("failed to load AI-managed principles: %w", err)
+	}
+	
+	// Sort candidates by rating (highest first)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Rating > candidates[j].Rating
+	})
+	
+	updatedCount := 0
+	
+	// Try to fill empty slots first, then replace lower-rated principles
+	for i, principle := range currentPrinciples {
+		if i >= len(candidates) {
+			break // No more candidates
+		}
+		
+		candidate := candidates[i]
+		
+		// Skip if candidate doesn't meet minimum threshold
+		if candidate.Rating < minRatingThreshold {
+			continue
+		}
+		
+		// Update if slot is empty OR candidate has higher rating
+		if principle.Content == "" || candidate.Rating > principle.Rating {
+			updates := map[string]interface{}{
+				"content":          candidate.Content,
+				"rating":           candidate.Rating,
+				"validation_count": candidate.Frequency,
+				"updated_at":       time.Now(),
+			}
+			
+			if err := db.Model(&Principle{}).Where("slot = ?", principle.Slot).Updates(updates).Error; err != nil {
+				log.Printf("[Principles] ERROR: Failed to update slot %d: %v", principle.Slot, err)
+				continue
+			}
+			
+			if principle.Content == "" {
+				log.Printf("[Principles] ✓ Filled empty slot %d: %.60s... (rating: %.2f)",
+					principle.Slot, candidate.Content, candidate.Rating)
+			} else {
+				log.Printf("[Principles] ✓ Updated slot %d: %.60s... (old rating: %.2f, new rating: %.2f)",
+					principle.Slot, candidate.Content, principle.Rating, candidate.Rating)
+			}
+			
+			updatedCount++
+		}
+	}
+	
+	if updatedCount == 0 {
+		log.Printf("[Principles] No principles updated (existing principles have higher ratings)")
+	} else {
+		log.Printf("[Principles] ✓ Evolved %d AI-managed principles", updatedCount)
+	}
+	
 	return nil
 }

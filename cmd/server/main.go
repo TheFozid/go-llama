@@ -70,7 +70,10 @@ func main() {
 				compressor,
 				embedder,
 				tagger,
+				db.DB, // Pass database connection for principles
 				cfg.GrowerAI.Compression.ScheduleHours,
+				cfg.GrowerAI.Principles.EvolutionScheduleHours,  // Principle evolution schedule
+				cfg.GrowerAI.Principles.MinRatingThreshold,      // Minimum rating for principles
 				tierRules,
 				cfg.GrowerAI.Compression.ImportanceMod,
 				cfg.GrowerAI.Compression.AccessMod,
@@ -81,6 +84,8 @@ func main() {
 			
 			log.Printf("[Main] ✓ GrowerAI compression worker started (schedule: every %d hours)", 
 				cfg.GrowerAI.Compression.ScheduleHours)
+			log.Printf("[Main] ✓ Principle evolution worker started (schedule: every %d hours)",
+				cfg.GrowerAI.Principles.EvolutionScheduleHours)
 		}
 	} else {
 		log.Printf("[Main] GrowerAI compression disabled in config")

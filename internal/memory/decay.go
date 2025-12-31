@@ -1,3 +1,4 @@
+// internal/memory/decay.go
 package memory
 
 import (
@@ -5,19 +6,25 @@ import (
 	"log"
 	"math"
 	"time"
+
+	"gorm.io/gorm"
 )
 
-// DecayWorker manages the background compression process
+// DecayWorker manages the background compression and principle evolution process
 type DecayWorker struct {
-	storage       *Storage
-	compressor    *Compressor
-	embedder      *Embedder
-	tagger        *Tagger
-	scheduleHours int
-	tierRules     TierRules
-	importanceMod float64
-	accessMod     float64
-	stopChan      chan struct{}
+	storage                *Storage
+	compressor             *Compressor
+	embedder               *Embedder
+	tagger                 *Tagger
+	db                     *gorm.DB
+	scheduleHours          int
+	principleScheduleHours int
+	minRatingThreshold     float64
+	tierRules              TierRules
+	importanceMod          float64
+	accessMod              float64
+	stopChan               chan struct{}
+	lastPrincipleEvolution time.Time
 }
 
 // TierRules defines age thresholds for tier transitions
@@ -33,28 +40,36 @@ func NewDecayWorker(
 	compressor *Compressor,
 	embedder *Embedder,
 	tagger *Tagger,
+	db *gorm.DB,
 	scheduleHours int,
+	principleScheduleHours int,
+	minRatingThreshold float64,
 	tierRules TierRules,
 	importanceMod float64,
 	accessMod float64,
 ) *DecayWorker {
 	return &DecayWorker{
-		storage:       storage,
-		compressor:    compressor,
-		embedder:      embedder,
-		tagger:        tagger,
-		scheduleHours: scheduleHours,
-		tierRules:     tierRules,
-		importanceMod: importanceMod,
-		accessMod:     accessMod,
-		stopChan:      make(chan struct{}),
+		storage:                storage,
+		compressor:             compressor,
+		embedder:               embedder,
+		tagger:                 tagger,
+		db:                     db,
+		scheduleHours:          scheduleHours,
+		principleScheduleHours: principleScheduleHours,
+		minRatingThreshold:     minRatingThreshold,
+		tierRules:              tierRules,
+		importanceMod:          importanceMod,
+		accessMod:              accessMod,
+		stopChan:               make(chan struct{}),
+		lastPrincipleEvolution: time.Now(), // Initialize to now
 	}
 }
 
 // Start begins the background compression loop
 func (w *DecayWorker) Start() {
 	log.Printf("[DecayWorker] Starting compression worker (runs every %d hours)", w.scheduleHours)
-	
+	log.Printf("[DecayWorker] Principle evolution runs every %d hours", w.principleScheduleHours)
+
 	ticker := time.NewTicker(time.Duration(w.scheduleHours) * time.Hour)
 	defer ticker.Stop()
 
@@ -84,7 +99,7 @@ func (w *DecayWorker) runCompressionCycle() {
 
 	ctx := context.Background()
 
-	// PHASE 1: Tag untagged memories (NEW)
+	// PHASE 1: Tag untagged memories
 	log.Println("[DecayWorker] PHASE 1: Tagging untagged memories...")
 	if err := w.tagger.TagMemories(ctx, w.storage); err != nil {
 		log.Printf("[DecayWorker] ERROR in tagging phase: %v", err)
@@ -102,8 +117,46 @@ func (w *DecayWorker) runCompressionCycle() {
 	// Compress Long -> Ancient
 	w.compressTier(ctx, TierLong, TierAncient, w.tierRules.LongToAncientDays)
 
+	// PHASE 3: Evolve principles (only if schedule interval has passed)
+	timeSinceLastEvolution := time.Since(w.lastPrincipleEvolution)
+	principleInterval := time.Duration(w.principleScheduleHours) * time.Hour
+
+	if timeSinceLastEvolution >= principleInterval {
+		log.Printf("[DecayWorker] PHASE 3: Evolving principles (last evolution: %s ago)...",
+			timeSinceLastEvolution.Round(time.Hour))
+
+		if err := w.evolvePrinciplesPhase(ctx); err != nil {
+			log.Printf("[DecayWorker] ERROR in principle evolution phase: %v", err)
+		} else {
+			w.lastPrincipleEvolution = time.Now()
+		}
+	} else {
+		timeUntilNext := principleInterval - timeSinceLastEvolution
+		log.Printf("[DecayWorker] PHASE 3: Skipping principle evolution (next in %s)",
+			timeUntilNext.Round(time.Hour))
+	}
+
 	duration := time.Since(startTime)
 	log.Printf("[DecayWorker] Compression cycle complete (took %s)", duration.Round(time.Second))
+}
+
+// evolvePrinciplesPhase runs the principle evolution process
+func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
+	// Extract principle candidates from memory patterns
+	candidates, err := ExtractPrinciples(w.db, w.storage, w.minRatingThreshold)
+	if err != nil {
+		return err
+	}
+
+	if len(candidates) == 0 {
+		log.Printf("[DecayWorker] No principle candidates found")
+		return nil
+	}
+
+	log.Printf("[DecayWorker] Found %d principle candidates", len(candidates))
+
+	// Evolve principles (update slots 4-10 with best candidates)
+	return EvolvePrinciples(w.db, candidates, w.minRatingThreshold)
 }
 
 // compressTier finds and compresses memories from one tier to another
@@ -166,7 +219,7 @@ func (w *DecayWorker) compressTier(ctx context.Context, fromTier, toTier MemoryT
 		}
 	}
 
-	log.Printf("[DecayWorker] %s -> %s complete: %d compressed, %d skipped (protected by importance/access)", 
+	log.Printf("[DecayWorker] %s -> %s complete: %d compressed, %d skipped (protected by importance/access)",
 		fromTier, toTier, compressed, skipped)
 }
 

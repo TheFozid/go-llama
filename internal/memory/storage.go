@@ -14,8 +14,8 @@ import (
 
 // Storage handles all vector database operations
 type Storage struct {
-	client         *qdrant.Client
-	collectionName string
+	Client         *qdrant.Client // Public for principle extraction
+	CollectionName string         // Public for principle extraction
 }
 
 // NewStorage creates a new storage instance
@@ -41,8 +41,8 @@ func NewStorage(qdrantURL string, collectionName string, apiKey string) (*Storag
 	}
 
 	s := &Storage{
-		client:         client,
-		collectionName: collectionName,
+		Client:         client,
+		CollectionName: collectionName,
 	}
 
 	// Ensure collection exists
@@ -56,7 +56,7 @@ func NewStorage(qdrantURL string, collectionName string, apiKey string) (*Storag
 // ensureCollection creates the collection if it doesn't exist
 func (s *Storage) ensureCollection(ctx context.Context) error {
 	// Check if collection exists
-	exists, err := s.client.CollectionExists(ctx, s.collectionName)
+	exists, err := s.Client.CollectionExists(ctx, s.CollectionName)
 	if err != nil {
 		return fmt.Errorf("failed to check collection existence: %w", err)
 	}
@@ -66,8 +66,8 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 	}
 
 	// Create collection with 384 dimensions (all-MiniLM-L6-v2)
-	err = s.client.CreateCollection(ctx, &qdrant.CreateCollection{
-		CollectionName: s.collectionName,
+	err = s.Client.CreateCollection(ctx, &qdrant.CreateCollection{
+		CollectionName: s.CollectionName,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
 			Size:     384,
 			Distance: qdrant.Distance_Cosine,
@@ -94,8 +94,8 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 
 	for _, idx := range indexes {
 		fieldType := qdrant.FieldType(idx.typ)
-		_, err = s.client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
-			CollectionName: s.collectionName,
+		_, err = s.Client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
+			CollectionName: s.CollectionName,
 			FieldName:      idx.field,
 			FieldType:      &fieldType,
 			Wait:           boolPtr(true),
@@ -137,7 +137,6 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		conflictFlagsValues[i] = qdrant.NewValueString(cf)
 	}
 
-
 	payload := map[string]*qdrant.Value{
 		"content":          qdrant.NewValueString(memory.Content),
 		"compressed_from":  qdrant.NewValueString(memory.CompressedFrom),
@@ -170,19 +169,14 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		payload["user_id"] = qdrant.NewValueString(*memory.UserID)
 	}
 
-	// Skip metadata for now - would need type conversion
-	// for k, v := range memory.Metadata {
-	// 	payload[k] = v
-	// }
-
 	point := &qdrant.PointStruct{
 		Id:      qdrant.NewIDUUID(memory.ID),
 		Vectors: qdrant.NewVectors(memory.Embedding...),
 		Payload: payload,
 	}
 	
-	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
-		CollectionName: s.collectionName,
+	_, err := s.Client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: s.CollectionName,
 		Points:         []*qdrant.PointStruct{point},
 	})
 
@@ -233,8 +227,8 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	}
 
 	// Perform search
-	searchResult, err := s.client.Query(ctx, &qdrant.QueryPoints{
-		CollectionName: s.collectionName,
+	searchResult, err := s.Client.Query(ctx, &qdrant.QueryPoints{
+		CollectionName: s.CollectionName,
 		Query:          qdrant.NewQuery(queryEmbedding...),
 		Filter:         filter,
 		Limit:          uint64Ptr(uint64(query.Limit)),
@@ -378,8 +372,8 @@ func (s *Storage) FindMemoriesForCompression(ctx context.Context, currentTier Me
 		},
 	}
 
-	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: s.collectionName,
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
 		Filter:         filter,
 		Limit:          uint32Ptr(uint32(limit)),
 		WithPayload:    qdrant.NewWithPayload(true),
@@ -422,7 +416,6 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 	for i, cf := range memory.ConflictFlags {
 		conflictFlagsValues[i] = qdrant.NewValueString(cf)
 	}
-	
 
 	payload := map[string]*qdrant.Value{
 		"content":          qdrant.NewValueString(memory.Content),
@@ -456,19 +449,14 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 		payload["user_id"] = qdrant.NewValueString(*memory.UserID)
 	}
 
-	// Skip metadata for now
-	// for k, v := range memory.Metadata {
-	// 	payload[k] = v
-	// }
-
 	point := &qdrant.PointStruct{
 		Id:      qdrant.NewIDUUID(memory.ID),
 		Vectors: qdrant.NewVectors(memory.Embedding...),
 		Payload: payload,
 	}
 
-	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
-		CollectionName: s.collectionName,
+	_, err := s.Client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: s.CollectionName,
 		Points:         []*qdrant.PointStruct{point},
 	})
 
@@ -535,8 +523,8 @@ func (s *Storage) FindMemoryClusters(ctx context.Context, tier MemoryTier, embed
 		},
 	}
 
-	searchResult, err := s.client.Query(ctx, &qdrant.QueryPoints{
-		CollectionName: s.collectionName,
+	searchResult, err := s.Client.Query(ctx, &qdrant.QueryPoints{
+		CollectionName: s.CollectionName,
 		Query:          qdrant.NewQuery(embedding...),
 		Filter:         filter,
 		Limit:          uint64Ptr(uint64(limit)),
@@ -565,8 +553,8 @@ func (s *Storage) SearchByConceptTags(ctx context.Context, tags []string, limit 
 	// For now, we'll retrieve memories and filter in-memory
 	// A production implementation might use a different strategy
 	
-	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: s.collectionName,
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
 		Limit:          uint32Ptr(uint32(limit * 2)), // Get more to filter
 		WithPayload:    qdrant.NewWithPayload(true),
 	})
@@ -616,8 +604,8 @@ func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) err
 		},
 	}
 
-	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: s.collectionName,
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
 		Filter:         filter,
 		Limit:          uint32Ptr(1),
 		WithPayload:    qdrant.NewWithPayload(true),
@@ -669,8 +657,8 @@ func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memor
 	}
 
 	// Query for memories where outcome_tag is empty or null
-	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: s.collectionName,
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
 		Filter: &qdrant.Filter{
 			Must: []*qdrant.Condition{
 				{
@@ -684,7 +672,7 @@ func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memor
 		},
 		Limit:      qdrant.PtrOf(uint32(limit)),
 		WithPayload: qdrant.NewWithPayload(true),
-		WithVectors: &qdrant.WithVectorsSelector{  // ADD THIS
+		WithVectors: &qdrant.WithVectorsSelector{
 			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
 				Enable: true,
 			},
