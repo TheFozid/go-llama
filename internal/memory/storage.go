@@ -670,7 +670,7 @@ func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memor
 
 	// Query for memories where outcome_tag is empty or null
 	scrollResult, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: s.collectionName,  // FIXED: was s.collection
+		CollectionName: s.collectionName,
 		Filter: &qdrant.Filter{
 			Must: []*qdrant.Condition{
 				{
@@ -684,6 +684,11 @@ func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memor
 		},
 		Limit:      qdrant.PtrOf(uint32(limit)),
 		WithPayload: qdrant.NewWithPayload(true),
+		WithVectors: &qdrant.WithVectorsSelector{  // ADD THIS
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: true,
+			},
+		},
 	})
 
 	if err != nil {
@@ -692,8 +697,14 @@ func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memor
 
 	memories := make([]*Memory, 0, len(scrollResult))
 	for _, point := range scrollResult {
-		mem := s.pointToMemoryFromScroll(point)  // FIXED: now calls as method, returns Memory not error
-		memories = append(memories, &mem)        // FIXED: take address since it returns Memory not *Memory
+		mem := s.pointToMemoryFromScroll(point)
+		
+		// Extract embedding from point
+		if vectors := point.Vectors.GetVector(); vectors != nil {
+			mem.Embedding = vectors.Data
+		}
+		
+		memories = append(memories, &mem)
 	}
 
 	return memories, nil

@@ -69,11 +69,17 @@ func (t *Tagger) TagMemories(ctx context.Context, storage *Storage) error {
 			concepts = []string{} // Continue with empty concepts
 		}
 
-		// Update memory
+		// Update memory fields (but preserve embedding!)
 		mem.OutcomeTag = outcome.Outcome
 		mem.TrustScore = 0.5 // Initial neutral trust
 		mem.ConceptTags = concepts
 		mem.ValidationCount = 1 // First validation
+		
+		// CRITICAL: If embedding is missing, skip this memory
+		if len(mem.Embedding) == 0 {
+			log.Printf("[Tagger] WARNING: Memory %s has no embedding, cannot update. Skipping.", mem.ID)
+			continue
+		}
 
 		if err := storage.UpdateMemory(ctx, mem); err != nil {
 			log.Printf("[Tagger] ERROR: Failed to update memory %s: %v", mem.ID, err)
