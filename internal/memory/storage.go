@@ -131,10 +131,51 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 	for i, ct := range memory.ConceptTags {
 		conceptTagsValues[i] = qdrant.NewValueString(ct)
 	}
-	
-	conflictFlagsValues := make([]*qdrant.Value, len(memory.ConflictFlags))
-	for i, cf := range memory.ConflictFlags {
-		conflictFlagsValues[i] = qdrant.NewValueString(cf)
+
+	// Convert metadata map to Qdrant struct value
+	metadataStruct := make(map[string]*qdrant.Value)
+	for k, v := range memory.Metadata {
+		switch val := v.(type) {
+		case string:
+			metadataStruct[k] = qdrant.NewValueString(val)
+		case int:
+			metadataStruct[k] = qdrant.NewValueInt(int64(val))
+		case int64:
+			metadataStruct[k] = qdrant.NewValueInt(val)
+		case float64:
+			metadataStruct[k] = qdrant.NewValueDouble(val)
+		case bool:
+			metadataStruct[k] = qdrant.NewValueBool(val)
+		case map[string]int:
+			// Handle co_retrieval_counts
+			innerMap := make(map[string]*qdrant.Value)
+			for ik, iv := range val {
+				innerMap[ik] = qdrant.NewValueInt(int64(iv))
+			}
+			metadataStruct[k] = &qdrant.Value{
+				Kind: &qdrant.Value_StructValue{
+					StructValue: &qdrant.Struct{Fields: innerMap},
+				},
+			}
+		case map[string]interface{}:
+			// Nested map handling
+			innerMap := make(map[string]*qdrant.Value)
+			for ik, iv := range val {
+				switch innerVal := iv.(type) {
+				case string:
+					innerMap[ik] = qdrant.NewValueString(innerVal)
+				case int:
+					innerMap[ik] = qdrant.NewValueInt(int64(innerVal))
+				case float64:
+					innerMap[ik] = qdrant.NewValueDouble(innerVal)
+				}
+			}
+			metadataStruct[k] = &qdrant.Value{
+				Kind: &qdrant.Value_StructValue{
+					StructValue: &qdrant.Struct{Fields: innerMap},
+				},
+			}
+		}
 	}
 
 	payload := map[string]*qdrant.Value{
@@ -147,6 +188,7 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"access_count":     qdrant.NewValueInt(int64(memory.AccessCount)),
 		"importance_score": qdrant.NewValueDouble(memory.ImportanceScore),
 		"memory_id":        qdrant.NewValueString(memory.ID),
+		"metadata":         &qdrant.Value{Kind: &qdrant.Value_StructValue{StructValue: &qdrant.Struct{Fields: metadataStruct}}},
 		
 		// Phase 4: Good/Bad Tagging
 		"outcome_tag":       qdrant.NewValueString(memory.OutcomeTag),
@@ -157,9 +199,8 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
 		"concept_tags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conceptTagsValues}}},
 		
-		// Phase 4: Temporal & Conflict
+		// Phase 4: Temporal Resolution
 		"temporal_resolution": qdrant.NewValueString(memory.TemporalResolution),
-		"conflict_flags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conflictFlagsValues}}},
 		
 		// Phase 4: Principles
 		"principle_rating":  qdrant.NewValueDouble(memory.PrincipleRating),
@@ -270,7 +311,7 @@ func (s *Storage) pointToMemory(point *qdrant.ScoredPoint) Memory {
 		LastAccessedAt:  time.Unix(getIntFromPayload(payload, "last_accessed_at"), 0),
 		AccessCount:     int(getIntFromPayload(payload, "access_count")),
 		ImportanceScore: getFloatFromPayload(payload, "importance_score"),
-		Metadata:        make(map[string]interface{}),
+		Metadata:        getMetadataFromPayload(payload, "metadata"),
 		
 		// Phase 4: Good/Bad Tagging
 		OutcomeTag:      getStringFromPayload(payload, "outcome_tag"),
@@ -281,9 +322,8 @@ func (s *Storage) pointToMemory(point *qdrant.ScoredPoint) Memory {
 		RelatedMemories: getStringSliceFromPayload(payload, "related_memories"),
 		ConceptTags:     getStringSliceFromPayload(payload, "concept_tags"),
 		
-		// Phase 4: Temporal & Conflict
+		// Phase 4: Temporal Resolution
 		TemporalResolution: getStringFromPayload(payload, "temporal_resolution"),
-		ConflictFlags:      getStringSliceFromPayload(payload, "conflict_flags"),
 		
 		// Phase 4: Principles
 		PrincipleRating: getFloatFromPayload(payload, "principle_rating"),
@@ -344,6 +384,44 @@ func getStringSliceFromPayload(payload map[string]*qdrant.Value, key string) []s
 	return []string{}
 }
 
+// Phase 4: Helper to extract metadata map from payload
+func getMetadataFromPayload(payload map[string]*qdrant.Value, key string) map[string]interface{} {
+	if val, ok := payload[key]; ok {
+		structValue := val.GetStructValue()
+		if structValue == nil {
+			return make(map[string]interface{})
+		}
+		
+		result := make(map[string]interface{})
+		for k, v := range structValue.Fields {
+			if strVal := v.GetStringValue(); strVal != "" {
+				result[k] = strVal
+			} else if intVal := v.GetIntegerValue(); intVal != 0 {
+				result[k] = int(intVal)
+			} else if floatVal := v.GetDoubleValue(); floatVal != 0 {
+				result[k] = floatVal
+			} else if boolVal := v.GetBoolValue(); boolVal {
+				result[k] = boolVal
+			} else if nestedStruct := v.GetStructValue(); nestedStruct != nil {
+				// Handle nested map (e.g., co_retrieval_counts)
+				nestedMap := make(map[string]interface{})
+				for nk, nv := range nestedStruct.Fields {
+					if nIntVal := nv.GetIntegerValue(); nIntVal != 0 {
+						nestedMap[nk] = int(nIntVal)
+					} else if nFloatVal := nv.GetDoubleValue(); nFloatVal != 0 {
+						nestedMap[nk] = nFloatVal
+					} else if nStrVal := nv.GetStringValue(); nStrVal != "" {
+						nestedMap[nk] = nStrVal
+					}
+				}
+				result[k] = nestedMap
+			}
+		}
+		return result
+	}
+	return make(map[string]interface{})
+}
+
 func uint64Ptr(v uint64) *uint64 {
 	return &v
 }
@@ -377,6 +455,11 @@ func (s *Storage) FindMemoriesForCompression(ctx context.Context, currentTier Me
 		Filter:         filter,
 		Limit:          uint32Ptr(uint32(limit)),
 		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors: &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: true,
+			},
+		},
 	})
 	
 	if err != nil {
@@ -411,10 +494,51 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 	for i, ct := range memory.ConceptTags {
 		conceptTagsValues[i] = qdrant.NewValueString(ct)
 	}
-	
-	conflictFlagsValues := make([]*qdrant.Value, len(memory.ConflictFlags))
-	for i, cf := range memory.ConflictFlags {
-		conflictFlagsValues[i] = qdrant.NewValueString(cf)
+
+	// Convert metadata map to Qdrant struct value
+	metadataStruct := make(map[string]*qdrant.Value)
+	for k, v := range memory.Metadata {
+		switch val := v.(type) {
+		case string:
+			metadataStruct[k] = qdrant.NewValueString(val)
+		case int:
+			metadataStruct[k] = qdrant.NewValueInt(int64(val))
+		case int64:
+			metadataStruct[k] = qdrant.NewValueInt(val)
+		case float64:
+			metadataStruct[k] = qdrant.NewValueDouble(val)
+		case bool:
+			metadataStruct[k] = qdrant.NewValueBool(val)
+		case map[string]int:
+			// Handle co_retrieval_counts
+			innerMap := make(map[string]*qdrant.Value)
+			for ik, iv := range val {
+				innerMap[ik] = qdrant.NewValueInt(int64(iv))
+			}
+			metadataStruct[k] = &qdrant.Value{
+				Kind: &qdrant.Value_StructValue{
+					StructValue: &qdrant.Struct{Fields: innerMap},
+				},
+			}
+		case map[string]interface{}:
+			// Nested map handling
+			innerMap := make(map[string]*qdrant.Value)
+			for ik, iv := range val {
+				switch innerVal := iv.(type) {
+				case string:
+					innerMap[ik] = qdrant.NewValueString(innerVal)
+				case int:
+					innerMap[ik] = qdrant.NewValueInt(int64(innerVal))
+				case float64:
+					innerMap[ik] = qdrant.NewValueDouble(innerVal)
+				}
+			}
+			metadataStruct[k] = &qdrant.Value{
+				Kind: &qdrant.Value_StructValue{
+					StructValue: &qdrant.Struct{Fields: innerMap},
+				},
+			}
+		}
 	}
 
 	payload := map[string]*qdrant.Value{
@@ -427,6 +551,7 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 		"access_count":     qdrant.NewValueInt(int64(memory.AccessCount)),
 		"importance_score": qdrant.NewValueDouble(memory.ImportanceScore),
 		"memory_id":        qdrant.NewValueString(memory.ID),
+		"metadata":         &qdrant.Value{Kind: &qdrant.Value_StructValue{StructValue: &qdrant.Struct{Fields: metadataStruct}}},
 		
 		// Phase 4: Good/Bad Tagging
 		"outcome_tag":       qdrant.NewValueString(memory.OutcomeTag),
@@ -437,9 +562,8 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
 		"concept_tags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conceptTagsValues}}},
 		
-		// Phase 4: Temporal & Conflict
+		// Phase 4: Temporal Resolution
 		"temporal_resolution": qdrant.NewValueString(memory.TemporalResolution),
-		"conflict_flags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conflictFlagsValues}}},
 		
 		// Phase 4: Principles
 		"principle_rating":  qdrant.NewValueDouble(memory.PrincipleRating),
@@ -489,7 +613,7 @@ func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 		LastAccessedAt:  time.Unix(getIntFromPayload(payload, "last_accessed_at"), 0),
 		AccessCount:     int(getIntFromPayload(payload, "access_count")),
 		ImportanceScore: getFloatFromPayload(payload, "importance_score"),
-		Metadata:        make(map[string]interface{}),
+		Metadata:        getMetadataFromPayload(payload, "metadata"),
 		
 		// Phase 4: Good/Bad Tagging
 		OutcomeTag:      getStringFromPayload(payload, "outcome_tag"),
@@ -500,9 +624,8 @@ func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 		RelatedMemories: getStringSliceFromPayload(payload, "related_memories"),
 		ConceptTags:     getStringSliceFromPayload(payload, "concept_tags"),
 		
-		// Phase 4: Temporal & Conflict
+		// Phase 4: Temporal Resolution
 		TemporalResolution: getStringFromPayload(payload, "temporal_resolution"),
-		ConflictFlags:      getStringSliceFromPayload(payload, "conflict_flags"),
 		
 		// Phase 4: Principles
 		PrincipleRating: getFloatFromPayload(payload, "principle_rating"),
@@ -510,6 +633,11 @@ func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 
 	if userID := getStringFromPayload(payload, "user_id"); userID != "" {
 		memory.UserID = &userID
+	}
+	
+	// Extract embedding from point
+	if vectors := point.Vectors.GetVector(); vectors != nil {
+		memory.Embedding = vectors.Data
 	}
 
 	return memory
@@ -529,6 +657,11 @@ func (s *Storage) FindMemoryClusters(ctx context.Context, tier MemoryTier, embed
 		Filter:         filter,
 		Limit:          uint64Ptr(uint64(limit)),
 		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors: &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: true,
+			},
+		},
 	})
 
 	if err != nil {
@@ -541,6 +674,12 @@ func (s *Storage) FindMemoryClusters(ctx context.Context, tier MemoryTier, embed
 			continue
 		}
 		memory := s.pointToMemory(point)
+		
+		// Extract embedding from point
+		if vectors := point.Vectors.GetVector(); vectors != nil {
+			memory.Embedding = vectors.Data
+		}
+		
 		memories = append(memories, memory)
 	}
 
@@ -596,8 +735,100 @@ func (s *Storage) SearchByConceptTags(ctx context.Context, tags []string, limit 
 func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) error {
 	// We need to read the full memory, update it, and write it back
 	// This is less efficient but works with the current Qdrant client API
-	
-	// First, search for the memory by ID stored in payload
+
+// First, search for the memory by ID stored in payload
+filter := &qdrant.Filter{
+	Must: []*qdrant.Condition{
+		qdrant.NewMatch("memory_id", memoryID),
+	},
+}
+
+scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+	CollectionName: s.CollectionName,
+	Filter:         filter,
+	Limit:          uint32Ptr(1),
+	WithPayload:    qdrant.NewWithPayload(true),
+	WithVectors:    &qdrant.WithVectorsSelector{
+		SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+			Enable: true,
+		},
+	},
+})
+
+if err != nil {
+	return fmt.Errorf("failed to find memory: %w", err)
+}
+
+if len(scrollResult) == 0 {
+	return fmt.Errorf("memory not found: %s", memoryID)
+}
+
+// Convert to Memory struct
+point := scrollResult[0]
+memory := s.pointToMemoryFromScroll(point)
+
+// Update access metadata
+memory.AccessCount++
+memory.LastAccessedAt = time.Now()
+
+// Write back using UpdateMemory (which uses Upsert)
+return s.UpdateMemory(ctx, &memory)
+
+}
+
+func floatPtr(v float64) *float64 {
+return &v
+}
+
+func uint32Ptr(v uint32) *uint32 {
+return &v
+}
+
+// FindUntaggedMemories retrieves memories that haven't been tagged yet (OutcomeTag is empty)
+func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memory, error) {
+if limit <= 0 {
+limit = 100
+}
+
+// Query for memories where outcome_tag is empty or null
+scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+	CollectionName: s.CollectionName,
+	Filter: &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			{
+				ConditionOneOf: &qdrant.Condition_IsEmpty{
+					IsEmpty: &qdrant.IsEmptyCondition{
+						Key: "outcome_tag",
+					},
+				},
+			},
+		},
+	},
+	Limit:      qdrant.PtrOf(uint32(limit)),
+	WithPayload: qdrant.NewWithPayload(true),
+	WithVectors: &qdrant.WithVectorsSelector{
+		SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+			Enable: true,
+		},
+	},
+})
+
+if err != nil {
+	return nil, fmt.Errorf("failed to scroll untagged memories: %w", err)
+}
+
+memories := make([]*Memory, 0, len(scrollResult))
+for _, point := range scrollResult {
+	mem := s.pointToMemoryFromScroll(point)
+	memories = append(memories, &mem)
+}
+
+return memories, nil
+
+}
+
+// GetMemoryByID retrieves a single memory by its ID
+func (s *Storage) GetMemoryByID(ctx context.Context, memoryID string) (*Memory, error) {
 	filter := &qdrant.Filter{
 		Must: []*qdrant.Condition{
 			qdrant.NewMatch("memory_id", memoryID),
@@ -615,85 +846,15 @@ func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) err
 			},
 		},
 	})
-	
+
 	if err != nil {
-		return fmt.Errorf("failed to find memory: %w", err)
+		return nil, fmt.Errorf("failed to retrieve memory: %w", err)
 	}
-	
+
 	if len(scrollResult) == 0 {
-		return fmt.Errorf("memory not found: %s", memoryID)
-	}
-	
-	// Convert to Memory struct
-	point := scrollResult[0]
-	memory := s.pointToMemoryFromScroll(point)
-	
-	// Get vectors from point
-	vectors := point.Vectors.GetVector()
-	if vectors != nil {
-		memory.Embedding = vectors.Data
-	}
-	
-	// Update access metadata
-	memory.AccessCount++
-	memory.LastAccessedAt = time.Now()
-	
-	// Write back using UpdateMemory (which uses Upsert)
-	return s.UpdateMemory(ctx, &memory)
-}
-
-func floatPtr(v float64) *float64 {
-	return &v
-}
-
-func uint32Ptr(v uint32) *uint32 {
-	return &v
-}
-
-// FindUntaggedMemories retrieves memories that haven't been tagged yet (OutcomeTag is empty)
-func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memory, error) {
-	if limit <= 0 {
-		limit = 100
+		return nil, fmt.Errorf("memory not found: %s", memoryID)
 	}
 
-	// Query for memories where outcome_tag is empty or null
-	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: s.CollectionName,
-		Filter: &qdrant.Filter{
-			Must: []*qdrant.Condition{
-				{
-					ConditionOneOf: &qdrant.Condition_IsEmpty{
-						IsEmpty: &qdrant.IsEmptyCondition{
-							Key: "outcome_tag",
-						},
-					},
-				},
-			},
-		},
-		Limit:      qdrant.PtrOf(uint32(limit)),
-		WithPayload: qdrant.NewWithPayload(true),
-		WithVectors: &qdrant.WithVectorsSelector{
-			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
-				Enable: true,
-			},
-		},
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to scroll untagged memories: %w", err)
-	}
-
-	memories := make([]*Memory, 0, len(scrollResult))
-	for _, point := range scrollResult {
-		mem := s.pointToMemoryFromScroll(point)
-		
-		// Extract embedding from point
-		if vectors := point.Vectors.GetVector(); vectors != nil {
-			mem.Embedding = vectors.Data
-		}
-		
-		memories = append(memories, &mem)
-	}
-
-	return memories, nil
+	memory := s.pointToMemoryFromScroll(scrollResult[0])
+	return &memory, nil
 }

@@ -42,6 +42,13 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 		return
 	}
 
+	// Initialize linker for co-occurrence tracking
+	linker := memory.NewLinker(
+		storage,
+		cfg.GrowerAI.Linking.SimilarityThreshold,
+		cfg.GrowerAI.Linking.MaxLinksPerMemory,
+	)
+
 	// Load 10 Commandments (Principles) - REPLACES static system prompt
 	log.Printf("[GrowerAI-WS] Loading principles...")
 	principles, err := memory.LoadPrinciples(db.DB)
@@ -65,7 +72,7 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	userIDStr := fmt.Sprintf("%d", userID)
 	query := memory.RetrievalQuery{
 		Query:             content,
-		UserID:            nil,
+		UserID:            &userIDStr,
 		IncludePersonal:   true,
 		IncludeCollective: false,
 		Limit:             5,
@@ -80,8 +87,61 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	}
 	log.Printf("[GrowerAI-WS] ✓ Found %d relevant memories", len(results))
 
+
+// Phase 4D: Traverse links to find additional relevant memories
+linkedMemories := []memory.RetrievalResult{}
+linkedIDs := make(map[string]bool) // Track to avoid duplicates
+
+for _, result := range results {
+	linkedIDs[result.Memory.ID] = true // Mark primary memories
+	
+	// Traverse links from each retrieved memory
+	for _, linkedID := range result.Memory.RelatedMemories {
+		if linkedIDs[linkedID] {
+			continue // Already have this memory
+		}
+		
+		// Retrieve linked memory by ID
+		linkedMem, err := storage.GetMemoryByID(ctx, linkedID)
+		if err != nil {
+			log.Printf("[GrowerAI-WS] WARNING: Failed to retrieve linked memory %s: %v", linkedID, err)
+			continue
+		}
+		
+		// Add to linked memories with a base score (lower than direct matches)
+		linkedMemories = append(linkedMemories, memory.RetrievalResult{
+			Memory: *linkedMem,
+			Score:  0.5, // Base score for linked memories
+		})
+		
+		linkedIDs[linkedID] = true
+		
+		log.Printf("[GrowerAI-WS]   ↳ Retrieved linked memory: %s (tier=%s, age=%s)",
+			linkedID, linkedMem.Tier, time.Since(linkedMem.CreatedAt).Round(time.Minute))
+	}
+}
+
+	// Combine primary results with linked memories
+	allResults := append(results, linkedMemories...)
+	
+	log.Printf("[GrowerAI-WS] Total memories (including links): %d", len(allResults))
+
+	// Phase 4D: Track co-occurrence for retrieved memories
+	if len(allResults) > 1 {
+		retrievedMems := make([]memory.Memory, len(allResults))
+		for i, res := range allResults {
+			retrievedMems[i] = res.Memory
+		}
+		
+		if err := linker.TrackCoOccurrence(ctx, retrievedMems); err != nil {
+			log.Printf("[GrowerAI-WS] WARNING: Failed to track co-occurrence: %v", err)
+		} else {
+			log.Printf("[GrowerAI-WS] ✓ Tracked co-occurrence for %d memories", len(retrievedMems))
+		}
+	}
+
 	// Update access metadata for retrieved memories
-	for _, result := range results {
+	for _, result := range allResults {
 		if err := storage.UpdateAccessMetadata(ctx, result.Memory.ID); err != nil {
 			log.Printf("[GrowerAI-WS] WARNING: Failed to update access metadata for memory %s: %v",
 				result.Memory.ID, err)
@@ -95,18 +155,41 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	contextBuilder.WriteString(systemPrompt)
 	contextBuilder.WriteString("\n\n")
 
-	if len(results) > 0 {
+	if len(allResults) > 0 {
 		contextBuilder.WriteString("=== RELEVANT MEMORIES ===\n")
-		for i, result := range results {
+		for i, result := range allResults {
 			log.Printf("[GrowerAI-WS]   Memory %d: score=%.3f, tier=%s, age=%s, outcome=%s",
 				i+1, result.Score, result.Memory.Tier,
 				time.Since(result.Memory.CreatedAt).Round(time.Minute),
 				result.Memory.OutcomeTag)
-			contextBuilder.WriteString(fmt.Sprintf("[Memory %d - %.0f%% relevant - from %s ago - outcome: %s]\n%s\n\n",
+			
+			// Show link info if memory was retrieved via link
+			linkInfo := ""
+			isLinked := false
+			for _, primaryRes := range results {
+				if result.Memory.ID == primaryRes.Memory.ID {
+					break // This is a primary result
+				}
+				for _, linkedID := range primaryRes.Memory.RelatedMemories {
+					if linkedID == result.Memory.ID {
+						isLinked = true
+						break
+					}
+				}
+				if isLinked {
+					break
+				}
+			}
+			if isLinked {
+				linkInfo = " [linked]"
+			}
+			
+			contextBuilder.WriteString(fmt.Sprintf("[Memory %d - %.0f%% relevant - from %s ago - outcome: %s%s]\n%s\n\n",
 				i+1,
 				result.Score*100,
 				time.Since(result.Memory.CreatedAt).Round(time.Minute),
 				result.Memory.OutcomeTag,
+				linkInfo,
 				result.Memory.Content))
 		}
 		contextBuilder.WriteString("=== END MEMORIES ===\n\n")
@@ -161,20 +244,25 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 			if len(content) > 100 {
 				importanceScore += 0.2
 			}
-			if len(results) > 0 {
+			if len(allResults) > 0 {
 				importanceScore += 0.1
 			}
 
+			// Set temporal resolution for new memory (Recent tier = full datetime)
+			now := time.Now()
+			temporalResolution := now.Format(time.RFC3339)
+
 			mem := &memory.Memory{
-				Content:         memoryContent,
-				Tier:            memory.TierRecent,
-				UserID:          &userIDStr,
-				IsCollective:    false,
-				CreatedAt:       time.Now(),
-				LastAccessedAt:  time.Now(),
-				AccessCount:     0,
-				ImportanceScore: importanceScore,
-				Embedding:       memEmbedding,
+				Content:            memoryContent,
+				Tier:               memory.TierRecent,
+				UserID:             &userIDStr,
+				IsCollective:       false,
+				CreatedAt:          now,
+				LastAccessedAt:     now,
+				AccessCount:        0,
+				ImportanceScore:    importanceScore,
+				Embedding:          memEmbedding,
+				TemporalResolution: temporalResolution,
 				Metadata: map[string]interface{}{
 					"chat_id": chatInst.ID,
 				},
@@ -183,8 +271,8 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 			if err := storage.Store(ctx, mem); err != nil {
 				log.Printf("[GrowerAI-WS] WARNING: Failed to store memory: %v", err)
 			} else {
-				log.Printf("[GrowerAI-WS] ✓ Stored memory (id=%s, importance=%.2f)",
-					mem.ID, mem.ImportanceScore)
+				log.Printf("[GrowerAI-WS] ✓ Stored memory (id=%s, importance=%.2f, temporal=%s)",
+					mem.ID, mem.ImportanceScore, mem.TemporalResolution)
 			}
 		}
 	} else {

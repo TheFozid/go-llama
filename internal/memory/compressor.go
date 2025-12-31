@@ -1,3 +1,4 @@
+// internal/memory/compressor.go
 package memory
 
 import (
@@ -14,17 +15,21 @@ import (
 
 // Compressor handles LLM-based memory compression
 type Compressor struct {
-	modelURL string
+	modelURL  string
 	modelName string
-	client   *http.Client
+	client    *http.Client
+	embedder  *Embedder
+	linker    *Linker
 }
 
 // NewCompressor creates a new compressor instance
-func NewCompressor(modelURL, modelName string) *Compressor {
+func NewCompressor(modelURL, modelName string, embedder *Embedder, linker *Linker) *Compressor {
 	return &Compressor{
 		modelURL:  modelURL,
 		modelName: modelName,
 		client:    &http.Client{Timeout: 60 * time.Second},
+		embedder:  embedder,
+		linker:    linker,
 	}
 }
 
@@ -57,11 +62,195 @@ func (c *Compressor) Compress(ctx context.Context, memory *Memory, targetTier Me
 	// Update memory
 	memory.Content = strings.TrimSpace(compressed)
 	memory.Tier = targetTier
+	
+	// Set temporal resolution based on target tier
+	memory.TemporalResolution = c.degradeTemporalResolution(memory.CreatedAt, targetTier)
 
-	log.Printf("[Compressor] Compressed memory %s: %s -> %s (%d -> %d chars)",
-		memory.ID, memory.Tier, targetTier, len(memory.CompressedFrom), len(memory.Content))
+	log.Printf("[Compressor] Compressed memory %s: %s -> %s (%d -> %d chars, temporal: %s)",
+		memory.ID, memory.Tier, targetTier, len(memory.CompressedFrom), len(memory.Content), memory.TemporalResolution)
 
 	return memory, nil
+}
+
+// CompressCluster compresses a group of related memories together
+func (c *Compressor) CompressCluster(ctx context.Context, cluster []Memory, targetTier MemoryTier) (*Memory, error) {
+	if len(cluster) == 0 {
+		return nil, fmt.Errorf("empty cluster")
+	}
+	
+	if len(cluster) == 1 {
+		// Single memory, use regular compression
+		return c.Compress(ctx, &cluster[0], targetTier)
+	}
+	
+	log.Printf("[Compressor] Compressing cluster of %d memories to %s", len(cluster), targetTier)
+	
+	// Build combined content from all memories in cluster
+	var contentBuilder strings.Builder
+	contentBuilder.WriteString("=== RELATED MEMORIES ===\n\n")
+	
+	for i, mem := range cluster {
+		contentBuilder.WriteString(fmt.Sprintf("Memory %d (created: %s, importance: %.2f, outcome: %s):\n%s\n\n",
+			i+1, mem.CreatedAt.Format("2006-01-02"), mem.ImportanceScore, mem.OutcomeTag, mem.Content))
+	}
+	
+	// Determine compression prompt based on target tier
+	var prompt string
+	switch targetTier {
+	case TierMedium:
+		prompt = fmt.Sprintf("These related memories are being compressed together. Summarize them in exactly 150 words, preserving key shared themes and important unique details:\n\n%s", contentBuilder.String())
+	case TierLong:
+		prompt = fmt.Sprintf("These related memories are being compressed together. Extract the 30 most important words or short phrases that capture the shared themes:\n\n%s", contentBuilder.String())
+	case TierAncient:
+		prompt = fmt.Sprintf("These related memories are being compressed together. Extract only the 5 most critical keywords that represent the core pattern:\n\n%s", contentBuilder.String())
+	default:
+		return nil, fmt.Errorf("invalid target tier: %s", targetTier)
+	}
+	
+	// Call LLM for cluster compression
+	compressed, err := c.callLLM(ctx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("cluster compression failed: %w", err)
+	}
+	
+	// Extract concept tags from compressed content
+	conceptTags, err := c.extractConceptTags(ctx, compressed)
+	if err != nil {
+		log.Printf("[Compressor] WARNING: Failed to extract concept tags: %v", err)
+		conceptTags = []string{}
+	}
+	
+	// Create merged memory from the first memory in cluster
+	merged := cluster[0]
+	
+	// Store original content
+	if merged.CompressedFrom == "" {
+		merged.CompressedFrom = merged.Content
+	}
+	
+	// Update with compressed content
+	merged.Content = strings.TrimSpace(compressed)
+	merged.Tier = targetTier
+	merged.ConceptTags = conceptTags
+	
+	// Use the earliest creation time from the cluster
+	earliestTime := cluster[0].CreatedAt
+	for _, mem := range cluster {
+		if mem.CreatedAt.Before(earliestTime) {
+			earliestTime = mem.CreatedAt
+		}
+	}
+	merged.CreatedAt = earliestTime
+	
+	// Set temporal resolution based on earliest time and target tier
+	merged.TemporalResolution = c.degradeTemporalResolution(earliestTime, targetTier)
+	
+	// Aggregate importance scores (average of cluster)
+	totalImportance := 0.0
+	for _, mem := range cluster {
+		totalImportance += mem.ImportanceScore
+	}
+	merged.ImportanceScore = totalImportance / float64(len(cluster))
+	
+	// Aggregate outcome tags (most common wins, or highest rated)
+	merged.OutcomeTag = c.aggregateOutcomeTags(cluster)
+	
+	// Link all memories in the cluster together
+	if err := c.linker.CreateLinks(ctx, cluster); err != nil {
+		log.Printf("[Compressor] WARNING: Failed to create links for cluster: %v", err)
+	}
+	
+	// Collect all related memories from cluster
+	relatedSet := make(map[string]bool)
+	for _, mem := range cluster {
+		for _, relID := range mem.RelatedMemories {
+			relatedSet[relID] = true
+		}
+		// Don't include cluster members themselves as related
+		delete(relatedSet, mem.ID)
+	}
+	
+	// Convert set to slice
+	merged.RelatedMemories = make([]string, 0, len(relatedSet))
+	for id := range relatedSet {
+		merged.RelatedMemories = append(merged.RelatedMemories, id)
+	}
+	
+	log.Printf("[Compressor] Cluster compressed: %d memories -> 1 (temporal: %s, concepts: %v)",
+		len(cluster), merged.TemporalResolution, merged.ConceptTags)
+	
+	return &merged, nil
+}
+
+// degradeTemporalResolution converts timestamp to appropriate precision for tier
+func (c *Compressor) degradeTemporalResolution(t time.Time, tier MemoryTier) string {
+	switch tier {
+	case TierRecent:
+		// Full datetime: "2024-12-31T10:18:00Z"
+		return t.Format(time.RFC3339)
+	case TierMedium:
+		// Date only: "2024-12-31"
+		return t.Format("2006-01-02")
+	case TierLong:
+		// Month only: "2024-12"
+		return t.Format("2006-01")
+	case TierAncient:
+		// Year only: "2024"
+		return t.Format("2006")
+	default:
+		return t.Format(time.RFC3339)
+	}
+}
+
+// extractConceptTags uses LLM to extract semantic tags from content
+func (c *Compressor) extractConceptTags(ctx context.Context, content string) ([]string, error) {
+	prompt := fmt.Sprintf("Extract 3-5 single-word concept tags that best describe this content. Return ONLY the tags separated by commas, nothing else:\n\n%s", content)
+	
+	response, err := c.callLLM(ctx, prompt)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Parse comma-separated tags
+	tags := strings.Split(response, ",")
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		cleaned := strings.TrimSpace(strings.ToLower(tag))
+		if cleaned != "" && len(cleaned) < 50 { // Sanity check
+			result = append(result, cleaned)
+		}
+	}
+	
+	return result, nil
+}
+
+// aggregateOutcomeTags determines the outcome tag for a merged memory
+func (c *Compressor) aggregateOutcomeTags(cluster []Memory) string {
+	counts := map[string]int{
+		"good":    0,
+		"bad":     0,
+		"neutral": 0,
+	}
+	
+	for _, mem := range cluster {
+		tag := mem.OutcomeTag
+		if tag == "" {
+			tag = "neutral"
+		}
+		counts[tag]++
+	}
+	
+	// Return most common tag
+	maxCount := 0
+	result := "neutral"
+	for tag, count := range counts {
+		if count > maxCount {
+			maxCount = count
+			result = tag
+		}
+	}
+	
+	return result
 }
 
 // callLLM sends a request to the compression LLM

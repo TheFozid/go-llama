@@ -16,11 +16,13 @@ type DecayWorker struct {
 	compressor             *Compressor
 	embedder               *Embedder
 	tagger                 *Tagger
+	linker                 *Linker
 	db                     *gorm.DB
 	scheduleHours          int
 	principleScheduleHours int
 	minRatingThreshold     float64
 	tierRules              TierRules
+	mergeWindows           MergeWindows
 	importanceMod          float64
 	accessMod              float64
 	stopChan               chan struct{}
@@ -34,17 +36,26 @@ type TierRules struct {
 	LongToAncientDays  int
 }
 
+// MergeWindows defines time windows for cluster-based compression
+type MergeWindows struct {
+	RecentDays int // Merge memories within N days for Recent tier
+	MediumDays int // Merge memories within N days for Medium tier
+	LongDays   int // Merge memories within N days for Long tier
+}
+
 // NewDecayWorker creates a new background compression worker
 func NewDecayWorker(
 	storage *Storage,
 	compressor *Compressor,
 	embedder *Embedder,
 	tagger *Tagger,
+	linker *Linker,
 	db *gorm.DB,
 	scheduleHours int,
 	principleScheduleHours int,
 	minRatingThreshold float64,
 	tierRules TierRules,
+	mergeWindows MergeWindows,
 	importanceMod float64,
 	accessMod float64,
 ) *DecayWorker {
@@ -53,11 +64,13 @@ func NewDecayWorker(
 		compressor:             compressor,
 		embedder:               embedder,
 		tagger:                 tagger,
+		linker:                 linker,
 		db:                     db,
 		scheduleHours:          scheduleHours,
 		principleScheduleHours: principleScheduleHours,
 		minRatingThreshold:     minRatingThreshold,
 		tierRules:              tierRules,
+		mergeWindows:           mergeWindows,
 		importanceMod:          importanceMod,
 		accessMod:              accessMod,
 		stopChan:               make(chan struct{}),
@@ -105,17 +118,17 @@ func (w *DecayWorker) runCompressionCycle() {
 		log.Printf("[DecayWorker] ERROR in tagging phase: %v", err)
 	}
 
-	// PHASE 2: Compress old memories
-	log.Println("[DecayWorker] PHASE 2: Compressing old memories...")
+	// PHASE 2: Cluster-based compression of old memories
+	log.Println("[DecayWorker] PHASE 2: Cluster-based compression...")
 
 	// Compress Recent -> Medium
-	w.compressTier(ctx, TierRecent, TierMedium, w.tierRules.RecentToMediumDays)
+	w.compressTierWithClusters(ctx, TierRecent, TierMedium, w.tierRules.RecentToMediumDays, w.mergeWindows.RecentDays)
 
 	// Compress Medium -> Long
-	w.compressTier(ctx, TierMedium, TierLong, w.tierRules.MediumToLongDays)
+	w.compressTierWithClusters(ctx, TierMedium, TierLong, w.tierRules.MediumToLongDays, w.mergeWindows.MediumDays)
 
 	// Compress Long -> Ancient
-	w.compressTier(ctx, TierLong, TierAncient, w.tierRules.LongToAncientDays)
+	w.compressTierWithClusters(ctx, TierLong, TierAncient, w.tierRules.LongToAncientDays, w.mergeWindows.LongDays)
 
 	// PHASE 3: Evolve principles (only if schedule interval has passed)
 	timeSinceLastEvolution := time.Since(w.lastPrincipleEvolution)
@@ -159,9 +172,10 @@ func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
 	return EvolvePrinciples(w.db, candidates, w.minRatingThreshold)
 }
 
-// compressTier finds and compresses memories from one tier to another
-func (w *DecayWorker) compressTier(ctx context.Context, fromTier, toTier MemoryTier, baseAgeDays int) {
-	log.Printf("[DecayWorker] Processing %s -> %s (base age: %d days)", fromTier, toTier, baseAgeDays)
+// compressTierWithClusters finds and compresses memories using cluster-based approach
+func (w *DecayWorker) compressTierWithClusters(ctx context.Context, fromTier, toTier MemoryTier, baseAgeDays int, mergeWindowDays int) {
+	log.Printf("[DecayWorker] Processing %s -> %s (base age: %d days, merge window: %d days)",
+		fromTier, toTier, baseAgeDays, mergeWindowDays)
 
 	// Find memories eligible for compression (limit to 100 per tier per run)
 	memories, err := w.storage.FindMemoriesForCompression(ctx, fromTier, baseAgeDays, 100)
@@ -179,48 +193,114 @@ func (w *DecayWorker) compressTier(ctx context.Context, fromTier, toTier MemoryT
 
 	compressed := 0
 	skipped := 0
+	clustered := 0
+	processedIDs := make(map[string]bool) // Track which memories we've already processed
 
 	for _, memory := range memories {
+		// Skip if already processed as part of a cluster
+		if processedIDs[memory.ID] {
+			continue
+		}
+
 		// Calculate adjusted age based on importance and access count
 		adjustedAgeDays := w.calculateAdjustedAge(&memory, baseAgeDays)
 
 		// Skip if adjusted age doesn't meet threshold
 		if adjustedAgeDays < float64(baseAgeDays) {
 			skipped++
+			processedIDs[memory.ID] = true
 			continue
 		}
 
-		// Compress the memory
-		compressedMemory, err := w.compressor.Compress(ctx, &memory, toTier)
+		// Find similar memories for clustering
+		cluster, err := w.linker.FindClusters(ctx, &memory, fromTier, 10)
 		if err != nil {
-			log.Printf("[DecayWorker] ERROR: Failed to compress memory %s: %v", memory.ID, err)
+			log.Printf("[DecayWorker] WARNING: Failed to find cluster for memory %s: %v", memory.ID, err)
+			// Fall back to individual compression
+			cluster = []Memory{memory}
+		}
+
+		// Filter cluster to only include memories within merge window
+		validCluster := []Memory{}
+		for _, clusterMem := range cluster {
+			// Skip if already processed
+			if processedIDs[clusterMem.ID] {
+				continue
+			}
+
+			// Check if within temporal merge window
+			timeDiff := math.Abs(float64(memory.CreatedAt.Sub(clusterMem.CreatedAt).Hours() / 24))
+			if timeDiff <= float64(mergeWindowDays) {
+				// Also check adjusted age
+				clusterAdjustedAge := w.calculateAdjustedAge(&clusterMem, baseAgeDays)
+				if clusterAdjustedAge >= float64(baseAgeDays) {
+					validCluster = append(validCluster, clusterMem)
+				}
+			}
+		}
+
+		if len(validCluster) == 0 {
+			// No valid cluster members, skip
+			skipped++
+			processedIDs[memory.ID] = true
+			continue
+		}
+
+		// Compress the cluster
+		var compressedMemory *Memory
+		if len(validCluster) > 1 {
+			log.Printf("[DecayWorker] Compressing cluster of %d memories", len(validCluster))
+			compressedMemory, err = w.compressor.CompressCluster(ctx, validCluster, toTier)
+			clustered += len(validCluster)
+		} else {
+			// Single memory, use regular compression
+			compressedMemory, err = w.compressor.Compress(ctx, &validCluster[0], toTier)
+		}
+
+		if err != nil {
+			log.Printf("[DecayWorker] ERROR: Failed to compress cluster: %v", err)
+			for _, mem := range validCluster {
+				processedIDs[mem.ID] = true
+			}
 			continue
 		}
 
 		// Regenerate embedding for compressed content
 		newEmbedding, err := w.embedder.Embed(ctx, compressedMemory.Content)
 		if err != nil {
-			log.Printf("[DecayWorker] ERROR: Failed to generate embedding for compressed memory %s: %v", memory.ID, err)
+			log.Printf("[DecayWorker] ERROR: Failed to generate embedding for compressed memory %s: %v",
+				compressedMemory.ID, err)
+			for _, mem := range validCluster {
+				processedIDs[mem.ID] = true
+			}
 			continue
 		}
 		compressedMemory.Embedding = newEmbedding
 
 		// Update in storage
 		if err := w.storage.UpdateMemory(ctx, compressedMemory); err != nil {
-			log.Printf("[DecayWorker] ERROR: Failed to update memory %s: %v", memory.ID, err)
+			log.Printf("[DecayWorker] ERROR: Failed to update memory %s: %v", compressedMemory.ID, err)
+			for _, mem := range validCluster {
+				processedIDs[mem.ID] = true
+			}
 			continue
+		}
+
+		// Mark all cluster members as processed
+		for _, mem := range validCluster {
+			processedIDs[mem.ID] = true
 		}
 
 		compressed++
 
-		// Log progress every 10 memories
+		// Log progress every 10 compressions
 		if compressed%10 == 0 {
-			log.Printf("[DecayWorker] Progress: %d/%d compressed", compressed, len(memories))
+			log.Printf("[DecayWorker] Progress: %d compressions (%d memories clustered)", compressed, clustered)
 		}
 	}
 
-	log.Printf("[DecayWorker] %s -> %s complete: %d compressed, %d skipped (protected by importance/access)",
-		fromTier, toTier, compressed, skipped)
+	log.Printf("[DecayWorker] %s -> %s complete: %d compressions (%d memories in clusters), %d skipped",
+		fromTier, toTier, compressed, clustered, skipped)
 }
 
 // calculateAdjustedAge applies importance and access modifiers to memory age
