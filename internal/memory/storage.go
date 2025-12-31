@@ -478,9 +478,21 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 // Helper to convert scroll point to memory
 func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 	payload := point.Payload
-
+	
+	// Get memory ID from payload, fallback to point ID if missing
+	memoryID := getStringFromPayload(payload, "memory_id")
+	if memoryID == "" {
+		// Extract UUID from point ID
+		if point.Id != nil {
+			if uuidVal := point.Id.GetUuid(); uuidVal != "" {
+				memoryID = uuidVal
+				log.Printf("[Storage] WARNING: Memory missing memory_id in payload, using point ID: %s", memoryID)
+			}
+		}
+	}
+	
 	memory := Memory{
-		ID:              getStringFromPayload(payload, "memory_id"),
+		ID:              memoryID,
 		Content:         getStringFromPayload(payload, "content"),
 		CompressedFrom:  getStringFromPayload(payload, "compressed_from"),
 		Tier:            MemoryTier(getStringFromPayload(payload, "tier")),
