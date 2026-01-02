@@ -62,9 +62,6 @@ type Memory struct {
 	RelatedMemories []string `json:"related_memories"`  // IDs of linked memories
 	ConceptTags     []string `json:"concept_tags"`      // Semantic tags for clustering
 
-	// Phase 4 enhancements: Temporal Resolution
-	TemporalResolution string `json:"temporal_resolution"` // ISO 8601 with degrading precision
-
 	// Phase 4 enhancements: Principles System (10 Commandments)
 	PrincipleRating float64 `json:"principle_rating"` // For Principles tier only (0.0-1.0)
 }

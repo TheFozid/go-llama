@@ -130,7 +130,7 @@ func LoadConfig(path string) (*Config, error) {
 
 // applyGrowerAIDefaults sets sensible defaults for Phase 4 configuration
 func applyGrowerAIDefaults(gai *GrowerAIConfig) {
-	// Compression merge windows
+	// Compression merge windows (temporal clustering for compression)
 	if gai.Compression.MergeWindowRecent == 0 {
 		gai.Compression.MergeWindowRecent = 3 // 3 days
 	}
@@ -140,6 +140,7 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	if gai.Compression.MergeWindowLong == 0 {
 		gai.Compression.MergeWindowLong = 30 // 30 days
 	}
+	// Note: TemporalResolution field removed - using full CreatedAt precision for all tiers
 	
 	// Principles system
 	if len(gai.Principles.AdminSlots) == 0 {

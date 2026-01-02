@@ -63,11 +63,9 @@ func (c *Compressor) Compress(ctx context.Context, memory *Memory, targetTier Me
 	memory.Content = strings.TrimSpace(compressed)
 	memory.Tier = targetTier
 	
-	// Set temporal resolution based on target tier
-	memory.TemporalResolution = c.degradeTemporalResolution(memory.CreatedAt, targetTier)
-
-	log.Printf("[Compressor] Compressed memory %s: %s -> %s (%d -> %d chars, temporal: %s)",
-		memory.ID, memory.Tier, targetTier, len(memory.CompressedFrom), len(memory.Content), memory.TemporalResolution)
+	log.Printf("[Compressor] Compressed memory %s: %s -> %s (%d -> %d chars, created: %s)",
+		memory.ID, memory.Tier, targetTier, len(memory.CompressedFrom), len(memory.Content), 
+		memory.CreatedAt.Format("2006-01-02 15:04"))
 
 	return memory, nil
 }
@@ -141,7 +139,8 @@ func (c *Compressor) CompressCluster(ctx context.Context, cluster []Memory, targ
 		}
 	}
 	merged.CreatedAt = earliestTime
-	
+	// Note: Preserving full CreatedAt precision for all tiers
+
 	// Set temporal resolution based on earliest time and target tier
 	merged.TemporalResolution = c.degradeTemporalResolution(earliestTime, targetTier)
 	
@@ -176,30 +175,10 @@ func (c *Compressor) CompressCluster(ctx context.Context, cluster []Memory, targ
 		merged.RelatedMemories = append(merged.RelatedMemories, id)
 	}
 	
-	log.Printf("[Compressor] Cluster compressed: %d memories -> 1 (temporal: %s, concepts: %v)",
-		len(cluster), merged.TemporalResolution, merged.ConceptTags)
+	log.Printf("[Compressor] Cluster compressed: %d memories -> 1 (created: %s, concepts: %v)",
+		len(cluster), merged.CreatedAt.Format("2006-01-02 15:04"), merged.ConceptTags)
 	
 	return &merged, nil
-}
-
-// degradeTemporalResolution converts timestamp to appropriate precision for tier
-func (c *Compressor) degradeTemporalResolution(t time.Time, tier MemoryTier) string {
-	switch tier {
-	case TierRecent:
-		// Full datetime: "2024-12-31T10:18:00Z"
-		return t.Format(time.RFC3339)
-	case TierMedium:
-		// Date only: "2024-12-31"
-		return t.Format("2006-01-02")
-	case TierLong:
-		// Month only: "2024-12"
-		return t.Format("2006-01")
-	case TierAncient:
-		// Year only: "2024"
-		return t.Format("2006")
-	default:
-		return t.Format(time.RFC3339)
-	}
 }
 
 // extractConceptTags uses LLM to extract semantic tags from content

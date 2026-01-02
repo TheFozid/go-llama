@@ -199,9 +199,6 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
 		"concept_tags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conceptTagsValues}}},
 		
-		// Phase 4: Temporal Resolution
-		"temporal_resolution": qdrant.NewValueString(memory.TemporalResolution),
-		
 		// Phase 4: Principles
 		"principle_rating":  qdrant.NewValueDouble(memory.PrincipleRating),
 	}
@@ -321,9 +318,6 @@ func (s *Storage) pointToMemory(point *qdrant.ScoredPoint) Memory {
 		// Phase 4: Memory Linking
 		RelatedMemories: getStringSliceFromPayload(payload, "related_memories"),
 		ConceptTags:     getStringSliceFromPayload(payload, "concept_tags"),
-		
-		// Phase 4: Temporal Resolution
-		TemporalResolution: getStringFromPayload(payload, "temporal_resolution"),
 		
 		// Phase 4: Principles
 		PrincipleRating: getFloatFromPayload(payload, "principle_rating"),
@@ -562,9 +556,6 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 		"related_memories":  &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: relatedMemoriesValues}}},
 		"concept_tags":      &qdrant.Value{Kind: &qdrant.Value_ListValue{ListValue: &qdrant.ListValue{Values: conceptTagsValues}}},
 		
-		// Phase 4: Temporal Resolution
-		"temporal_resolution": qdrant.NewValueString(memory.TemporalResolution),
-		
 		// Phase 4: Principles
 		"principle_rating":  qdrant.NewValueDouble(memory.PrincipleRating),
 	}
@@ -623,9 +614,6 @@ func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 		// Phase 4: Memory Linking
 		RelatedMemories: getStringSliceFromPayload(payload, "related_memories"),
 		ConceptTags:     getStringSliceFromPayload(payload, "concept_tags"),
-		
-		// Phase 4: Temporal Resolution
-		TemporalResolution: getStringFromPayload(payload, "temporal_resolution"),
 		
 		// Phase 4: Principles
 		PrincipleRating: getFloatFromPayload(payload, "principle_rating"),

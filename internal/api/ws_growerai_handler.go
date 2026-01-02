@@ -248,21 +248,19 @@ for _, result := range results {
 				importanceScore += 0.1
 			}
 
-			// Set temporal resolution for new memory (Recent tier = full datetime)
-			now := time.Now()
-			temporalResolution := now.Format(time.RFC3339)
+		// Create new memory with full timestamp precision
+		now := time.Now()
 
-			mem := &memory.Memory{
-				Content:            memoryContent,
-				Tier:               memory.TierRecent,
-				UserID:             &userIDStr,
-				IsCollective:       false,
-				CreatedAt:          now,
-				LastAccessedAt:     now,
-				AccessCount:        0,
-				ImportanceScore:    importanceScore,
-				Embedding:          memEmbedding,
-				TemporalResolution: temporalResolution,
+		mem := &memory.Memory{
+			Content:            memoryContent,
+			Tier:               memory.TierRecent,
+			UserID:             &userIDStr,
+			IsCollective:       false,
+			CreatedAt:          now,
+			LastAccessedAt:     now,
+			AccessCount:        0,
+			ImportanceScore:    importanceScore,
+			Embedding:          memEmbedding,
 				Metadata: map[string]interface{}{
 					"chat_id": chatInst.ID,
 				},
@@ -271,9 +269,9 @@ for _, result := range results {
 			if err := storage.Store(ctx, mem); err != nil {
 				log.Printf("[GrowerAI-WS] WARNING: Failed to store memory: %v", err)
 			} else {
-				log.Printf("[GrowerAI-WS] ✓ Stored memory (id=%s, importance=%.2f, temporal=%s)",
-					mem.ID, mem.ImportanceScore, mem.TemporalResolution)
-			}
+			log.Printf("[GrowerAI-WS] ✓ Stored memory (id=%s, importance=%.2f, created=%s)",
+				mem.ID, mem.ImportanceScore, mem.CreatedAt.Format("2006-01-02 15:04"))
+		}
 		}
 	} else {
 		log.Printf("[GrowerAI-WS] Skipping memory storage (message too short)")
