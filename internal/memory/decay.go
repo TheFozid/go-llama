@@ -22,6 +22,7 @@ type DecayWorker struct {
 	scheduleHours          int
 	principleScheduleHours int
 	minRatingThreshold     float64
+	extractionLimit        int        // Max memories to analyze for principles
 	tierRules              TierRules
 	mergeWindows           MergeWindows
 	importanceMod          float64
@@ -57,6 +58,7 @@ func NewDecayWorker(
 	scheduleHours int,
 	principleScheduleHours int,
 	minRatingThreshold float64,
+	extractionLimit int,
 	tierRules TierRules,
 	mergeWindows MergeWindows,
 	importanceMod float64,
@@ -66,19 +68,20 @@ func NewDecayWorker(
 		storage:                storage,
 		compressor:             compressor,
 		embedder:               embedder,
-		migrationComplete:      false,
 		tagger:                 tagger,
 		linker:                 linker,
 		db:                     db,
 		scheduleHours:          scheduleHours,
 		principleScheduleHours: principleScheduleHours,
 		minRatingThreshold:     minRatingThreshold,
+		extractionLimit:        extractionLimit,
 		tierRules:              tierRules,
 		mergeWindows:           mergeWindows,
 		importanceMod:          importanceMod,
 		accessMod:              accessMod,
 		stopChan:               make(chan struct{}),
 		lastPrincipleEvolution: time.Now(), // Initialize to now
+		migrationComplete:      false, // Will run on first cycle
 	}
 }
 
@@ -177,7 +180,8 @@ func (w *DecayWorker) runCompressionCycle() {
 // evolvePrinciplesPhase runs the principle evolution process
 func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
 	// Extract principle candidates from memory patterns
-	candidates, err := ExtractPrinciples(w.db, w.storage, w.minRatingThreshold)
+	// Note: extractionLimit comes from config (passed during initialization)
+	candidates, err := ExtractPrinciples(w.db, w.storage, w.minRatingThreshold, w.extractionLimit)
 	if err != nil {
 		return err
 	}

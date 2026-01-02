@@ -200,35 +200,65 @@ type PrincipleCandidate struct {
 
 // ExtractPrinciples analyzes memory patterns to propose new principles
 // This is called by the background worker
-func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64) ([]PrincipleCandidate, error) {
+func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64, extractionLimit int) ([]PrincipleCandidate, error) {
 	ctx := context.Background()
 	
-	log.Printf("[Principles] Extracting principle candidates from memory patterns...")
+	log.Printf("[Principles] Extracting principle candidates from memory patterns (limit: %d)...", extractionLimit)
 	
-	// Step 1: Find all "good" memories across all users
-	// We use SearchByConceptTags with empty tags to get memories, then filter by outcome
+
+	// Step 1: Find all "good" memories across all users with pagination
 	var goodMemories []*Memory
+	var offset *qdrant.PointId
+	batchSize := 100
+	totalFetched := 0
 	
-	// Query Qdrant directly for good memories
-scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
-	CollectionName: storage.CollectionName,
-		Filter: &qdrant.Filter{
-			Must: []*qdrant.Condition{
-				qdrant.NewMatch("outcome_tag", "good"),
+	// Query Qdrant with pagination to respect extraction limit
+	for totalFetched < extractionLimit {
+		remaining := extractionLimit - totalFetched
+		currentBatch := batchSize
+		if remaining < batchSize {
+			currentBatch = remaining
+		}
+		
+		scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+			CollectionName: storage.CollectionName,
+			Filter: &qdrant.Filter{
+				Must: []*qdrant.Condition{
+					qdrant.NewMatch("outcome_tag", "good"),
+				},
 			},
-		},
-		Limit:       qdrant.PtrOf(uint32(500)), // Analyze up to 500 good memories
-		WithPayload: qdrant.NewWithPayload(true),
-	})
-	
-	if err != nil {
-		return nil, fmt.Errorf("failed to find good memories: %w", err)
+			Limit:       qdrant.PtrOf(uint32(currentBatch)),
+			Offset:      offset,
+			WithPayload: qdrant.NewWithPayload(true),
+		})
+		
+		if err != nil {
+			return nil, fmt.Errorf("failed to find good memories: %w", err)
+		}
+		
+		if len(scrollResult) == 0 {
+			break // No more results
+		}
+		
+		for _, point := range scrollResult {
+			mem := storage.pointToMemoryFromScroll(point)
+			goodMemories = append(goodMemories, &mem)
+		}
+		
+		totalFetched += len(scrollResult)
+		
+		// Update offset for next page
+		if len(scrollResult) > 0 {
+			offset = scrollResult[len(scrollResult)-1].Id
+		}
+		
+		// Break if we got fewer results than requested (no more data)
+		if len(scrollResult) < currentBatch {
+			break
+		}
 	}
 	
-	for _, point := range scrollResult {
-		mem := storage.pointToMemoryFromScroll(point)
-		goodMemories = append(goodMemories, &mem)
-	}
+	log.Printf("[Principles] Fetched %d good memories for analysis", len(goodMemories))
 	
 	if len(goodMemories) == 0 {
 		log.Printf("[Principles] No 'good' memories found to analyze")

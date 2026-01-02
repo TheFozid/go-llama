@@ -68,6 +68,7 @@ type GrowerAIConfig struct {
 		AIManagedSlots         []int   `json:"ai_managed_slots"`          // Slots 4-10: AI-managed
 		EvolutionScheduleHours int     `json:"evolution_schedule_hours"`  // How often to evolve principles
 		MinRatingThreshold     float64 `json:"min_rating_threshold"`      // Minimum rating to become a principle
+		ExtractionLimit        int     `json:"extraction_limit"`          // Max memories to analyze for patterns
 	} `json:"principles"`
 	
 	// Phase 4: Personality Control
@@ -167,6 +168,9 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	}
 	if gai.Principles.MinRatingThreshold == 0 {
 		gai.Principles.MinRatingThreshold = 0.75
+	}
+	if gai.Principles.ExtractionLimit == 0 {
+		gai.Principles.ExtractionLimit = 1000 // Analyze up to 1000 good memories
 	}
 	
 	// Personality control

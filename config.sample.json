@@ -80,7 +80,8 @@
       "admin_slots": [1, 2, 3],
       "ai_managed_slots": [4, 5, 6, 7, 8, 9, 10],
       "evolution_schedule_hours": 168,
-      "min_rating_threshold": 0.75
+      "min_rating_threshold": 0.75,
+      "extraction_limit": 1000
     },
     "personality": {
       "good_behavior_bias": 0.60,

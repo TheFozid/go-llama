@@ -94,6 +94,7 @@ func main() {
 				cfg.GrowerAI.Compression.ScheduleHours,
 				cfg.GrowerAI.Principles.EvolutionScheduleHours,  // Principle evolution schedule
 				cfg.GrowerAI.Principles.MinRatingThreshold,      // Minimum rating for principles
+				cfg.GrowerAI.Principles.ExtractionLimit,         // Max memories to analyze
 				tierRules,
 				mergeWindows,                                    // Phase 4D: Add merge windows
 				cfg.GrowerAI.Compression.ImportanceMod,
