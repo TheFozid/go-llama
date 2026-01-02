@@ -91,6 +91,8 @@ func main() {
 				tagger,
 				linker,                                          // Phase 4D: Add linker
 				db.DB,                                           // Pass database connection for principles
+				cfg.GrowerAI.Compression.Model.URL,              // LLM URL for principle generation
+				cfg.GrowerAI.Compression.Model.Name,             // LLM model for principle generation
 				cfg.GrowerAI.Compression.ScheduleHours,
 				cfg.GrowerAI.Principles.EvolutionScheduleHours,  // Principle evolution schedule
 				cfg.GrowerAI.Principles.MinRatingThreshold,      // Minimum rating for principles

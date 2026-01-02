@@ -2,13 +2,17 @@
 package memory
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
-
+	
 	"github.com/qdrant/go-client/qdrant"
 	"gorm.io/gorm"
 )
@@ -200,7 +204,7 @@ type PrincipleCandidate struct {
 
 // ExtractPrinciples analyzes memory patterns to propose new principles
 // This is called by the background worker
-func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64, extractionLimit int) ([]PrincipleCandidate, error) {
+func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64, extractionLimit int, llmURL string, llmModel string) ([]PrincipleCandidate, error) {
 	ctx := context.Background()
 	
 	log.Printf("[Principles] Extracting principle candidates from memory patterns (limit: %d)...", extractionLimit)
@@ -314,10 +318,10 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 		patterns = patterns[:10]
 	}
 	
+
 	candidates := []PrincipleCandidate{}
 	
-	// For now, generate simple principles from patterns
-	// TODO: Could use LLM here to generate more sophisticated principles
+	// Use LLM to generate sophisticated principles from patterns
 	for _, pattern := range patterns {
 		// Calculate rating based on frequency and validation
 		rating := float64(pattern.Frequency) / float64(len(goodMemories))
@@ -330,9 +334,38 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 			continue
 		}
 		
-		// Generate principle text from concept
-		principleText := fmt.Sprintf("When working with %s, apply strategies that have proven successful in past interactions.", 
-			strings.Join(pattern.Concepts, " and "))
+		// Sample up to 5 evidence memories for context
+		sampleSize := 5
+		if len(pattern.Memories) < sampleSize {
+			sampleSize = len(pattern.Memories)
+		}
+		
+		evidenceContent := strings.Builder{}
+		for i := 0; i < sampleSize; i++ {
+			mem, err := storage.GetMemoryByID(ctx, pattern.Memories[i])
+			if err != nil {
+				log.Printf("[Principles] WARNING: Failed to retrieve evidence memory %s: %v", pattern.Memories[i], err)
+				continue
+			}
+			evidenceContent.WriteString(fmt.Sprintf("Example %d:\n%s\n\n", i+1, mem.Content))
+		}
+		
+		// Generate principle using LLM
+		principleText, err := generatePrincipleFromPattern(
+			ctx,
+			llmURL,
+			llmModel,
+			pattern.Concepts,
+			evidenceContent.String(),
+			pattern.Frequency,
+		)
+		
+		if err != nil {
+			log.Printf("[Principles] WARNING: Failed to generate principle for pattern %v: %v", pattern.Concepts, err)
+			// Fallback to template-based generation
+			principleText = fmt.Sprintf("When working with %s, apply strategies that have proven successful in past interactions.", 
+				strings.Join(pattern.Concepts, " and "))
+		}
 		
 		candidates = append(candidates, PrincipleCandidate{
 			Content:   principleText,
@@ -416,4 +449,103 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 	}
 	
 	return nil
+}
+
+// generatePrincipleFromPattern uses LLM to synthesize an actionable principle from evidence
+func generatePrincipleFromPattern(ctx context.Context, llmURL string, llmModel string, concepts []string, evidence string, frequency int) (string, error) {
+	prompt := fmt.Sprintf(`Analyze these successful interactions and extract ONE actionable principle.
+
+Concepts: %s
+Frequency: This pattern appeared in %d successful interactions
+
+Evidence from successful interactions:
+%s
+
+Generate a single-sentence principle that:
+1. Captures what made these interactions successful
+2. Is specific and actionable (not generic advice)
+3. Starts with an action verb or clear instruction
+4. Is 15-30 words long
+5. Does NOT just repeat the concepts
+
+Good examples:
+- "Break down complex debugging tasks into isolated test cases before examining the full codebase"
+- "Provide code examples alongside explanations when discussing abstract programming concepts"
+- "Verify user requirements with clarifying questions before proposing solutions"
+
+Bad examples (too generic):
+- "When working with Python, apply good strategies"
+- "Be helpful and accurate"
+
+Respond with ONLY the principle text, nothing else.`, 
+		strings.Join(concepts, ", "), 
+		frequency,
+		evidence)
+
+	reqBody := map[string]interface{}{
+		"model": llmModel,
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": "You are an expert at extracting actionable principles from successful patterns. Be specific and practical.",
+			},
+			{
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"temperature": 0.7, // Allow some creativity for principle formulation
+		"stream":      false,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned from LLM")
+	}
+
+	principleText := strings.TrimSpace(result.Choices[0].Message.Content)
+	
+	// Sanity checks
+	if len(principleText) < 20 {
+		return "", fmt.Errorf("principle too short: %s", principleText)
+	}
+	if len(principleText) > 200 {
+		return "", fmt.Errorf("principle too long: %s", principleText)
+	}
+
+	return principleText, nil
 }

@@ -19,6 +19,8 @@ type DecayWorker struct {
 	tagger                 *Tagger
 	linker                 *Linker
 	db                     *gorm.DB
+	llmURL                 string     // LLM URL for principle generation
+	llmModel               string     // LLM model name for principle generation
 	scheduleHours          int
 	principleScheduleHours int
 	minRatingThreshold     float64
@@ -55,6 +57,8 @@ func NewDecayWorker(
 	tagger *Tagger,
 	linker *Linker,
 	db *gorm.DB,
+	llmURL string,
+	llmModel string,
 	scheduleHours int,
 	principleScheduleHours int,
 	minRatingThreshold float64,
@@ -71,6 +75,8 @@ func NewDecayWorker(
 		tagger:                 tagger,
 		linker:                 linker,
 		db:                     db,
+		llmURL:                 llmURL,
+		llmModel:               llmModel,
 		scheduleHours:          scheduleHours,
 		principleScheduleHours: principleScheduleHours,
 		minRatingThreshold:     minRatingThreshold,
@@ -181,7 +187,7 @@ func (w *DecayWorker) runCompressionCycle() {
 func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
 	// Extract principle candidates from memory patterns
 	// Note: extractionLimit comes from config (passed during initialization)
-	candidates, err := ExtractPrinciples(w.db, w.storage, w.minRatingThreshold, w.extractionLimit)
+	candidates, err := ExtractPrinciples(w.db, w.storage, w.minRatingThreshold, w.extractionLimit, w.llmURL, w.llmModel)
 	if err != nil {
 		return err
 	}
