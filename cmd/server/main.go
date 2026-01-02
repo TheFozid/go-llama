@@ -68,6 +68,7 @@ func main() {
 				cfg.GrowerAI.Compression.Model.URL,
 				cfg.GrowerAI.Compression.Model.Name,
 				100, // batch size
+				embedder,
 			)
 
 			tierRules := memory.TierRules{

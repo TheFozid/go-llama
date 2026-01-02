@@ -23,14 +23,16 @@ type Tagger struct {
 	llmURL    string
 	llmModel  string
 	batchSize int
+	embedder  *Embedder
 }
 
 // NewTagger creates a new tagger instance
-func NewTagger(llmURL, llmModel string, batchSize int) *Tagger {
+func NewTagger(llmURL, llmModel string, batchSize int, embedder *Embedder) *Tagger {
 	return &Tagger{
 		llmURL:    llmURL,
 		llmModel:  llmModel,
 		batchSize: batchSize,
+		embedder:  embedder,
 	}
 }
 
@@ -75,12 +77,18 @@ func (t *Tagger) TagMemories(ctx context.Context, storage *Storage) error {
 		mem.ConceptTags = concepts
 		mem.ValidationCount = 1 // First validation
 		
-		// CRITICAL: If embedding is missing, skip this memory
+		// CRITICAL: If embedding is missing, regenerate it
 		if len(mem.Embedding) == 0 {
-			log.Printf("[Tagger] WARNING: Memory %s has no embedding, cannot update. Skipping.", mem.ID)
-			continue
+			log.Printf("[Tagger] WARNING: Memory %s has no embedding, regenerating...", mem.ID)
+			newEmbedding, err := t.embedder.Embed(ctx, mem.Content)
+			if err != nil {
+				log.Printf("[Tagger] ERROR: Failed to regenerate embedding for memory %s: %v", mem.ID, err)
+				continue // Skip this memory, cannot update without embedding
+			}
+			mem.Embedding = newEmbedding
+			log.Printf("[Tagger] ✓ Regenerated embedding for memory %s (%d dimensions)", mem.ID, len(newEmbedding))
 		}
-
+		
 		if err := storage.UpdateMemory(ctx, mem); err != nil {
 			log.Printf("[Tagger] ERROR: Failed to update memory %s: %v", mem.ID, err)
 			continue
