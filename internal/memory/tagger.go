@@ -264,10 +264,38 @@ Respond with JSON array only (no markdown, no explanation).`, content)
 	content = strings.TrimPrefix(content, "```")
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
-
+	
 	var concepts []string
+	
+	// Try parsing as JSON first
 	if err := json.Unmarshal([]byte(content), &concepts); err != nil {
-		return nil, fmt.Errorf("failed to parse concepts JSON: %w (content: %s)", err, content)
+		// Fallback: Try comma-separated values if JSON parsing fails
+		log.Printf("[Tagger] JSON parse failed for concepts, trying comma-split fallback: %v", err)
+		
+		// Remove brackets if present
+		content = strings.TrimPrefix(content, "[")
+		content = strings.TrimSuffix(content, "]")
+		
+		// Split by comma
+		rawConcepts := strings.Split(content, ",")
+		concepts = make([]string, 0, len(rawConcepts))
+		
+		for _, raw := range rawConcepts {
+			// Clean up each concept
+			cleaned := strings.TrimSpace(raw)
+			cleaned = strings.Trim(cleaned, `"'`) // Remove quotes
+			cleaned = strings.ToLower(cleaned)
+			
+			if cleaned != "" && len(cleaned) < 50 { // Sanity check
+				concepts = append(concepts, cleaned)
+			}
+		}
+		
+		if len(concepts) == 0 {
+			return nil, fmt.Errorf("failed to extract concepts from: %s", content)
+		}
+		
+		log.Printf("[Tagger] ✓ Extracted %d concepts via fallback parser", len(concepts))
 	}
 
 	// Limit to 5 concepts max
