@@ -145,10 +145,6 @@ func (l *Linker) TrackCoOccurrence(ctx context.Context, retrievedMemories []Memo
 // GetLinkStrength calculates the strength of a link between two memories
 // Returns a value between 0.0 and 1.0 based on co-retrieval frequency
 func (l *Linker) GetLinkStrength(memory *Memory, linkedMemoryID string) float64 {
-	if memory.AccessCount == 0 {
-		return 0.0
-	}
-	
 	// Get co-retrieval counts from metadata
 	if memory.Metadata == nil {
 		return 0.0
@@ -158,7 +154,7 @@ func (l *Linker) GetLinkStrength(memory *Memory, linkedMemoryID string) float64 
 	if !ok {
 		return 0.0
 	}
-	
+
 	// Type assert to map
 	var counts map[string]int
 	switch v := coRetrievalCounts.(type) {
@@ -182,6 +178,17 @@ func (l *Linker) GetLinkStrength(memory *Memory, linkedMemoryID string) float64 
 		return 0.0
 	}
 	
+	// For new memories (AccessCount = 0), use co-retrieval count directly
+	// Each co-retrieval contributes 0.2 strength, capped at 1.0
+	if memory.AccessCount == 0 {
+		strength := float64(coCount) * 0.2
+		if strength > 1.0 {
+			strength = 1.0
+		}
+		return strength
+	}
+	
+	// For established memories, use ratio of co-retrieval to total accesses
 	// Strength = co-retrieval count / total access count
 	// Capped at 1.0
 	strength := float64(coCount) / float64(memory.AccessCount)
