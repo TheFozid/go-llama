@@ -979,6 +979,7 @@ func (s *Storage) DeleteMemory(ctx context.Context, memoryID string) error {
 	
 	return nil
 }
+
 // CountMemoriesByTier returns the count of memories in a specific tier
 func (s *Storage) CountMemoriesByTier(ctx context.Context, tier MemoryTier) (int, error) {
 	// Use Qdrant's count API with filter
@@ -995,7 +996,7 @@ func (s *Storage) CountMemoriesByTier(ctx context.Context, tier MemoryTier) (int
 		return 0, fmt.Errorf("failed to count memories in tier %s: %w", tier, err)
 	}
 	
-	return int(countResult.Count), nil
+	return int(countResult.GetCount()), nil
 }
 
 // GetTierCounts returns memory counts for all tiers
@@ -1025,5 +1026,5 @@ func (s *Storage) GetTotalMemoryCount(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to count total memories: %w", err)
 	}
 	
-	return int(countResult.Count), nil
+	return int(countResult.GetCount()), nil
 }
