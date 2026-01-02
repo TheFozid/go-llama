@@ -84,6 +84,26 @@ func main() {
 				LongDays:   cfg.GrowerAI.Compression.MergeWindowLong,
 			}
 
+			// Prepare storage limits configuration
+			storageLimits := memory.StorageLimits{
+				MaxTotalMemories:   cfg.GrowerAI.StorageLimits.MaxTotalMemories,
+				TierAllocation: memory.TierAllocation{
+					Recent:  cfg.GrowerAI.StorageLimits.TierAllocation.Recent,
+					Medium:  cfg.GrowerAI.StorageLimits.TierAllocation.Medium,
+					Long:    cfg.GrowerAI.StorageLimits.TierAllocation.Long,
+					Ancient: cfg.GrowerAI.StorageLimits.TierAllocation.Ancient,
+				},
+				CompressionTrigger: cfg.GrowerAI.StorageLimits.CompressionTrigger,
+				AllowTierOverflow:  cfg.GrowerAI.StorageLimits.AllowTierOverflow,
+			}
+			
+			// Prepare compression weights configuration
+			compressionWeights := memory.CompressionWeights{
+				Age:        cfg.GrowerAI.StorageLimits.CompressionWeights.Age,
+				Importance: cfg.GrowerAI.StorageLimits.CompressionWeights.Importance,
+				Access:     cfg.GrowerAI.StorageLimits.CompressionWeights.Access,
+			}
+			
 			worker := memory.NewDecayWorker(
 				storage,
 				compressor,
@@ -97,12 +117,13 @@ func main() {
 				cfg.GrowerAI.Principles.EvolutionScheduleHours,  // Principle evolution schedule
 				cfg.GrowerAI.Principles.MinRatingThreshold,      // Minimum rating for principles
 				cfg.GrowerAI.Principles.ExtractionLimit,         // Max memories to analyze
-				tierRules,
+				tierRules,                                       // DEPRECATED: kept for compatibility
 				mergeWindows,                                    // Phase 4D: Add merge windows
-				cfg.GrowerAI.Compression.ImportanceMod,
-				cfg.GrowerAI.Compression.AccessMod,
+				cfg.GrowerAI.Compression.ImportanceMod,          // DEPRECATED: kept for compatibility
+				cfg.GrowerAI.Compression.AccessMod,              // DEPRECATED: kept for compatibility
+				storageLimits,                                   // NEW: space-based compression config
+				compressionWeights,                              // NEW: compression scoring weights
 			)
-
 			// Start worker in background goroutine
 			go worker.Start()
 
@@ -114,6 +135,13 @@ func main() {
 				cfg.GrowerAI.Linking.SimilarityThreshold, cfg.GrowerAI.Linking.MaxLinksPerMemory)
 			log.Printf("[Main] ✓ Cluster compression enabled (merge windows: %d/%d/%d days)",
 				mergeWindows.RecentDays, mergeWindows.MediumDays, mergeWindows.LongDays)
+			log.Printf("[Main] ✓ Space-based compression enabled (limit: %d memories, trigger: %.0f%%)",
+				storageLimits.MaxTotalMemories, storageLimits.CompressionTrigger*100)
+			log.Printf("[Main] ✓ Tier allocation: Recent=%.1f%%, Medium=%.1f%%, Long=%.1f%%, Ancient=%.1f%%",
+				storageLimits.TierAllocation.Recent*100,
+				storageLimits.TierAllocation.Medium*100,
+				storageLimits.TierAllocation.Long*100,
+				storageLimits.TierAllocation.Ancient*100)
 		}
 	} else {
 		log.Printf("[Main] GrowerAI compression disabled in config")

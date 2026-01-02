@@ -30,6 +30,24 @@ type GrowerAIConfig struct {
 		APIKey     string `json:"api_key"`
 	} `json:"qdrant"`
 	
+	// Storage limits and space-based compression
+	StorageLimits struct {
+		MaxTotalMemories   int     `json:"max_total_memories"`    // Total memory limit across all tiers
+		TierAllocation     struct {
+			Recent  float64 `json:"recent"`   // Percentage allocation for Recent tier (0.0-1.0)
+			Medium  float64 `json:"medium"`   // Percentage allocation for Medium tier
+			Long    float64 `json:"long"`     // Percentage allocation for Long tier
+			Ancient float64 `json:"ancient"`  // Percentage allocation for Ancient tier
+		} `json:"tier_allocation"`
+		CompressionTrigger float64 `json:"compression_trigger"`   // Compress when tier hits this % of allocation (0.0-1.0)
+		AllowTierOverflow  bool    `json:"allow_tier_overflow"`   // Allow tiers to borrow space from others
+		CompressionWeights struct {
+			Age        float64 `json:"age"`        // Weight for age in compression scoring (0.0-1.0)
+			Importance float64 `json:"importance"` // Weight for importance in compression scoring
+			Access     float64 `json:"access"`     // Weight for access frequency in compression scoring
+		} `json:"compression_weights"`
+	} `json:"storage_limits"`
+	
 	// Memory retrieval configuration
 	Retrieval struct {
 		MaxMemories       int     `json:"max_memories"`        // Max memories to retrieve per query
@@ -211,6 +229,36 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	// Tagging defaults
 	if gai.Tagging.BatchSize == 0 {
 		gai.Tagging.BatchSize = 100
+	}
+	
+	// Storage limits defaults
+	if gai.StorageLimits.MaxTotalMemories == 0 {
+		gai.StorageLimits.MaxTotalMemories = 100000 // Default: 100K memories (~270 MB)
+	}
+	if gai.StorageLimits.TierAllocation.Recent == 0 {
+		gai.StorageLimits.TierAllocation.Recent = 0.325
+	}
+	if gai.StorageLimits.TierAllocation.Medium == 0 {
+		gai.StorageLimits.TierAllocation.Medium = 0.275
+	}
+	if gai.StorageLimits.TierAllocation.Long == 0 {
+		gai.StorageLimits.TierAllocation.Long = 0.225
+	}
+	if gai.StorageLimits.TierAllocation.Ancient == 0 {
+		gai.StorageLimits.TierAllocation.Ancient = 0.175
+	}
+	if gai.StorageLimits.CompressionTrigger == 0 {
+		gai.StorageLimits.CompressionTrigger = 0.90
+	}
+	// AllowTierOverflow defaults to false (zero value)
+	if gai.StorageLimits.CompressionWeights.Age == 0 {
+		gai.StorageLimits.CompressionWeights.Age = 0.5
+	}
+	if gai.StorageLimits.CompressionWeights.Importance == 0 {
+		gai.StorageLimits.CompressionWeights.Importance = 0.3
+	}
+	if gai.StorageLimits.CompressionWeights.Access == 0 {
+		gai.StorageLimits.CompressionWeights.Access = 0.2
 	}
 }
 

@@ -3,13 +3,38 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
+	"sort"
 	"time"
 	"sync"
 
 	"gorm.io/gorm"
 )
+
+// StorageLimits defines space-based compression configuration
+type StorageLimits struct {
+	MaxTotalMemories   int
+	TierAllocation     TierAllocation
+	CompressionTrigger float64
+	AllowTierOverflow  bool
+}
+
+// TierAllocation defines percentage allocation for each tier
+type TierAllocation struct {
+	Recent  float64
+	Medium  float64
+	Long    float64
+	Ancient float64
+}
+
+// CompressionWeights defines scoring weights for compression candidate selection
+type CompressionWeights struct {
+	Age        float64
+	Importance float64
+	Access     float64
+}
 
 // DecayWorker manages the background compression and principle evolution process
 type DecayWorker struct {
@@ -25,10 +50,15 @@ type DecayWorker struct {
 	principleScheduleHours int
 	minRatingThreshold     float64
 	extractionLimit        int        // Max memories to analyze for principles
-	tierRules              TierRules
+	tierRules              TierRules  // DEPRECATED: kept for backwards compatibility
 	mergeWindows           MergeWindows
-	importanceMod          float64
-	accessMod              float64
+	importanceMod          float64    // DEPRECATED: kept for backwards compatibility
+	accessMod              float64    // DEPRECATED: kept for backwards compatibility
+	
+	// Space-based compression configuration
+	storageLimits          StorageLimits
+	compressionWeights     CompressionWeights
+	
 	stopChan               chan struct{}
 	lastPrincipleEvolution time.Time
 	evolutionMutex         sync.Mutex // Protects lastPrincipleEvolution
@@ -63,10 +93,12 @@ func NewDecayWorker(
 	principleScheduleHours int,
 	minRatingThreshold float64,
 	extractionLimit int,
-	tierRules TierRules,
+	tierRules TierRules,           // DEPRECATED: kept for backwards compatibility
 	mergeWindows MergeWindows,
-	importanceMod float64,
-	accessMod float64,
+	importanceMod float64,          // DEPRECATED: kept for backwards compatibility
+	accessMod float64,              // DEPRECATED: kept for backwards compatibility
+	storageLimits StorageLimits,   // NEW: space-based compression config
+	compressionWeights CompressionWeights, // NEW: compression scoring weights
 ) *DecayWorker {
 	return &DecayWorker{
 		storage:                storage,
@@ -81,10 +113,12 @@ func NewDecayWorker(
 		principleScheduleHours: principleScheduleHours,
 		minRatingThreshold:     minRatingThreshold,
 		extractionLimit:        extractionLimit,
-		tierRules:              tierRules,
+		tierRules:              tierRules,        // DEPRECATED
 		mergeWindows:           mergeWindows,
-		importanceMod:          importanceMod,
-		accessMod:              accessMod,
+		importanceMod:          importanceMod,    // DEPRECATED
+		accessMod:              accessMod,        // DEPRECATED
+		storageLimits:          storageLimits,
+		compressionWeights:     compressionWeights,
 		stopChan:               make(chan struct{}),
 		lastPrincipleEvolution: time.Now(), // Initialize to now
 		migrationComplete:      false, // Will run on first cycle
@@ -118,7 +152,7 @@ func (w *DecayWorker) Stop() {
 	close(w.stopChan)
 }
 
-// runCompressionCycle performs one full compression cycle
+// runCompressionCycle performs one full compression cycle (space-based)
 func (w *DecayWorker) runCompressionCycle() {
 	log.Printf("[DecayWorker] Starting compression cycle at %s", time.Now().Format(time.RFC3339))
 	startTime := time.Now()
@@ -140,19 +174,13 @@ func (w *DecayWorker) runCompressionCycle() {
 	if err := w.tagger.TagMemories(ctx, w.storage); err != nil {
 		log.Printf("[DecayWorker] ERROR in tagging phase: %v", err)
 	}
-
-	// PHASE 2: Cluster-based compression of old memories
-	log.Println("[DecayWorker] PHASE 2: Cluster-based compression...")
-
-	// Compress Recent -> Medium
-	w.compressTierWithClusters(ctx, TierRecent, TierMedium, w.tierRules.RecentToMediumDays, w.mergeWindows.RecentDays)
-
-	// Compress Medium -> Long
-	w.compressTierWithClusters(ctx, TierMedium, TierLong, w.tierRules.MediumToLongDays, w.mergeWindows.MediumDays)
-
-	// Compress Long -> Ancient
-	w.compressTierWithClusters(ctx, TierLong, TierAncient, w.tierRules.LongToAncientDays, w.mergeWindows.LongDays)
-
+	
+	// PHASE 2: Space-based compression
+	log.Println("[DecayWorker] PHASE 2: Space-based compression check...")
+	if err := w.runSpaceBasedCompression(ctx); err != nil {
+		log.Printf("[DecayWorker] ERROR in compression phase: %v", err)
+	}
+	
 	// PHASE 3: Evolve principles (only if schedule interval has passed)
 	w.evolutionMutex.Lock()
 	timeSinceLastEvolution := time.Since(w.lastPrincipleEvolution)
@@ -178,9 +206,217 @@ func (w *DecayWorker) runCompressionCycle() {
 		log.Printf("[DecayWorker] PHASE 3: Skipping principle evolution (next in %s)",
 			timeUntilNext.Round(time.Hour))
 	}
-
+	
 	duration := time.Since(startTime)
 	log.Printf("[DecayWorker] Compression cycle complete (took %s)", duration.Round(time.Second))
+}
+
+// runSpaceBasedCompression checks each tier's space usage and compresses if needed
+func (w *DecayWorker) runSpaceBasedCompression(ctx context.Context) error {
+	// Get current memory counts per tier
+	tierCounts, err := w.storage.GetTierCounts(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get tier counts: %w", err)
+	}
+	
+	totalCount, err := w.storage.GetTotalMemoryCount(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get total count: %w", err)
+	}
+	
+	log.Printf("[DecayWorker] Current memory distribution: Total=%d, Recent=%d, Medium=%d, Long=%d, Ancient=%d",
+		totalCount,
+		tierCounts[TierRecent],
+		tierCounts[TierMedium],
+		tierCounts[TierLong],
+		tierCounts[TierAncient])
+	
+	// Calculate tier limits
+	tierLimits := map[MemoryTier]int{
+		TierRecent:  int(float64(w.storageLimits.MaxTotalMemories) * w.storageLimits.TierAllocation.Recent),
+		TierMedium:  int(float64(w.storageLimits.MaxTotalMemories) * w.storageLimits.TierAllocation.Medium),
+		TierLong:    int(float64(w.storageLimits.MaxTotalMemories) * w.storageLimits.TierAllocation.Long),
+		TierAncient: int(float64(w.storageLimits.MaxTotalMemories) * w.storageLimits.TierAllocation.Ancient),
+	}
+	
+	log.Printf("[DecayWorker] Tier limits: Recent=%d, Medium=%d, Long=%d, Ancient=%d",
+		tierLimits[TierRecent], tierLimits[TierMedium], tierLimits[TierLong], tierLimits[TierAncient])
+	
+	// Check each tier and compress if needed
+	tiers := []struct {
+		current MemoryTier
+		target  MemoryTier
+	}{
+		{TierRecent, TierMedium},
+		{TierMedium, TierLong},
+		{TierLong, TierAncient},
+	}
+	
+	for _, tierPair := range tiers {
+		currentTier := tierPair.current
+		targetTier := tierPair.target
+		
+		currentCount := tierCounts[currentTier]
+		tierLimit := tierLimits[currentTier]
+		triggerThreshold := int(float64(tierLimit) * w.storageLimits.CompressionTrigger)
+		
+		// Check if compression is needed
+		if currentCount < triggerThreshold {
+			log.Printf("[DecayWorker] Tier %s: %d/%d (%.1f%%) - below trigger threshold (%d), skipping",
+				currentTier, currentCount, tierLimit,
+				float64(currentCount)/float64(tierLimit)*100, triggerThreshold)
+			continue
+		}
+		
+		log.Printf("[DecayWorker] Tier %s: %d/%d (%.1f%%) - EXCEEDS trigger threshold (%d), compressing to %s",
+			currentTier, currentCount, tierLimit,
+			float64(currentCount)/float64(tierLimit)*100, triggerThreshold, targetTier)
+		
+		// Calculate target count (compress down to 80% of limit for breathing room)
+		targetCount := int(float64(tierLimit) * 0.80)
+		
+		// Select memories for compression based on scoring
+		candidates, err := w.selectMemoriesForCompression(ctx, currentTier, currentCount, tierLimit, targetCount)
+		if err != nil {
+			log.Printf("[DecayWorker] ERROR selecting memories for compression: %v", err)
+			continue
+		}
+		
+		if len(candidates) == 0 {
+			log.Printf("[DecayWorker] No candidates selected for compression in tier %s", currentTier)
+			continue
+		}
+		
+		// Compress candidates using cluster-based approach
+		compressed, clustered := w.compressMemoriesWithClusters(ctx, candidates, targetTier)
+		
+		log.Printf("[DecayWorker] %s -> %s complete: %d compressions (%d memories in clusters)",
+			currentTier, targetTier, compressed, clustered)
+	}
+	
+	// Final status report
+	finalCounts, _ := w.storage.GetTierCounts(ctx)
+	finalTotal, _ := w.storage.GetTotalMemoryCount(ctx)
+	
+	log.Printf("[DecayWorker] Final memory distribution: Total=%d, Recent=%d, Medium=%d, Long=%d, Ancient=%d",
+		finalTotal,
+		finalCounts[TierRecent],
+		finalCounts[TierMedium],
+		finalCounts[TierLong],
+		finalCounts[TierAncient])
+	
+	return nil
+}
+
+// compressMemoriesWithClusters compresses a list of candidate memories using cluster-based approach
+// Returns: (number of compressions, total memories in clusters)
+func (w *DecayWorker) compressMemoriesWithClusters(ctx context.Context, candidates []Memory, targetTier MemoryTier) (int, int) {
+	compressed := 0
+	clustered := 0
+	processedIDs := make(map[string]bool)
+	
+	for _, memory := range candidates {
+		// Skip if already processed as part of a cluster
+		if processedIDs[memory.ID] {
+			continue
+		}
+		
+		// Find similar memories for clustering
+		cluster, err := w.linker.FindClusters(ctx, &memory, memory.Tier, 10)
+		if err != nil {
+			log.Printf("[DecayWorker] WARNING: Failed to find cluster for memory %s: %v", memory.ID, err)
+			cluster = []Memory{memory}
+		}
+		
+		// Filter cluster to only include memories from candidates list
+		candidateIDs := make(map[string]bool)
+		for _, c := range candidates {
+			candidateIDs[c.ID] = true
+		}
+		
+		validCluster := []Memory{}
+		for _, clusterMem := range cluster {
+			if processedIDs[clusterMem.ID] {
+				continue
+			}
+			if candidateIDs[clusterMem.ID] {
+				validCluster = append(validCluster, clusterMem)
+			}
+		}
+		
+		if len(validCluster) == 0 {
+			continue
+		}
+		
+		// Compress the cluster
+		var compressedMemory *Memory
+		if len(validCluster) > 1 {
+			log.Printf("[DecayWorker] Compressing cluster of %d memories", len(validCluster))
+			compressedMemory, err = w.compressor.CompressCluster(ctx, validCluster, targetTier)
+			clustered += len(validCluster)
+		} else {
+			// Single memory, use regular compression
+			compressedMemory, err = w.compressor.Compress(ctx, &validCluster[0], targetTier)
+		}
+		
+		if err != nil {
+			log.Printf("[DecayWorker] ERROR: Failed to compress cluster: %v", err)
+			for _, mem := range validCluster {
+				processedIDs[mem.ID] = true
+			}
+			continue
+		}
+		
+		// Regenerate embedding for compressed content
+		newEmbedding, err := w.embedder.Embed(ctx, compressedMemory.Content)
+		if err != nil {
+			log.Printf("[DecayWorker] ERROR: Failed to generate embedding for compressed memory %s: %v",
+				compressedMemory.ID, err)
+			for _, mem := range validCluster {
+				processedIDs[mem.ID] = true
+			}
+			continue
+		}
+		compressedMemory.Embedding = newEmbedding
+		
+		// Update in storage
+		if err := w.storage.UpdateMemory(ctx, compressedMemory); err != nil {
+			log.Printf("[DecayWorker] ERROR: Failed to update memory %s: %v", compressedMemory.ID, err)
+			for _, mem := range validCluster {
+				processedIDs[mem.ID] = true
+			}
+			continue
+		}
+		
+		// Delete the other cluster members (all except the first one which was merged into)
+		deletedCount := 0
+		for i := 1; i < len(validCluster); i++ {
+			if err := w.storage.DeleteMemory(ctx, validCluster[i].ID); err != nil {
+				log.Printf("[DecayWorker] WARNING: Failed to delete merged memory %s: %v",
+					validCluster[i].ID, err)
+			} else {
+				deletedCount++
+			}
+		}
+		
+		if deletedCount > 0 {
+			log.Printf("[DecayWorker] ✓ Deleted %d merged memories from cluster", deletedCount)
+		}
+		
+		// Mark all cluster members as processed
+		for _, mem := range validCluster {
+			processedIDs[mem.ID] = true
+		}
+		
+		compressed++
+		
+		// Log progress every 10 compressions
+		if compressed%10 == 0 {
+			log.Printf("[DecayWorker] Progress: %d compressions (%d memories in clusters)", compressed, clustered)
+		}
+	}
+	
+	return compressed, clustered
 }
 
 // evolvePrinciplesPhase runs the principle evolution process
@@ -370,4 +606,108 @@ func (w *DecayWorker) calculateAdjustedAge(memory *Memory, baseAgeDays int) floa
 	adjustedAge := realAgeDays / protectionFactor
 
 	return adjustedAge
+}
+
+// calculateCompressionScore computes a score for prioritizing memories for compression
+// Higher score = more likely to be compressed
+// Factors: age (older = higher), importance (lower = higher), access (less = higher)
+func (w *DecayWorker) calculateCompressionScore(memory *Memory, weights struct{ Age, Importance, Access float64 }) float64 {
+	now := time.Now()
+	
+	// 1. Age component (0.0 to 1.0, normalized to max 365 days)
+	ageDays := now.Sub(memory.CreatedAt).Hours() / 24.0
+	normalizedAge := math.Min(ageDays/365.0, 1.0) // Cap at 1 year
+	
+	// 2. Importance component (inverted: low importance = high score)
+	// ImportanceScore is 0.0-1.0, we want (1 - importance)
+	importanceComponent := 1.0 - memory.ImportanceScore
+	
+	// 3. Access component (inverted: low access = high score)
+	// Use logarithmic scale to handle high access counts
+	// Formula: 1 / (1 + log(1 + access_count))
+	accessComponent := 1.0 / (1.0 + math.Log1p(float64(memory.AccessCount)))
+	
+	// Weighted sum
+	score := (weights.Age * normalizedAge) +
+		(weights.Importance * importanceComponent) +
+		(weights.Access * accessComponent)
+	
+	return score
+}
+
+// selectMemoriesForCompression chooses which memories to compress based on space limits
+// Returns memories sorted by compression score (highest first)
+func (w *DecayWorker) selectMemoriesForCompression(
+	ctx context.Context,
+	tier MemoryTier,
+	currentCount int,
+	tierLimit int,
+	targetCount int,
+) ([]Memory, error) {
+	// Calculate how many memories need to be compressed
+	excessCount := currentCount - targetCount
+	
+	if excessCount <= 0 {
+		return []Memory{}, nil // No compression needed
+	}
+	
+	log.Printf("[DecayWorker] Tier %s: %d/%d memories (%.1f%% full), need to compress %d",
+		tier, currentCount, tierLimit, float64(currentCount)/float64(tierLimit)*100, excessCount)
+	
+	// Fetch more memories than needed to allow for clustering
+	// Fetch 2x excess to have options for cluster formation
+	fetchLimit := excessCount * 2
+	if fetchLimit > 1000 {
+		fetchLimit = 1000 // Cap at 1000 to avoid huge queries
+	}
+	
+	// Get all memories in this tier (we need to score them)
+	// Use FindMemoriesForCompression with age=0 to get all memories in tier
+	memories, err := w.storage.FindMemoriesForCompression(ctx, tier, 0, fetchLimit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch memories for scoring: %w", err)
+	}
+	
+	if len(memories) == 0 {
+		return []Memory{}, nil
+	}
+	
+	log.Printf("[DecayWorker] Fetched %d memories from tier %s for scoring", len(memories), tier)
+	
+	// Calculate compression score for each memory
+	type scoredMemory struct {
+		memory Memory
+		score  float64
+	}
+	
+	scored := make([]scoredMemory, len(memories))
+	for i, mem := range memories {
+		score := w.calculateCompressionScore(&mem, struct{ Age, Importance, Access float64 }{
+			Age:        w.compressionWeights.Age,
+			Importance: w.compressionWeights.Importance,
+			Access:     w.compressionWeights.Access,
+		})
+		scored[i] = scoredMemory{memory: mem, score: score}
+	}
+	
+	// Sort by score (highest first = most compressible)
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+	
+	// Select top N candidates for compression
+	selectedCount := excessCount
+	if selectedCount > len(scored) {
+		selectedCount = len(scored)
+	}
+	
+	selected := make([]Memory, selectedCount)
+	for i := 0; i < selectedCount; i++ {
+		selected[i] = scored[i].memory
+	}
+	
+	log.Printf("[DecayWorker] Selected %d memories for compression (scores: %.3f to %.3f)",
+		len(selected), scored[0].score, scored[selectedCount-1].score)
+	
+	return selected, nil
 }

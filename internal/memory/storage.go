@@ -979,3 +979,51 @@ func (s *Storage) DeleteMemory(ctx context.Context, memoryID string) error {
 	
 	return nil
 }
+// CountMemoriesByTier returns the count of memories in a specific tier
+func (s *Storage) CountMemoriesByTier(ctx context.Context, tier MemoryTier) (int, error) {
+	// Use Qdrant's count API with filter
+	countResult, err := s.Client.Count(ctx, &qdrant.CountPoints{
+		CollectionName: s.CollectionName,
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				qdrant.NewMatch("tier", string(tier)),
+			},
+		},
+	})
+	
+	if err != nil {
+		return 0, fmt.Errorf("failed to count memories in tier %s: %w", tier, err)
+	}
+	
+	return int(countResult.Count), nil
+}
+
+// GetTierCounts returns memory counts for all tiers
+func (s *Storage) GetTierCounts(ctx context.Context) (map[MemoryTier]int, error) {
+	counts := make(map[MemoryTier]int)
+	
+	tiers := []MemoryTier{TierRecent, TierMedium, TierLong, TierAncient}
+	
+	for _, tier := range tiers {
+		count, err := s.CountMemoriesByTier(ctx, tier)
+		if err != nil {
+			return nil, err
+		}
+		counts[tier] = count
+	}
+	
+	return counts, nil
+}
+
+// GetTotalMemoryCount returns the total count of all memories across all tiers
+func (s *Storage) GetTotalMemoryCount(ctx context.Context) (int, error) {
+	countResult, err := s.Client.Count(ctx, &qdrant.CountPoints{
+		CollectionName: s.CollectionName,
+	})
+	
+	if err != nil {
+		return 0, fmt.Errorf("failed to count total memories: %w", err)
+	}
+	
+	return int(countResult.Count), nil
+}
