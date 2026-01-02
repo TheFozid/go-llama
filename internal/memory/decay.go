@@ -27,6 +27,7 @@ type DecayWorker struct {
 	accessMod              float64
 	stopChan               chan struct{}
 	lastPrincipleEvolution time.Time
+	migrationComplete      bool
 }
 
 // TierRules defines age thresholds for tier transitions
@@ -63,6 +64,7 @@ func NewDecayWorker(
 		storage:                storage,
 		compressor:             compressor,
 		embedder:               embedder,
+		migrationComplete:      false,
 		tagger:                 tagger,
 		linker:                 linker,
 		db:                     db,
@@ -109,9 +111,19 @@ func (w *DecayWorker) Stop() {
 func (w *DecayWorker) runCompressionCycle() {
 	log.Printf("[DecayWorker] Starting compression cycle at %s", time.Now().Format(time.RFC3339))
 	startTime := time.Now()
-
 	ctx := context.Background()
-
+	
+	// PHASE 0: One-time migration (runs only on first cycle)
+	if !w.migrationComplete {
+		log.Println("[DecayWorker] PHASE 0: Running one-time memory_id migration...")
+		if err := w.storage.MigrateMemoryIDs(ctx); err != nil {
+			log.Printf("[DecayWorker] ERROR in migration phase: %v", err)
+		} else {
+			w.migrationComplete = true
+			log.Println("[DecayWorker] ✓ Migration complete, will not run again")
+		}
+	}
+	
 	// PHASE 1: Tag untagged memories
 	log.Println("[DecayWorker] PHASE 1: Tagging untagged memories...")
 	if err := w.tagger.TagMemories(ctx, w.storage); err != nil {

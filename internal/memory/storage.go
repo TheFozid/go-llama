@@ -582,16 +582,11 @@ func (s *Storage) UpdateMemory(ctx context.Context, memory *Memory) error {
 func (s *Storage) pointToMemoryFromScroll(point *qdrant.RetrievedPoint) Memory {
 	payload := point.Payload
 	
-	// Get memory ID from payload, fallback to point ID if missing
+	// Get memory ID from payload (migration ensures all memories have this)
 	memoryID := getStringFromPayload(payload, "memory_id")
 	if memoryID == "" {
-		// Extract UUID from point ID
-		if point.Id != nil {
-			if uuidVal := point.Id.GetUuid(); uuidVal != "" {
-				memoryID = uuidVal
-				log.Printf("[Storage] WARNING: Memory missing memory_id in payload, using point ID: %s", memoryID)
-			}
-		}
+		log.Printf("[Storage] ERROR: Memory missing memory_id in payload after migration!")
+		// This should never happen after migration runs
 	}
 	
 	memory := Memory{
@@ -845,4 +840,88 @@ func (s *Storage) GetMemoryByID(ctx context.Context, memoryID string) (*Memory, 
 
 	memory := s.pointToMemoryFromScroll(scrollResult[0])
 	return &memory, nil
+}
+
+// MigrateMemoryIDs ensures all points have memory_id in payload
+// This is a one-time migration for memories created before Phase 4
+func (s *Storage) MigrateMemoryIDs(ctx context.Context) error {
+	log.Printf("[Storage] Starting memory_id migration...")
+	
+	// Scroll through all points
+	var offset *qdrant.PointId
+	migratedCount := 0
+	totalProcessed := 0
+	
+	for {
+		scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+			CollectionName: s.CollectionName,
+			Limit:          uint32Ptr(100),
+			Offset:         offset,
+			WithPayload:    qdrant.NewWithPayload(true),
+		})
+		
+		if err != nil {
+			return fmt.Errorf("scroll failed: %w", err)
+		}
+		
+		if len(scrollResult) == 0 {
+			break // No more points
+		}
+		
+		for _, point := range scrollResult {
+			totalProcessed++
+			payload := point.Payload
+			
+			// Check if memory_id exists in payload
+			memoryID := getStringFromPayload(payload, "memory_id")
+			if memoryID != "" {
+				continue // Already has memory_id, skip
+			}
+			
+			// Extract UUID from point ID
+			var pointUUID string
+			if point.Id != nil {
+				if uuidVal := point.Id.GetUuid(); uuidVal != "" {
+					pointUUID = uuidVal
+				}
+			}
+			
+			if pointUUID == "" {
+				log.Printf("[Storage] WARNING: Point has no UUID, skipping")
+				continue
+			}
+			
+			// Update payload with memory_id
+			_, err := s.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+				CollectionName: s.CollectionName,
+				Payload: map[string]*qdrant.Value{
+					"memory_id": qdrant.NewValueString(pointUUID),
+				},
+				PointsSelector: &qdrant.PointsSelector{
+					PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+						Points: &qdrant.PointsIdsList{
+							Ids: []*qdrant.PointId{point.Id},
+						},
+					},
+				},
+			})
+			
+			if err != nil {
+				log.Printf("[Storage] WARNING: Failed to set memory_id for point %s: %v", pointUUID, err)
+				continue
+			}
+			
+			migratedCount++
+		}
+		
+		// Update offset for pagination
+		if len(scrollResult) > 0 {
+			offset = scrollResult[len(scrollResult)-1].Id
+		} else {
+			break
+		}
+	}
+	
+	log.Printf("[Storage] Migration complete: %d/%d memories updated with memory_id", migratedCount, totalProcessed)
+	return nil
 }
