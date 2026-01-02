@@ -75,11 +75,12 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 		UserID:            &userIDStr,
 		IncludePersonal:   true,
 		IncludeCollective: false,
-		Limit:             5,
-		MinScore:          0.3,
+		Limit:             cfg.GrowerAI.Retrieval.MaxMemories,
+		MinScore:          cfg.GrowerAI.Retrieval.MinScore,
 	}
 
-	log.Printf("[GrowerAI-WS] Searching memory (user=%s, min_score=0.3)...", userIDStr)
+	log.Printf("[GrowerAI-WS] Searching memory (user=%s, limit=%d, min_score=%.2f)...", 
+		userIDStr, cfg.GrowerAI.Retrieval.MaxMemories, cfg.GrowerAI.Retrieval.MinScore)
 	results, err := storage.Search(ctx, query, queryEmbedding)
 	if err != nil {
 		log.Printf("[GrowerAI-WS] WARNING: Memory search failed: %v", err)
@@ -91,12 +92,16 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 // Phase 4D: Traverse links to find additional relevant memories
 linkedMemories := []memory.RetrievalResult{}
 linkedIDs := make(map[string]bool) // Track to avoid duplicates
+maxLinked := cfg.GrowerAI.Retrieval.MaxLinkedMemories
 
 for _, result := range results {
 	linkedIDs[result.Memory.ID] = true // Mark primary memories
 	
-	// Traverse links from each retrieved memory
+	// Traverse links from each retrieved memory (up to configured limit)
 	for _, linkedID := range result.Memory.RelatedMemories {
+		if len(linkedMemories) >= maxLinked {
+			break // Hit max linked memories limit
+		}
 		if linkedIDs[linkedID] {
 			continue // Already have this memory
 		}
@@ -118,6 +123,10 @@ for _, result := range results {
 		
 		log.Printf("[GrowerAI-WS]   ↳ Retrieved linked memory: %s (tier=%s, age=%s)",
 			linkedID, linkedMem.Tier, time.Since(linkedMem.CreatedAt).Round(time.Minute))
+	}
+	
+	if len(linkedMemories) >= maxLinked {
+		break // Hit max linked memories limit for all primary memories
 	}
 }
 

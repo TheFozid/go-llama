@@ -63,12 +63,12 @@ func main() {
 				linker,
 			)
 
-			// Initialize tagger (uses same LLM as compressor)
+			// Initialize tagger (uses same LLM as compressor, needs embedder for recovery)
 			tagger := memory.NewTagger(
 				cfg.GrowerAI.Compression.Model.URL,
 				cfg.GrowerAI.Compression.Model.Name,
-				100, // batch size
-				embedder,
+				cfg.GrowerAI.Tagging.BatchSize,
+				embedder, // Pass embedder for embedding regeneration
 			)
 
 			tierRules := memory.TierRules{

@@ -29,6 +29,19 @@ type GrowerAIConfig struct {
 		Collection string `json:"collection"`
 		APIKey     string `json:"api_key"`
 	} `json:"qdrant"`
+	
+	// Memory retrieval configuration
+	Retrieval struct {
+		MaxMemories       int     `json:"max_memories"`        // Max memories to retrieve per query
+		MinScore          float64 `json:"min_score"`           // Minimum similarity score
+		MaxLinkedMemories int     `json:"max_linked_memories"` // Max linked memories to traverse
+	} `json:"retrieval"`
+	
+	// Tagging configuration
+	Tagging struct {
+		BatchSize int `json:"batch_size"` // Memories to tag per cycle
+	} `json:"tagging"`
+	
 	Compression struct {
 		Enabled       bool `json:"enabled"`
 		Model         struct {
@@ -174,6 +187,22 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	}
 	if gai.Linking.LinkDecayRate == 0 {
 		gai.Linking.LinkDecayRate = 0.02
+	}
+	
+	// Retrieval defaults
+	if gai.Retrieval.MaxMemories == 0 {
+		gai.Retrieval.MaxMemories = 5
+	}
+	if gai.Retrieval.MinScore == 0 {
+		gai.Retrieval.MinScore = 0.3
+	}
+	if gai.Retrieval.MaxLinkedMemories == 0 {
+		gai.Retrieval.MaxLinkedMemories = 5
+	}
+	
+	// Tagging defaults
+	if gai.Tagging.BatchSize == 0 {
+		gai.Tagging.BatchSize = 100
 	}
 }
 
