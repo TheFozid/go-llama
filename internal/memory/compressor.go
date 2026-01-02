@@ -140,9 +140,6 @@ func (c *Compressor) CompressCluster(ctx context.Context, cluster []Memory, targ
 	}
 	merged.CreatedAt = earliestTime
 	// Note: Preserving full CreatedAt precision for all tiers
-
-	// Set temporal resolution based on earliest time and target tier
-	merged.TemporalResolution = c.degradeTemporalResolution(earliestTime, targetTier)
 	
 	// Aggregate importance scores (average of cluster)
 	totalImportance := 0.0
