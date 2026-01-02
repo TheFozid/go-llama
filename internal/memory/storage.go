@@ -715,48 +715,59 @@ func (s *Storage) SearchByConceptTags(ctx context.Context, tags []string, limit 
 }
 
 // Phase 4: UpdateAccessMetadata increments access count and updates timestamp
+// Optimized version using SetPayload to avoid reading full memory + embedding
 func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) error {
-	// We need to read the full memory, update it, and write it back
-	// This is less efficient but works with the current Qdrant client API
-
-// First, search for the memory by ID stored in payload
-filter := &qdrant.Filter{
-	Must: []*qdrant.Condition{
-		qdrant.NewMatch("memory_id", memoryID),
-	},
-}
-
-scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
-	CollectionName: s.CollectionName,
-	Filter:         filter,
-	Limit:          uint32Ptr(1),
-	WithPayload:    qdrant.NewWithPayload(true),
-	WithVectors:    &qdrant.WithVectorsSelector{
-		SelectorOptions: &qdrant.WithVectorsSelector_Enable{
-			Enable: true,
+	// Step 1: Get current access count (lightweight read - payload only, no vectors)
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("memory_id", memoryID),
 		},
-	},
-})
-
-if err != nil {
-	return fmt.Errorf("failed to find memory: %w", err)
-}
-
-if len(scrollResult) == 0 {
-	return fmt.Errorf("memory not found: %s", memoryID)
-}
-
-// Convert to Memory struct
-point := scrollResult[0]
-memory := s.pointToMemoryFromScroll(point)
-
-// Update access metadata
-memory.AccessCount++
-memory.LastAccessedAt = time.Now()
-
-// Write back using UpdateMemory (which uses Upsert)
-return s.UpdateMemory(ctx, &memory)
-
+	}
+	
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
+		Filter:         filter,
+		Limit:          uint32Ptr(1),
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: false, // Don't fetch vectors - saves bandwidth
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to find memory: %w", err)
+	}
+	
+	if len(scrollResult) == 0 {
+		return fmt.Errorf("memory not found: %s", memoryID)
+	}
+	
+	point := scrollResult[0]
+	currentAccessCount := getIntFromPayload(point.Payload, "access_count")
+	
+	// Step 2: Use SetPayload to update only the specific fields (no full Upsert)
+	_, err = s.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+		CollectionName: s.CollectionName,
+		Payload: map[string]*qdrant.Value{
+			"access_count":     qdrant.NewValueInt(currentAccessCount + 1),
+			"last_accessed_at": qdrant.NewValueInt(time.Now().Unix()),
+		},
+		PointsSelector: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+				Points: &qdrant.PointsIdsList{
+					Ids: []*qdrant.PointId{point.Id},
+				},
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to update access metadata: %w", err)
+	}
+	
+	return nil
 }
 
 func floatPtr(v float64) *float64 {
