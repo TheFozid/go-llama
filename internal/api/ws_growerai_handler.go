@@ -88,11 +88,12 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	}
 	log.Printf("[GrowerAI-WS] ✓ Found %d relevant memories", len(results))
 
-
 // Phase 4D: Traverse links to find additional relevant memories
 linkedMemories := []memory.RetrievalResult{}
 linkedIDs := make(map[string]bool) // Track to avoid duplicates
 maxLinked := cfg.GrowerAI.Retrieval.MaxLinkedMemories
+totalLinkAttempts := 0
+failedLinkAttempts := 0
 
 for _, result := range results {
 	linkedIDs[result.Memory.ID] = true // Mark primary memories
@@ -102,14 +103,18 @@ for _, result := range results {
 		if len(linkedMemories) >= maxLinked {
 			break // Hit max linked memories limit
 		}
+		
 		if linkedIDs[linkedID] {
 			continue // Already have this memory
 		}
+		
+		totalLinkAttempts++
 		
 		// Retrieve linked memory by ID
 		linkedMem, err := storage.GetMemoryByID(ctx, linkedID)
 		if err != nil {
 			log.Printf("[GrowerAI-WS] WARNING: Failed to retrieve linked memory %s: %v", linkedID, err)
+			failedLinkAttempts++
 			continue
 		}
 		
@@ -127,6 +132,18 @@ for _, result := range results {
 	
 	if len(linkedMemories) >= maxLinked {
 		break // Hit max linked memories limit for all primary memories
+	}
+}
+
+// Track link failure rate and warn if high
+if totalLinkAttempts > 0 {
+	failureRate := float64(failedLinkAttempts) / float64(totalLinkAttempts)
+	log.Printf("[GrowerAI-WS] Link traversal stats: %d/%d successful (%.1f%% failure rate)",
+		totalLinkAttempts-failedLinkAttempts, totalLinkAttempts, failureRate*100)
+	
+	if failureRate > 0.5 {
+		log.Printf("[GrowerAI-WS] ⚠️  HIGH LINK FAILURE RATE: %.1f%% of links failed to resolve. Memory IDs may be stale or memories were deleted.",
+			failureRate*100)
 	}
 }
 
