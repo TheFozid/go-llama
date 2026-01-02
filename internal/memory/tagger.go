@@ -180,12 +180,15 @@ Respond with JSON only (no markdown, no explanation):
 	if err := json.Unmarshal([]byte(content), &analysis); err != nil {
 		return nil, fmt.Errorf("failed to parse outcome JSON: %w (content: %s)", err, content)
 	}
-
-	// Validate outcome tag
+	
+	// Validate outcome tag, fallback to neutral if invalid
 	if err := ValidateOutcomeTag(analysis.Outcome); err != nil {
-		return nil, fmt.Errorf("invalid outcome tag from LLM: %w", err)
+		log.Printf("[Tagger] WARNING: LLM returned invalid outcome '%s', defaulting to neutral (reason: %s)", 
+			analysis.Outcome, analysis.Reason)
+		analysis.Outcome = "neutral"
+		analysis.Confidence = 0.0
 	}
-
+	
 	return &analysis, nil
 }
 
