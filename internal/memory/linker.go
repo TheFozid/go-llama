@@ -4,6 +4,7 @@ package memory
 import (
 	"context"
 	"log"
+	"time"
 )
 
 // Linker handles memory linking and co-occurrence tracking
@@ -80,10 +81,14 @@ func (l *Linker) addLink(source *Memory, targetID string) error {
 }
 
 // TrackCoOccurrence increments co-retrieval count when memories are retrieved together
+// Uses timestamp-based deduplication to prevent artificial inflation from rapid successive retrievals
 func (l *Linker) TrackCoOccurrence(ctx context.Context, retrievedMemories []Memory) error {
 	if len(retrievedMemories) <= 1 {
 		return nil // Nothing to track
 	}
+	
+	now := time.Now()
+	throttleWindow := 1 * time.Hour // Only count co-occurrence if last occurrence was >1 hour ago
 	
 	// For each memory, track which other memories it was retrieved with
 	for i := range retrievedMemories {
@@ -95,6 +100,9 @@ func (l *Linker) TrackCoOccurrence(ctx context.Context, retrievedMemories []Memo
 		}
 		
 		var coRetrievalCounts map[string]int
+		var lastCoOccurrence map[string]int64 // Track last occurrence timestamp for each memory
+		
+		// Extract existing counts
 		if existingCounts, ok := retrievedMemories[i].Metadata["co_retrieval_counts"]; ok {
 			// Type assert existing counts
 			if counts, ok := existingCounts.(map[string]int); ok {
@@ -116,19 +124,55 @@ func (l *Linker) TrackCoOccurrence(ctx context.Context, retrievedMemories []Memo
 			coRetrievalCounts = make(map[string]int)
 		}
 		
-		// Increment count for each co-retrieved memory
+		// Extract last occurrence timestamps
+		if existingTimes, ok := retrievedMemories[i].Metadata["co_retrieval_last"]; ok {
+			if times, ok := existingTimes.(map[string]int64); ok {
+				lastCoOccurrence = times
+			} else if times, ok := existingTimes.(map[string]interface{}); ok {
+				lastCoOccurrence = make(map[string]int64)
+				for k, v := range times {
+					if intVal, ok := v.(int64); ok {
+						lastCoOccurrence[k] = intVal
+					} else if floatVal, ok := v.(float64); ok {
+						lastCoOccurrence[k] = int64(floatVal)
+					}
+				}
+			} else {
+				lastCoOccurrence = make(map[string]int64)
+			}
+		} else {
+			lastCoOccurrence = make(map[string]int64)
+		}
+		
+		// Increment count for each co-retrieved memory (with throttling)
 		for j := range retrievedMemories {
 			if i == j {
 				continue // Don't count self
 			}
 			
-			coRetrievalCounts[retrievedMemories[j].ID]++
+			linkedID := retrievedMemories[j].ID
+			
+			// Check if we should throttle this update
+			if lastTime, exists := lastCoOccurrence[linkedID]; exists {
+				timeSinceLastOccurrence := now.Sub(time.Unix(lastTime, 0))
+				if timeSinceLastOccurrence < throttleWindow {
+					// Too recent, skip increment
+					log.Printf("[Linker] Throttling co-occurrence update for %s <-> %s (last: %s ago)",
+						retrievedMemories[i].ID[:8], linkedID[:8], timeSinceLastOccurrence.Round(time.Minute))
+					continue
+				}
+			}
+			
+			// Update count and timestamp
+			coRetrievalCounts[linkedID]++
+			lastCoOccurrence[linkedID] = now.Unix()
 			updated = true
 		}
 		
 		// Update metadata
 		if updated {
 			retrievedMemories[i].Metadata["co_retrieval_counts"] = coRetrievalCounts
+			retrievedMemories[i].Metadata["co_retrieval_last"] = lastCoOccurrence
 			
 			// Update in storage
 			if err := l.storage.UpdateMemory(ctx, &retrievedMemories[i]); err != nil {

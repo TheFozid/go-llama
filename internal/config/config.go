@@ -80,9 +80,10 @@ type GrowerAIConfig struct {
 	
 	// Phase 4: Memory Linking (Neural Network)
 	Linking struct {
-		SimilarityThreshold float64 `json:"similarity_threshold"` // Min similarity to create link (0.0-1.0)
-		MaxLinksPerMemory   int     `json:"max_links_per_memory"` // Limit graph size
-		LinkDecayRate       float64 `json:"link_decay_rate"`      // How fast unused links weaken
+		SimilarityThreshold    float64 `json:"similarity_threshold"`     // Min similarity to create link (0.0-1.0)
+		MaxLinksPerMemory      int     `json:"max_links_per_memory"`     // Limit graph size
+		LinkDecayRate          float64 `json:"link_decay_rate"`          // How fast unused links weaken
+		CoOccurrenceThrottle   int     `json:"co_occurrence_throttle"`   // Minutes between counting same co-occurrence
 	} `json:"linking"`
 }
 
@@ -191,6 +192,9 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	}
 	if gai.Linking.LinkDecayRate == 0 {
 		gai.Linking.LinkDecayRate = 0.02
+	}
+	if gai.Linking.CoOccurrenceThrottle == 0 {
+		gai.Linking.CoOccurrenceThrottle = 60 // 60 minutes (1 hour) default
 	}
 	
 	// Retrieval defaults
