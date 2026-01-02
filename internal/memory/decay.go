@@ -288,7 +288,7 @@ func (w *DecayWorker) compressTierWithClusters(ctx context.Context, fromTier, to
 			continue
 		}
 		compressedMemory.Embedding = newEmbedding
-
+		
 		// Update in storage
 		if err := w.storage.UpdateMemory(ctx, compressedMemory); err != nil {
 			log.Printf("[DecayWorker] ERROR: Failed to update memory %s: %v", compressedMemory.ID, err)
@@ -297,17 +297,33 @@ func (w *DecayWorker) compressTierWithClusters(ctx context.Context, fromTier, to
 			}
 			continue
 		}
-
+		
+		// Delete the other cluster members (all except the first one which was merged into)
+		deletedCount := 0
+		for i := 1; i < len(validCluster); i++ {
+			if err := w.storage.DeleteMemory(ctx, validCluster[i].ID); err != nil {
+				log.Printf("[DecayWorker] WARNING: Failed to delete merged memory %s: %v",
+					validCluster[i].ID, err)
+			} else {
+				deletedCount++
+			}
+		}
+		
+		if deletedCount > 0 {
+			log.Printf("[DecayWorker] ✓ Deleted %d merged memories from cluster", deletedCount)
+		}
+		
 		// Mark all cluster members as processed
 		for _, mem := range validCluster {
 			processedIDs[mem.ID] = true
 		}
-
+		
 		compressed++
-
+		
 		// Log progress every 10 compressions
 		if compressed%10 == 0 {
-			log.Printf("[DecayWorker] Progress: %d compressions (%d memories clustered)", compressed, clustered)
+			log.Printf("[DecayWorker] Progress: %d compressions (%d memories clustered, %d deleted)", 
+				compressed, clustered, deletedCount)
 		}
 	}
 

@@ -925,3 +925,25 @@ func (s *Storage) MigrateMemoryIDs(ctx context.Context) error {
 	log.Printf("[Storage] Migration complete: %d/%d memories updated with memory_id", migratedCount, totalProcessed)
 	return nil
 }
+
+// DeleteMemory removes a memory from the vector database
+func (s *Storage) DeleteMemory(ctx context.Context, memoryID string) error {
+	_, err := s.Client.Delete(ctx, &qdrant.DeletePoints{
+		CollectionName: s.CollectionName,
+		Points: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Filter{
+				Filter: &qdrant.Filter{
+					Must: []*qdrant.Condition{
+						qdrant.NewMatch("memory_id", memoryID),
+					},
+				},
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to delete memory %s: %w", memoryID, err)
+	}
+	
+	return nil
+}
