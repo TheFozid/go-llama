@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"time"
+	"sync"
 
 	"gorm.io/gorm"
 )
@@ -27,7 +28,8 @@ type DecayWorker struct {
 	accessMod              float64
 	stopChan               chan struct{}
 	lastPrincipleEvolution time.Time
-	migrationComplete      bool
+	evolutionMutex         sync.Mutex // Protects lastPrincipleEvolution
+	migrationComplete      bool       // One-time memory_id migration flag
 }
 
 // TierRules defines age thresholds for tier transitions
@@ -143,17 +145,24 @@ func (w *DecayWorker) runCompressionCycle() {
 	w.compressTierWithClusters(ctx, TierLong, TierAncient, w.tierRules.LongToAncientDays, w.mergeWindows.LongDays)
 
 	// PHASE 3: Evolve principles (only if schedule interval has passed)
+	w.evolutionMutex.Lock()
 	timeSinceLastEvolution := time.Since(w.lastPrincipleEvolution)
 	principleInterval := time.Duration(w.principleScheduleHours) * time.Hour
-
-	if timeSinceLastEvolution >= principleInterval {
+	shouldEvolve := timeSinceLastEvolution >= principleInterval
+	w.evolutionMutex.Unlock()
+	
+	if shouldEvolve {
 		log.Printf("[DecayWorker] PHASE 3: Evolving principles (last evolution: %s ago)...",
 			timeSinceLastEvolution.Round(time.Hour))
-
+		
 		if err := w.evolvePrinciplesPhase(ctx); err != nil {
 			log.Printf("[DecayWorker] ERROR in principle evolution phase: %v", err)
 		} else {
+			// Update timestamp with mutex protection
+			w.evolutionMutex.Lock()
 			w.lastPrincipleEvolution = time.Now()
+			w.evolutionMutex.Unlock()
+			log.Printf("[DecayWorker] ✓ Principle evolution timestamp updated")
 		}
 	} else {
 		timeUntilNext := principleInterval - timeSinceLastEvolution
