@@ -249,6 +249,12 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 		log.Printf("[Storage] Added outcome_tag filter: %s", *query.OutcomeFilter)
 	}
 	
+
+	log.Printf("[Storage] Total filter conditions: %d", len(must))
+
+	// Build filter based on conditions
+	var filter *qdrant.Filter
+	
 	// Phase 4: Concept tags filter (match ANY of the provided tags)
 	if len(query.ConceptTags) > 0 {
 		// Build OR condition for concept tags (match any tag)
@@ -257,34 +263,32 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 			shouldConditions[i] = qdrant.NewMatch("concept_tags", tag)
 		}
 		
+		minShould := uint64(1)
+		
 		// If we already have must conditions, we need to combine them
 		if len(must) > 0 {
 			// Create a filter that requires: (existing must conditions) AND (any of the concept tags)
 			filter = &qdrant.Filter{
-				Must: must,
-				Should: shouldConditions,
-				MinShould: qdrant.PtrOf(uint64(1)), // At least 1 should condition must match
+				Must:      must,
+				Should:    shouldConditions,
+				MinShould: &minShould, // At least 1 should condition must match
 			}
 		} else {
 			// Only concept tag filtering
 			filter = &qdrant.Filter{
-				Should: shouldConditions,
-				MinShould: qdrant.PtrOf(uint64(1)),
+				Should:    shouldConditions,
+				MinShould: &minShould,
 			}
 		}
 		
 		log.Printf("[Storage] Added concept tags filter: %v (match ANY)", query.ConceptTags)
-	}
-
-	log.Printf("[Storage] Total filter conditions: %d", len(must))
-
-	// Note: filter may already be set by concept tags filtering above
-	// Only create new filter if it hasn't been set yet
-	if filter == nil && len(must) > 0 {
+	} else if len(must) > 0 {
+		// Only must conditions, no concept filtering
 		filter = &qdrant.Filter{
 			Must: must,
 		}
 	}
+
 	// Perform search
 	searchResult, err := s.Client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: s.CollectionName,
@@ -313,6 +317,52 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	}
 
 	return results, nil
+}
+
+// pointToMemoryFromRetrieved converts a RetrievedPoint to a Memory struct
+func (s *Storage) pointToMemoryFromRetrieved(point *qdrant.RetrievedPoint) Memory {
+	payload := point.Payload
+	
+	memoryID := getStringFromPayload(payload, "memory_id")
+	if memoryID == "" {
+		log.Printf("[Storage] ERROR: Memory missing memory_id in payload!")
+	}
+	
+	memory := Memory{
+		ID:              memoryID,
+		Content:         getStringFromPayload(payload, "content"),
+		CompressedFrom:  getStringFromPayload(payload, "compressed_from"),
+		Tier:            MemoryTier(getStringFromPayload(payload, "tier")),
+		IsCollective:    getBoolFromPayload(payload, "is_collective"),
+		CreatedAt:       time.Unix(getIntFromPayload(payload, "created_at"), 0),
+		LastAccessedAt:  time.Unix(getIntFromPayload(payload, "last_accessed_at"), 0),
+		AccessCount:     int(getIntFromPayload(payload, "access_count")),
+		ImportanceScore: getFloatFromPayload(payload, "importance_score"),
+		Metadata:        getMetadataFromPayload(payload, "metadata"),
+		
+		// Phase 4: Good/Bad Tagging
+		OutcomeTag:      getStringFromPayload(payload, "outcome_tag"),
+		TrustScore:      getFloatFromPayload(payload, "trust_score"),
+		ValidationCount: int(getIntFromPayload(payload, "validation_count")),
+		
+		// Phase 4: Memory Linking
+		RelatedMemories: getStringSliceFromPayload(payload, "related_memories"),
+		ConceptTags:     getStringSliceFromPayload(payload, "concept_tags"),
+		
+		// Phase 4: Principles
+		PrincipleRating: getFloatFromPayload(payload, "principle_rating"),
+	}
+
+	if userID := getStringFromPayload(payload, "user_id"); userID != "" {
+		memory.UserID = &userID
+	}
+	
+	// Extract embedding from point
+	if vectors := point.Vectors.GetVector(); vectors != nil {
+		memory.Embedding = vectors.Data
+	}
+
+	return memory
 }
 
 // pointToMemory converts a Qdrant point to a Memory struct
@@ -926,7 +976,7 @@ func (s *Storage) GetMemoriesByIDs(ctx context.Context, memoryIDs []string) (map
 	// Convert points to Memory map
 	result := make(map[string]*Memory)
 	for _, point := range points {
-		mem := s.pointToMemory(point)
+		mem := s.pointToMemoryFromRetrieved(point)
 		result[mem.ID] = &mem
 	}
 	
