@@ -1006,6 +1006,79 @@ func (s *Storage) UpdateTrustScore(ctx context.Context, memoryID string, trustSc
 	return nil
 }
 
+// UpdateCoOccurrence updates only the co-occurrence tracking metadata for a memory
+// Optimized version using SetPayload to avoid reading full memory + embedding
+func (s *Storage) UpdateCoOccurrence(ctx context.Context, memoryID string, coRetrievalCounts map[string]int, coRetrievalLast map[string]int64) error {
+	// Convert maps to Qdrant values
+	coCountsMap := make(map[string]*qdrant.Value)
+	for k, v := range coRetrievalCounts {
+		coCountsMap[k] = qdrant.NewValueInt(int64(v))
+	}
+	
+	coLastMap := make(map[string]*qdrant.Value)
+	for k, v := range coRetrievalLast {
+		coLastMap[k] = qdrant.NewValueInt(v)
+	}
+	
+	// Find the point by memory_id
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("memory_id", memoryID),
+		},
+	}
+	
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
+		Filter:         filter,
+		Limit:          uint32Ptr(1),
+		WithPayload:    qdrant.NewWithPayload(false),
+		WithVectors:    &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: false,
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to find memory: %w", err)
+	}
+	
+	if len(scrollResult) == 0 {
+		return fmt.Errorf("memory not found: %s", memoryID)
+	}
+	
+	// Update metadata with co-occurrence data
+	// Note: We're updating nested fields within the metadata struct
+	_, err = s.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+		CollectionName: s.CollectionName,
+		Payload: map[string]*qdrant.Value{
+			"metadata.co_retrieval_counts": &qdrant.Value{
+				Kind: &qdrant.Value_StructValue{
+					StructValue: &qdrant.Struct{Fields: coCountsMap},
+				},
+			},
+			"metadata.co_retrieval_last": &qdrant.Value{
+				Kind: &qdrant.Value_StructValue{
+					StructValue: &qdrant.Struct{Fields: coLastMap},
+				},
+			},
+		},
+		PointsSelector: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+				Points: &qdrant.PointsIdsList{
+					Ids: []*qdrant.PointId{scrollResult[0].Id},
+				},
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to update co-occurrence: %w", err)
+	}
+	
+	return nil
+}
+
 func floatPtr(v float64) *float64 {
 return &v
 }

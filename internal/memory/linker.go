@@ -171,11 +171,8 @@ func (l *Linker) TrackCoOccurrence(ctx context.Context, retrievedMemories []Memo
 		
 		// Update metadata
 		if updated {
-			retrievedMemories[i].Metadata["co_retrieval_counts"] = coRetrievalCounts
-			retrievedMemories[i].Metadata["co_retrieval_last"] = lastCoOccurrence
-			
-			// Update in storage
-			if err := l.storage.UpdateMemory(ctx, &retrievedMemories[i]); err != nil {
+			// Update in storage using lightweight co-occurrence update
+			if err := l.storage.UpdateCoOccurrence(ctx, retrievedMemories[i].ID, coRetrievalCounts, lastCoOccurrence); err != nil {
 				log.Printf("[Linker] WARNING: Failed to update co-occurrence for memory %s: %v",
 					retrievedMemories[i].ID, err)
 				// Continue with other memories even if one fails
