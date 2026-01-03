@@ -181,7 +181,19 @@ func (w *DecayWorker) runCompressionCycle() {
 		log.Printf("[DecayWorker] ERROR in compression phase: %v", err)
 	}
 	
-	// PHASE 3: Evolve principles (only if schedule interval has passed)
+	// PHASE 3: Prune weak links
+	log.Println("[DecayWorker] PHASE 3: Pruning weak links...")
+	if err := w.pruneWeakLinksPhase(ctx); err != nil {
+		log.Printf("[DecayWorker] ERROR in link pruning phase: %v", err)
+	}
+	
+	// PHASE 4: Recalculate trust scores
+	log.Println("[DecayWorker] PHASE 4: Recalculating trust scores...")
+	if err := w.recalculateTrustScores(ctx); err != nil {
+		log.Printf("[DecayWorker] ERROR in trust recalculation phase: %v", err)
+	}
+	
+	// PHASE 5: Evolve principles (only if schedule interval has passed)
 	w.evolutionMutex.Lock()
 	timeSinceLastEvolution := time.Since(w.lastPrincipleEvolution)
 	principleInterval := time.Duration(w.principleScheduleHours) * time.Hour
@@ -189,7 +201,7 @@ func (w *DecayWorker) runCompressionCycle() {
 	w.evolutionMutex.Unlock()
 	
 	if shouldEvolve {
-		log.Printf("[DecayWorker] PHASE 3: Evolving principles (last evolution: %s ago)...",
+		log.Printf("[DecayWorker] PHASE 5: Evolving principles (last evolution: %s ago)...",
 			timeSinceLastEvolution.Round(time.Hour))
 		
 		if err := w.evolvePrinciplesPhase(ctx); err != nil {
@@ -203,7 +215,7 @@ func (w *DecayWorker) runCompressionCycle() {
 		}
 	} else {
 		timeUntilNext := principleInterval - timeSinceLastEvolution
-		log.Printf("[DecayWorker] PHASE 3: Skipping principle evolution (next in %s)",
+		log.Printf("[DecayWorker] PHASE 5: Skipping principle evolution (next in %s)",
 			timeUntilNext.Round(time.Hour))
 	}
 	
@@ -710,4 +722,194 @@ func (w *DecayWorker) selectMemoriesForCompression(
 		len(selected), scored[0].score, scored[selectedCount-1].score)
 	
 	return selected, nil
+}
+
+// pruneWeakLinksPhase scans all memories with links and removes weak ones
+func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
+	// Configuration
+	minLinkStrength := 0.1 // Remove links with strength below 10%
+	batchSize := 100       // Process in batches to avoid memory pressure
+	
+	totalMemoriesScanned := 0
+	totalLinksRemoved := 0
+	memoriesUpdated := 0
+	
+	// We need to scan all memories across all tiers
+	tiers := []MemoryTier{TierRecent, TierMedium, TierLong, TierAncient}
+	
+	for _, tier := range tiers {
+		log.Printf("[LinkPruning] Scanning tier %s for weak links...", tier)
+		
+		// Fetch memories in batches (age=0 means get all)
+		offset := 0
+		for {
+			memories, err := w.storage.FindMemoriesForCompression(ctx, tier, 0, batchSize)
+			if err != nil {
+				return fmt.Errorf("failed to fetch memories for link pruning: %w", err)
+			}
+			
+			if len(memories) == 0 {
+				break // No more memories in this tier
+			}
+			
+			// Process each memory
+			for i := range memories {
+				mem := &memories[i]
+				
+				// Skip if no links
+				if len(mem.RelatedMemories) == 0 {
+					continue
+				}
+				
+				totalMemoriesScanned++
+				
+				// Calculate strength for each link
+				strongLinks := []string{}
+				removedCount := 0
+				
+				for _, linkedID := range mem.RelatedMemories {
+					strength := w.linker.GetLinkStrength(mem, linkedID)
+					
+					if strength >= minLinkStrength {
+						strongLinks = append(strongLinks, linkedID)
+					} else {
+						removedCount++
+						log.Printf("[LinkPruning]   Removing weak link %s -> %s (strength: %.3f)",
+							mem.ID[:8], linkedID[:8], strength)
+					}
+				}
+				
+				// Update memory if any links were removed
+				if removedCount > 0 {
+					mem.RelatedMemories = strongLinks
+					
+					if err := w.storage.UpdateMemory(ctx, mem); err != nil {
+						log.Printf("[LinkPruning] WARNING: Failed to update memory %s: %v",
+							mem.ID, err)
+						continue
+					}
+					
+					totalLinksRemoved += removedCount
+					memoriesUpdated++
+				}
+			}
+			
+			// Move to next batch
+			offset += len(memories)
+			
+			// If we got fewer than batchSize, we've reached the end
+			if len(memories) < batchSize {
+				break
+			}
+		}
+		
+		log.Printf("[LinkPruning] Tier %s complete", tier)
+	}
+	
+	if totalLinksRemoved > 0 {
+		log.Printf("[LinkPruning] ✓ Removed %d weak links from %d memories (scanned %d memories total)",
+			totalLinksRemoved, memoriesUpdated, totalMemoriesScanned)
+	} else {
+		log.Printf("[LinkPruning] No weak links found (scanned %d memories)", totalMemoriesScanned)
+	}
+	
+	return nil
+}
+
+// recalculateTrustScores applies Bayesian trust formula to all memories with validations
+func (w *DecayWorker) recalculateTrustScores(ctx context.Context) error {
+	// Bayesian trust formula:
+	// trust_score = (good_validations + prior) / (total_validations + 2*prior)
+	// Where prior = 2 (equivalent to 2 good + 2 bad observations)
+	
+	const prior = 2.0
+	batchSize := 100
+	totalUpdated := 0
+	
+	// Process all tiers
+	tiers := []MemoryTier{TierRecent, TierMedium, TierLong, TierAncient}
+	
+	for _, tier := range tiers {
+		offset := 0
+		
+		for {
+			// Fetch memories with ValidationCount > 0
+			memories, err := w.storage.FindMemoriesForCompression(ctx, tier, 0, batchSize)
+			if err != nil {
+				return fmt.Errorf("failed to fetch memories for trust calculation: %w", err)
+			}
+			
+			if len(memories) == 0 {
+				break
+			}
+			
+			// Process each memory
+			for i := range memories {
+				mem := &memories[i]
+				
+				// Skip if no validations yet
+				if mem.ValidationCount == 0 {
+					continue
+				}
+				
+				// Count good validations based on outcome tag
+				var goodValidations float64
+				if mem.OutcomeTag == "good" {
+					// All validations are good
+					goodValidations = float64(mem.ValidationCount)
+				} else if mem.OutcomeTag == "bad" {
+					// All validations are bad
+					goodValidations = 0
+				} else {
+					// Neutral: assume 50/50
+					goodValidations = float64(mem.ValidationCount) * 0.5
+				}
+				
+				// Apply Bayesian formula
+				totalValidations := float64(mem.ValidationCount)
+				newTrustScore := (goodValidations + prior) / (totalValidations + 2*prior)
+				
+				// Only update if trust score changed significantly (avoid unnecessary writes)
+				if abs(newTrustScore-mem.TrustScore) > 0.01 {
+					oldTrust := mem.TrustScore
+					mem.TrustScore = newTrustScore
+					
+					// Update in storage (minimal update - just trust_score)
+					if err := w.storage.UpdateMemory(ctx, mem); err != nil {
+						log.Printf("[TrustCalc] WARNING: Failed to update trust for memory %s: %v",
+							mem.ID, err)
+						continue
+					}
+					
+					totalUpdated++
+					
+					log.Printf("[TrustCalc]   Memory %s: trust %.2f -> %.2f (validations=%d, outcome=%s)",
+						mem.ID[:8], oldTrust, newTrustScore, mem.ValidationCount, mem.OutcomeTag)
+				}
+			}
+			
+			offset += len(memories)
+			
+			// If we got fewer than batchSize, we've reached the end
+			if len(memories) < batchSize {
+				break
+			}
+		}
+	}
+	
+	if totalUpdated > 0 {
+		log.Printf("[TrustCalc] ✓ Updated trust scores for %d memories", totalUpdated)
+	} else {
+		log.Printf("[TrustCalc] No trust score updates needed")
+	}
+	
+	return nil
+}
+
+// abs returns absolute value of a float64
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }

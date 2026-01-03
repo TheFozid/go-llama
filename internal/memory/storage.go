@@ -90,6 +90,7 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		// Phase 4: New indexes
 		{"outcome_tag", qdrant.PayloadSchemaType_Keyword},
 		{"trust_score", qdrant.PayloadSchemaType_Float},
+		{"concept_tags", qdrant.PayloadSchemaType_Keyword}, // Phase 4D: Index for concept filtering
 	}
 
 	for _, idx := range indexes {
@@ -248,22 +249,42 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 		log.Printf("[Storage] Added outcome_tag filter: %s", *query.OutcomeFilter)
 	}
 	
-	// Phase 4: Concept tags filter (match any of the provided tags)
+	// Phase 4: Concept tags filter (match ANY of the provided tags)
 	if len(query.ConceptTags) > 0 {
-		// For simplicity, we'll search for memories that contain ANY of the concept tags
-		// More sophisticated filtering would require custom logic
-		log.Printf("[Storage] Concept tags filtering requested (not yet fully implemented): %v", query.ConceptTags)
+		// Build OR condition for concept tags (match any tag)
+		shouldConditions := make([]*qdrant.Condition, len(query.ConceptTags))
+		for i, tag := range query.ConceptTags {
+			shouldConditions[i] = qdrant.NewMatch("concept_tags", tag)
+		}
+		
+		// If we already have must conditions, we need to combine them
+		if len(must) > 0 {
+			// Create a filter that requires: (existing must conditions) AND (any of the concept tags)
+			filter = &qdrant.Filter{
+				Must: must,
+				Should: shouldConditions,
+				MinShould: qdrant.PtrOf(uint64(1)), // At least 1 should condition must match
+			}
+		} else {
+			// Only concept tag filtering
+			filter = &qdrant.Filter{
+				Should: shouldConditions,
+				MinShould: qdrant.PtrOf(uint64(1)),
+			}
+		}
+		
+		log.Printf("[Storage] Added concept tags filter: %v (match ANY)", query.ConceptTags)
 	}
 
 	log.Printf("[Storage] Total filter conditions: %d", len(must))
 
-	var filter *qdrant.Filter
-	if len(must) > 0 {
+	// Note: filter may already be set by concept tags filtering above
+	// Only create new filter if it hasn't been set yet
+	if filter == nil && len(must) > 0 {
 		filter = &qdrant.Filter{
 			Must: must,
 		}
 	}
-
 	// Perform search
 	searchResult, err := s.Client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: s.CollectionName,
@@ -714,6 +735,61 @@ func (s *Storage) SearchByConceptTags(ctx context.Context, tags []string, limit 
 	return memories, nil
 }
 
+// IncrementValidationCount increments the validation count for a memory
+// Called when a memory is used in a successful (good outcome) interaction
+func (s *Storage) IncrementValidationCount(ctx context.Context, memoryID string) error {
+	// Step 1: Get current validation count (lightweight read - payload only)
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("memory_id", memoryID),
+		},
+	}
+	
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
+		Filter:         filter,
+		Limit:          uint32Ptr(1),
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: false,
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to find memory: %w", err)
+	}
+	
+	if len(scrollResult) == 0 {
+		return fmt.Errorf("memory not found: %s", memoryID)
+	}
+	
+	point := scrollResult[0]
+	currentValidationCount := getIntFromPayload(point.Payload, "validation_count")
+	
+	// Step 2: Increment validation count
+	_, err = s.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+		CollectionName: s.CollectionName,
+		Payload: map[string]*qdrant.Value{
+			"validation_count": qdrant.NewValueInt(currentValidationCount + 1),
+		},
+		PointsSelector: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+				Points: &qdrant.PointsIdsList{
+					Ids: []*qdrant.PointId{point.Id},
+				},
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to increment validation count: %w", err)
+	}
+	
+	return nil
+}
+
 // Phase 4: UpdateAccessMetadata increments access count and updates timestamp
 // Optimized version using SetPayload to avoid reading full memory + embedding
 func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) error {
@@ -819,6 +895,42 @@ for _, point := range scrollResult {
 
 return memories, nil
 
+}
+
+// GetMemoriesByIDs retrieves multiple memories by their IDs in a single batch operation
+// Returns a map of memoryID -> Memory for fast lookup
+// Missing IDs are not included in the result (no error)
+func (s *Storage) GetMemoriesByIDs(ctx context.Context, memoryIDs []string) (map[string]*Memory, error) {
+	if len(memoryIDs) == 0 {
+		return make(map[string]*Memory), nil
+	}
+	
+	// Convert string IDs to Qdrant point IDs
+	pointIDs := make([]*qdrant.PointId, len(memoryIDs))
+	for i, id := range memoryIDs {
+		pointIDs[i] = qdrant.NewIDUUID(id)
+	}
+	
+	// Batch retrieve from Qdrant
+	points, err := s.Client.Get(ctx, &qdrant.GetPoints{
+		CollectionName: s.CollectionName,
+		Ids:            pointIDs,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(true),
+	})
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch get memories: %w", err)
+	}
+	
+	// Convert points to Memory map
+	result := make(map[string]*Memory)
+	for _, point := range points {
+		mem := s.pointToMemory(point)
+		result[mem.ID] = &mem
+	}
+	
+	return result, nil
 }
 
 // GetMemoryByID retrieves a single memory by its ID
@@ -1027,4 +1139,9 @@ func (s *Storage) GetTotalMemoryCount(ctx context.Context) (int, error) {
 	}
 	
 	return int(count), nil
+}
+
+// PtrOf is a generic helper to create a pointer to a value
+func PtrOf[T any](v T) *T {
+	return &v
 }

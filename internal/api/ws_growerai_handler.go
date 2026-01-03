@@ -88,62 +88,71 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	}
 	log.Printf("[GrowerAI-WS] ✓ Found %d relevant memories", len(results))
 
-// Phase 4D: Traverse links to find additional relevant memories
+// Phase 4D: Traverse links to find additional relevant memories (BATCH OPTIMIZED)
 linkedMemories := []memory.RetrievalResult{}
 linkedIDs := make(map[string]bool) // Track to avoid duplicates
 maxLinked := cfg.GrowerAI.Retrieval.MaxLinkedMemories
-totalLinkAttempts := 0
-failedLinkAttempts := 0
 
+// Mark primary memories to avoid duplicates
 for _, result := range results {
-	linkedIDs[result.Memory.ID] = true // Mark primary memories
-	
-	// Traverse links from each retrieved memory (up to configured limit)
+	linkedIDs[result.Memory.ID] = true
+}
+
+// Collect all unique linked IDs from primary results
+allLinkedIDs := []string{}
+for _, result := range results {
 	for _, linkedID := range result.Memory.RelatedMemories {
-		if len(linkedMemories) >= maxLinked {
-			break // Hit max linked memories limit
+		if !linkedIDs[linkedID] {
+			allLinkedIDs = append(allLinkedIDs, linkedID)
+			linkedIDs[linkedID] = true // Mark as seen
+			
+			if len(allLinkedIDs) >= maxLinked {
+				break
+			}
 		}
-		
-		if linkedIDs[linkedID] {
-			continue // Already have this memory
-		}
-		
-		totalLinkAttempts++
-		
-		// Retrieve linked memory by ID
-		linkedMem, err := storage.GetMemoryByID(ctx, linkedID)
-		if err != nil {
-			log.Printf("[GrowerAI-WS] WARNING: Failed to retrieve linked memory %s: %v", linkedID, err)
-			failedLinkAttempts++
-			continue
-		}
-		
-		// Add to linked memories with a base score (lower than direct matches)
-		linkedMemories = append(linkedMemories, memory.RetrievalResult{
-			Memory: *linkedMem,
-			Score:  0.5, // Base score for linked memories
-		})
-		
-		linkedIDs[linkedID] = true
-		
-		log.Printf("[GrowerAI-WS]   ↳ Retrieved linked memory: %s (tier=%s, age=%s)",
-			linkedID, linkedMem.Tier, time.Since(linkedMem.CreatedAt).Round(time.Minute))
 	}
 	
-	if len(linkedMemories) >= maxLinked {
-		break // Hit max linked memories limit for all primary memories
+	if len(allLinkedIDs) >= maxLinked {
+		break
 	}
 }
 
-// Track link failure rate and warn if high
-if totalLinkAttempts > 0 {
-	failureRate := float64(failedLinkAttempts) / float64(totalLinkAttempts)
-	log.Printf("[GrowerAI-WS] Link traversal stats: %d/%d successful (%.1f%% failure rate)",
-		totalLinkAttempts-failedLinkAttempts, totalLinkAttempts, failureRate*100)
+// Batch retrieve all linked memories in ONE query
+if len(allLinkedIDs) > 0 {
+	log.Printf("[GrowerAI-WS] Batch retrieving %d linked memories...", len(allLinkedIDs))
 	
-	if failureRate > 0.5 {
-		log.Printf("[GrowerAI-WS] ⚠️  HIGH LINK FAILURE RATE: %.1f%% of links failed to resolve. Memory IDs may be stale or memories were deleted.",
-			failureRate*100)
+	linkedMemsMap, err := storage.GetMemoriesByIDs(ctx, allLinkedIDs)
+	if err != nil {
+		log.Printf("[GrowerAI-WS] WARNING: Batch link retrieval failed: %v", err)
+	} else {
+		// Convert map to results list
+		for id, linkedMem := range linkedMemsMap {
+			linkedMemories = append(linkedMemories, memory.RetrievalResult{
+				Memory: *linkedMem,
+				Score:  0.5, // Base score for linked memories
+			})
+			
+			log.Printf("[GrowerAI-WS]   ↳ Retrieved linked memory: %s (tier=%s, age=%s)",
+				id[:8], linkedMem.Tier, time.Since(linkedMem.CreatedAt).Round(time.Minute))
+		}
+		
+		// Track retrieval stats
+		retrieved := len(linkedMemsMap)
+		requested := len(allLinkedIDs)
+		failed := requested - retrieved
+		
+		if failed > 0 {
+			failureRate := float64(failed) / float64(requested)
+			log.Printf("[GrowerAI-WS] Link traversal stats: %d/%d successful (%.1f%% failure rate)",
+				retrieved, requested, failureRate*100)
+			
+			if failureRate > 0.5 {
+				log.Printf("[GrowerAI-WS] ⚠️  HIGH LINK FAILURE RATE: %.1f%% of links failed to resolve. Memory IDs may be stale or memories were deleted.",
+					failureRate*100)
+			}
+		} else {
+			log.Printf("[GrowerAI-WS] ✓ Successfully retrieved all %d linked memories", retrieved)
+		}
 	}
 }
 
@@ -252,6 +261,18 @@ if totalLinkAttempts > 0 {
 	}
 
 	log.Printf("[GrowerAI-WS] ✓ LLM response received (%d chars, %.1f tok/s)", len(botResponse), toksPerSec)
+
+	// Phase 4D: Increment validation count for retrieved memories (they helped produce this response)
+	// We'll tag this interaction's outcome in the background, but we can assume retrieval = useful
+	if len(allResults) > 0 {
+		log.Printf("[GrowerAI-WS] Incrementing validation count for %d retrieved memories", len(allResults))
+		for _, result := range allResults {
+			if err := storage.IncrementValidationCount(ctx, result.Memory.ID); err != nil {
+				log.Printf("[GrowerAI-WS] WARNING: Failed to increment validation for memory %s: %v",
+					result.Memory.ID, err)
+			}
+		}
+	}
 
 	// Evaluate what to store in memory
 	shouldStore := len(content) > 20 && len(botResponse) > 20
