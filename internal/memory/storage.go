@@ -263,21 +263,17 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 			shouldConditions[i] = qdrant.NewMatch("concept_tags", tag)
 		}
 		
-		minShould := uint64(1)
-		
 		// If we already have must conditions, we need to combine them
 		if len(must) > 0 {
 			// Create a filter that requires: (existing must conditions) AND (any of the concept tags)
 			filter = &qdrant.Filter{
-				Must:      must,
-				Should:    shouldConditions,
-				MinShould: &minShould, // At least 1 should condition must match
+				Must:   must,
+				Should: shouldConditions,
 			}
 		} else {
 			// Only concept tag filtering
 			filter = &qdrant.Filter{
-				Should:    shouldConditions,
-				MinShould: &minShould,
+				Should: shouldConditions,
 			}
 		}
 		
