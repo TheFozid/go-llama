@@ -7,10 +7,32 @@ import (
 	"strings"
 	"time"
 	"log"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
 )
+
+// sanitizeUTF8 removes invalid UTF-8 sequences from a string
+func sanitizeUTF8(s string) string {
+	if !utf8.ValidString(s) {
+		v := make([]rune, 0, len(s))
+		for i, r := range s {
+			if r == utf8.RuneError {
+				_, size := utf8.DecodeRuneInString(s[i:])
+				if size == 1 {
+					continue // skip invalid byte
+				}
+			}
+			v = append(v, r)
+		}
+		return string(v)
+	}
+	return s
+}
+
+// Storage handles all vector database operations
+type Storage struct {
 
 // Storage handles all vector database operations
 type Storage struct {
@@ -113,6 +135,14 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 	if memory.ID == "" {
 		memory.ID = uuid.New().String()
+	}
+	
+	// Sanitize UTF-8 to prevent gRPC marshaling errors
+	memory.Content = sanitizeUTF8(memory.Content)
+	if memory.Metadata != nil {
+		if context, ok := memory.Metadata["context"].(string); ok {
+			memory.Metadata["context"] = sanitizeUTF8(context)
+		}
 	}
 
 	// Validate outcome tag if provided
