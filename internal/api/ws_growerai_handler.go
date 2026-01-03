@@ -183,6 +183,21 @@ if len(allLinkedIDs) > 0 {
 		}
 	}
 
+	// Fetch recent conversation history from database
+	var messages []chat.Message
+	if err := db.DB.Where("chat_id = ?", chatInst.ID).
+		Order("created_at ASC").
+		Limit(20). // Last 20 messages for context
+		Find(&messages).Error; err != nil {
+		log.Printf("[GrowerAI-WS] WARNING: Failed to fetch chat history: %v", err)
+		messages = []chat.Message{}
+	}
+	
+	// Apply sliding window to respect context size
+	messages = chat.BuildSlidingWindow(messages, cfg.GrowerAI.ReasoningModel.ContextSize)
+	
+	log.Printf("[GrowerAI-WS] ✓ Loaded %d messages from conversation history", len(messages))
+
 	// Build system prompt from principles + memories
 	systemPrompt := memory.FormatAsSystemPrompt(principles, cfg.GrowerAI.Personality.GoodBehaviorBias)
 	
@@ -232,16 +247,51 @@ if len(allLinkedIDs) > 0 {
 		log.Printf("[GrowerAI-WS]   No relevant memories found")
 	}
 
-	contextBuilder.WriteString(fmt.Sprintf("User's current message: %s\n\n", content))
-	contextBuilder.WriteString("Respond naturally, incorporating relevant context from memories if available.")
-
 	// Call LLM with enhanced context (streaming)
+	// Structure: system prompt (with memories) + conversation history + current message
 	llmMessages := []map[string]string{
 		{
 			"role":    "system",
 			"content": contextBuilder.String(),
 		},
 	}
+	
+	// Add conversation history (excluding the current user message which we'll add separately)
+	for _, msg := range messages {
+		role := "user"
+		if msg.Sender == "bot" {
+			role = "assistant"
+		}
+		
+		// Clean up bot messages (remove tokens/sec footer)
+		msgContent := msg.Content
+		if msg.Sender == "bot" {
+			// Remove "_Tokens/sec: X.XX_" footer from bot messages
+			lines := strings.Split(msgContent, "\n")
+			var cleanedLines []string
+			for _, line := range lines {
+				if !strings.HasPrefix(strings.TrimSpace(line), "_Tokens/sec:") {
+					cleanedLines = append(cleanedLines, line)
+				}
+			}
+			msgContent = strings.Join(cleanedLines, "\n")
+			msgContent = strings.TrimSpace(msgContent)
+		}
+		
+		llmMessages = append(llmMessages, map[string]string{
+			"role":    role,
+			"content": msgContent,
+		})
+	}
+	
+	// Add current user message
+	llmMessages = append(llmMessages, map[string]string{
+		"role":    "user",
+		"content": content,
+	})
+	
+	log.Printf("[GrowerAI-WS] ✓ Built conversation context: %d messages (%d history + 1 current)",
+		len(llmMessages)-1, len(messages)) // -1 for system message
 
 	payload := map[string]interface{}{
 		"model":    cfg.GrowerAI.ReasoningModel.Name,
