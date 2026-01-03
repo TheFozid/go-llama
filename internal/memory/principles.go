@@ -105,11 +105,36 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
 	return nil
 }
 
-// LoadPrinciples retrieves all 10 principles from the database, ordered by slot
+// LoadPrinciples retrieves all principles from the database, ordered by slot
+// Auto-migrates if slot 0 is missing (for backwards compatibility)
 func LoadPrinciples(db *gorm.DB) ([]Principle, error) {
 	var principles []Principle
 	if err := db.Order("slot ASC").Find(&principles).Error; err != nil {
 		return nil, fmt.Errorf("failed to load principles: %w", err)
+	}
+
+	// Auto-migration: If we have 10 principles (old format), add slot 0
+	if len(principles) == 10 {
+		log.Printf("[Principles] Auto-migrating: Adding slot 0 (system identity)")
+		
+		systemIdentity := Principle{
+			Slot:            0,
+			Content:         "GrowerAI",
+			Rating:          0.5,
+			IsAdmin:         false,
+			ValidationCount: 0,
+		}
+		
+		if err := db.Create(&systemIdentity).Error; err != nil {
+			return nil, fmt.Errorf("failed to create slot 0: %w", err)
+		}
+		
+		// Reload principles
+		if err := db.Order("slot ASC").Find(&principles).Error; err != nil {
+			return nil, fmt.Errorf("failed to reload principles: %w", err)
+		}
+		
+		log.Printf("[Principles] ✓ Auto-migration complete: slot 0 added")
 	}
 
 	// Ensure we have exactly 11 entries (slot 0 + slots 1-10)
