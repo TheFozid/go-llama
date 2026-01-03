@@ -117,16 +117,42 @@ func LoadPrinciples(db *gorm.DB) ([]Principle, error) {
 	if len(principles) == 10 {
 		log.Printf("[Principles] Auto-migrating: Adding slot 0 (system identity)")
 		
-		systemIdentity := Principle{
-			Slot:            0,
-			Content:         "GrowerAI",
-			Rating:          0.5,
-			IsAdmin:         false,
-			ValidationCount: 0,
-		}
-		
-		if err := db.Create(&systemIdentity).Error; err != nil {
-			return nil, fmt.Errorf("failed to create slot 0: %w", err)
+		// Check if slot 0 already exists (in case of concurrent requests)
+		var existing Principle
+		err := db.Where("slot = ?", 0).First(&existing).Error
+		if err == nil {
+			// Slot 0 already exists, reload and return
+			log.Printf("[Principles] Slot 0 already exists, skipping migration")
+			if err := db.Order("slot ASC").Find(&principles).Error; err != nil {
+				return nil, fmt.Errorf("failed to reload principles: %w", err)
+			}
+		} else if err == gorm.ErrRecordNotFound {
+			// Slot 0 doesn't exist, create it
+			systemIdentity := Principle{
+				Slot:            0,
+				Content:         "GrowerAI",
+				Rating:          0.5,
+				IsAdmin:         false,
+				ValidationCount: 0,
+			}
+			
+			// Use raw SQL to explicitly set the slot value
+			if err := db.Exec(`
+				INSERT INTO growerai_principles (slot, content, rating, is_admin, validation_count, created_at, updated_at)
+				VALUES (0, 'GrowerAI', 0.5, false, 0, NOW(), NOW())
+				ON CONFLICT (slot) DO NOTHING
+			`).Error; err != nil {
+				return nil, fmt.Errorf("failed to create slot 0: %w", err)
+			}
+			
+			// Reload principles
+			if err := db.Order("slot ASC").Find(&principles).Error; err != nil {
+				return nil, fmt.Errorf("failed to reload principles: %w", err)
+			}
+			
+			log.Printf("[Principles] ✓ Auto-migration complete: slot 0 added")
+		} else {
+			return nil, fmt.Errorf("failed to check for existing slot 0: %w", err)
 		}
 		
 		// Reload principles
