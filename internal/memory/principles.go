@@ -17,9 +17,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// Principle represents one of the 10 Commandments that guide GrowerAI's behavior
+// Principle represents the system's identity and principles
+// Slot 0: System identity (name) - AI-managed, evolves through experience
+// Slots 1-10: The 10 Commandments that guide behavior
 type Principle struct {
-	Slot            int       `gorm:"primaryKey" json:"slot"`              // 1-10
+	Slot            int       `gorm:"primaryKey" json:"slot"`              // 0 (identity), 1-10 (principles)
 	Content         string    `gorm:"type:text;not null" json:"content"`   // The principle text
 	Rating          float64   `gorm:"not null;default:0.0" json:"rating"`  // 0.0-1.0 quality score
 	IsAdmin         bool      `gorm:"not null" json:"is_admin"`            // true for slots 1-3
@@ -47,6 +49,15 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
 		return nil
 	}
 
+	// Create system identity (slot 0) - AI-managed, can evolve through experience
+	systemIdentity := Principle{
+		Slot:            0,
+		Content:         "GrowerAI", // Default name - AI can change this
+		Rating:          0.5,        // Neutral rating - can be improved
+		IsAdmin:         false,      // AI-managed
+		ValidationCount: 0,
+	}
+	
 	// Create default admin principles (slots 1-3)
 	adminPrinciples := []Principle{
 		{
@@ -84,8 +95,9 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
 		})
 	}
 
-	// Insert all principles
-	allPrinciples := append(adminPrinciples, aiPrinciples...)
+	// Insert system identity + all principles
+	allPrinciples := append([]Principle{systemIdentity}, adminPrinciples...)
+	allPrinciples = append(allPrinciples, aiPrinciples...)
 	if err := db.Create(&allPrinciples).Error; err != nil {
 		return fmt.Errorf("failed to create default principles: %w", err)
 	}
@@ -100,9 +112,9 @@ func LoadPrinciples(db *gorm.DB) ([]Principle, error) {
 		return nil, fmt.Errorf("failed to load principles: %w", err)
 	}
 
-	// Ensure we have exactly 10 principles
-	if len(principles) != 10 {
-		return nil, fmt.Errorf("expected 10 principles, found %d", len(principles))
+	// Ensure we have exactly 11 entries (slot 0 + slots 1-10)
+	if len(principles) != 11 {
+		return nil, fmt.Errorf("expected 11 principles (including identity), found %d", len(principles))
 	}
 
 	return principles, nil
@@ -117,11 +129,26 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
 	currentTime := time.Now().UTC().Format("2006-01-02 15:04")
 	builder.WriteString(fmt.Sprintf("Today is %s UTC.\n\n", currentTime))
 
-	builder.WriteString("You are GrowerAI, an AI system that learns and improves from experience.\n\n")
+	// Extract system name from slot 0
+	systemName := "GrowerAI" // Default fallback
+	for _, p := range principles {
+		if p.Slot == 0 {
+			if p.Content != "" {
+				systemName = p.Content
+			}
+			break
+		}
+	}
+	
+	builder.WriteString(fmt.Sprintf("You are %s, an AI system that learns and improves from experience.\n\n", systemName))
 	builder.WriteString("=== YOUR CORE PRINCIPLES ===\n")
 	builder.WriteString("These principles guide all your responses and decisions:\n\n")
 
 	for _, p := range principles {
+		// Skip slot 0 (system identity - already used above)
+		if p.Slot == 0 {
+			continue
+		}
 		if p.Content == "" {
 			continue // Skip empty AI-managed slots that haven't evolved yet
 		}
@@ -143,8 +170,8 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
 
 // UpdatePrinciple updates an existing principle's content and/or rating
 func UpdatePrinciple(db *gorm.DB, slot int, content string, rating float64) error {
-	if slot < 1 || slot > 10 {
-		return fmt.Errorf("invalid slot number: %d (must be 1-10)", slot)
+	if slot < 0 || slot > 10 {
+		return fmt.Errorf("invalid slot number: %d (must be 0-10)", slot)
 	}
 
 	if rating < 0.0 || rating > 1.0 {
@@ -182,8 +209,8 @@ func UpdatePrinciple(db *gorm.DB, slot int, content string, rating float64) erro
 
 // IncrementValidation increments the validation count for a principle
 func IncrementValidation(db *gorm.DB, slot int) error {
-	if slot < 1 || slot > 10 {
-		return fmt.Errorf("invalid slot number: %d (must be 1-10)", slot)
+	if slot < 0 || slot > 10 {
+		return fmt.Errorf("invalid slot number: %d (must be 0-10)", slot)
 	}
 
 	if err := db.Model(&Principle{}).Where("slot = ?", slot).
@@ -388,9 +415,9 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 		return nil
 	}
 	
-	log.Printf("[Principles] Evolving AI-managed principles (slots 4-10)...")
+	log.Printf("[Principles] Evolving AI-managed principles (slot 0 + slots 4-10)...")
 	
-	// Load current AI-managed principles
+	// Load current AI-managed principles (includes slot 0 for name)
 	var currentPrinciples []Principle
 	if err := db.Where("is_admin = ?", false).Order("slot ASC").Find(&currentPrinciples).Error; err != nil {
 		return fmt.Errorf("failed to load AI-managed principles: %w", err)
