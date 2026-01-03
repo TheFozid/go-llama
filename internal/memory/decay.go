@@ -781,9 +781,7 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 				
 				// Update memory if any links were removed
 				if removedCount > 0 {
-					mem.RelatedMemories = strongLinks
-					
-					if err := w.storage.UpdateMemory(ctx, mem); err != nil {
+					if err := w.storage.UpdateLinks(ctx, mem.ID, strongLinks); err != nil {
 						log.Printf("[LinkPruning] WARNING: Failed to update memory %s: %v",
 							mem.ID, err)
 						continue
@@ -872,10 +870,9 @@ func (w *DecayWorker) recalculateTrustScores(ctx context.Context) error {
 				// Only update if trust score changed significantly (avoid unnecessary writes)
 				if abs(newTrustScore-mem.TrustScore) > 0.01 {
 					oldTrust := mem.TrustScore
-					mem.TrustScore = newTrustScore
 					
 					// Update in storage (minimal update - just trust_score)
-					if err := w.storage.UpdateMemory(ctx, mem); err != nil {
+					if err := w.storage.UpdateTrustScore(ctx, mem.ID, newTrustScore); err != nil {
 						log.Printf("[TrustCalc] WARNING: Failed to update trust for memory %s: %v",
 							mem.ID, err)
 						continue

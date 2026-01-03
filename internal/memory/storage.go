@@ -892,6 +892,120 @@ func (s *Storage) UpdateAccessMetadata(ctx context.Context, memoryID string) err
 	return nil
 }
 
+// UpdateLinks updates only the related_memories field for a memory
+// Optimized version using SetPayload to avoid reading full memory + embedding
+func (s *Storage) UpdateLinks(ctx context.Context, memoryID string, relatedMemories []string) error {
+	// Convert string slice to Qdrant ListValue
+	relatedMemoriesValues := make([]*qdrant.Value, len(relatedMemories))
+	for i, rm := range relatedMemories {
+		relatedMemoriesValues[i] = qdrant.NewValueString(rm)
+	}
+	
+	// Find the point by memory_id
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("memory_id", memoryID),
+		},
+	}
+	
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
+		Filter:         filter,
+		Limit:          uint32Ptr(1),
+		WithPayload:    qdrant.NewWithPayload(false), // Don't need payload
+		WithVectors:    &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: false,
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to find memory: %w", err)
+	}
+	
+	if len(scrollResult) == 0 {
+		return fmt.Errorf("memory not found: %s", memoryID)
+	}
+	
+	// Update only the related_memories field
+	_, err = s.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+		CollectionName: s.CollectionName,
+		Payload: map[string]*qdrant.Value{
+			"related_memories": &qdrant.Value{
+				Kind: &qdrant.Value_ListValue{
+					ListValue: &qdrant.ListValue{Values: relatedMemoriesValues},
+				},
+			},
+		},
+		PointsSelector: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+				Points: &qdrant.PointsIdsList{
+					Ids: []*qdrant.PointId{scrollResult[0].Id},
+				},
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to update links: %w", err)
+	}
+	
+	return nil
+}
+
+// UpdateTrustScore updates only the trust_score field for a memory
+// Optimized version using SetPayload to avoid reading full memory + embedding
+func (s *Storage) UpdateTrustScore(ctx context.Context, memoryID string, trustScore float64) error {
+	// Find the point by memory_id
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatch("memory_id", memoryID),
+		},
+	}
+	
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
+		Filter:         filter,
+		Limit:          uint32Ptr(1),
+		WithPayload:    qdrant.NewWithPayload(false),
+		WithVectors:    &qdrant.WithVectorsSelector{
+			SelectorOptions: &qdrant.WithVectorsSelector_Enable{
+				Enable: false,
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to find memory: %w", err)
+	}
+	
+	if len(scrollResult) == 0 {
+		return fmt.Errorf("memory not found: %s", memoryID)
+	}
+	
+	// Update only the trust_score field
+	_, err = s.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+		CollectionName: s.CollectionName,
+		Payload: map[string]*qdrant.Value{
+			"trust_score": qdrant.NewValueDouble(trustScore),
+		},
+		PointsSelector: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+				Points: &qdrant.PointsIdsList{
+					Ids: []*qdrant.PointId{scrollResult[0].Id},
+				},
+			},
+		},
+	})
+	
+	if err != nil {
+		return fmt.Errorf("failed to update trust score: %w", err)
+	}
+	
+	return nil
+}
+
 func floatPtr(v float64) *float64 {
 return &v
 }
