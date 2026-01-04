@@ -356,14 +356,16 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 
 // reflectOnRecentActivity analyzes recent memory patterns
 func (e *Engine) reflectOnRecentActivity(ctx context.Context) (string, int, error) {
-	// Find recent memories (last 24 hours)
+	// Find recent memories (last 24 hours) - search ALL memories (no filters)
 	embedding, err := e.embedder.Embed(ctx, "recent activity and patterns")
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 	
+	// Search without user/collective filters to see ALL recent activity
 	query := memory.RetrievalQuery{
-		IncludeCollective: true,
+		// Don't set UserID - we want to see all activity
+		// Don't filter by collective - we want everything
 		Limit:             10,
 		MinScore:          0.3,
 	}

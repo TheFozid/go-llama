@@ -20,7 +20,9 @@ type Embedder struct {
 func NewEmbedder(apiURL string) *Embedder {
 	return &Embedder{
 		apiURL: apiURL,
-		client: &http.Client{},
+		client: &http.Client{
+			Timeout: 15 * time.Second, // Reasonable timeout for embedding generation
+		},
 	}
 }
 

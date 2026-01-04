@@ -23,7 +23,7 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	// Initialize memory components
@@ -316,11 +316,23 @@ if len(allLinkedIDs) > 0 {
 	// We'll tag this interaction's outcome in the background, but we can assume retrieval = useful
 	if len(allResults) > 0 {
 		log.Printf("[GrowerAI-WS] Incrementing validation count for %d retrieved memories", len(allResults))
+		
+		// Use separate context with longer timeout for batch operations
+		validationCtx, validationCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer validationCancel()
+		
+		successCount := 0
 		for _, result := range allResults {
-			if err := storage.IncrementValidationCount(ctx, result.Memory.ID); err != nil {
+			if err := storage.IncrementValidationCount(validationCtx, result.Memory.ID); err != nil {
 				log.Printf("[GrowerAI-WS] WARNING: Failed to increment validation for memory %s: %v",
 					result.Memory.ID, err)
+			} else {
+				successCount++
 			}
+		}
+		
+		if successCount > 0 {
+			log.Printf("[GrowerAI-WS] ✓ Successfully incremented validation for %d/%d memories", successCount, len(allResults))
 		}
 	}
 
@@ -335,8 +347,21 @@ if len(allLinkedIDs) > 0 {
 
 		memEmbedding, err := embedder.Embed(ctx, memoryContent)
 		if err != nil {
-			log.Printf("[GrowerAI-WS] WARNING: Failed to generate memory embedding: %v", err)
-		} else {
+			log.Printf("[GrowerAI-WS] WARNING: Failed to generate memory embedding (attempt 1): %v", err)
+			
+			// Retry once with fresh context
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), 20*time.Second)
+			memEmbedding, err = embedder.Embed(retryCtx, memoryContent)
+			retryCancel()
+			
+			if err != nil {
+				log.Printf("[GrowerAI-WS] ERROR: Failed to generate memory embedding after retry: %v", err)
+			} else {
+				log.Printf("[GrowerAI-WS] ✓ Memory embedding generated on retry")
+			}
+		}
+		
+		if err == nil {
 			importanceScore := 0.5
 			if len(content) > 100 {
 				importanceScore += 0.2
