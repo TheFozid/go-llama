@@ -30,6 +30,13 @@ type Engine struct {
 	maxThoughtsPerCycle       int
 	actionRequirementInterval int
 	noveltyWindowHours        int
+	// Enhanced reasoning config
+	reasoningDepth            string
+	enableSelfAssessment      bool
+	enableMetaLearning        bool
+	enableStrategyTracking    bool
+	storeInsights             bool
+	dynamicActionPlanning     bool
 }
 
 // NewEngine creates a new dialogue engine
@@ -45,6 +52,12 @@ func NewEngine(
 	maxThoughtsPerCycle int,
 	actionRequirementInterval int,
 	noveltyWindowHours int,
+	reasoningDepth string,
+	enableSelfAssessment bool,
+	enableMetaLearning bool,
+	enableStrategyTracking bool,
+	storeInsights bool,
+	dynamicActionPlanning bool,
 ) *Engine {
 	return &Engine{
 		storage:                   storage,
@@ -58,6 +71,12 @@ func NewEngine(
 		maxThoughtsPerCycle:       maxThoughtsPerCycle,
 		actionRequirementInterval: actionRequirementInterval,
 		noveltyWindowHours:        noveltyWindowHours,
+		reasoningDepth:            reasoningDepth,
+		enableSelfAssessment:      enableSelfAssessment,
+		enableMetaLearning:        enableMetaLearning,
+		enableStrategyTracking:    enableStrategyTracking,
+		storeInsights:             storeInsights,
+		dynamicActionPlanning:     dynamicActionPlanning,
 	}
 }
 
@@ -123,29 +142,61 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	totalTokens := 0
 	recentThoughts := []string{} // For novelty filtering
 	
-	// PHASE 1: Reflection
-	log.Printf("[Dialogue] PHASE 1: Reflection")
+
+	// PHASE 1: Enhanced Reflection with Structured Reasoning
+	log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
 	
-	reflection, tokens, err := e.reflectOnRecentActivity(ctx)
+	reasoning, tokens, err := e.performEnhancedReflection(ctx, state)
 	if err != nil {
 		return StopReasonNaturalStop, fmt.Errorf("reflection failed: %w", err)
 	}
 	
 	thoughtCount++
 	totalTokens += tokens
-	recentThoughts = append(recentThoughts, reflection)
+	recentThoughts = append(recentThoughts, reasoning.Reflection)
 	
 	// Save thought record
 	e.stateManager.SaveThought(ctx, &ThoughtRecord{
 		CycleID:     state.CycleCount,
 		ThoughtNum:  thoughtCount,
-		Content:     reflection,
+		Content:     reasoning.Reflection,
 		TokensUsed:  tokens,
 		ActionTaken: false,
 		Timestamp:   time.Now(),
 	})
 	
-	log.Printf("[Dialogue] Reflection: %s", truncate(reflection, 80))
+	log.Printf("[Dialogue] Reflection: %s", truncate(reasoning.Reflection, 80))
+	
+	// Log insights
+	if len(reasoning.Insights) > 0 {
+		log.Printf("[Dialogue] Generated %d insights", len(reasoning.Insights))
+		for i, insight := range reasoning.Insights {
+			log.Printf("[Dialogue]   Insight %d: %s", i+1, truncate(insight, 80))
+		}
+	}
+	
+	// Log self-assessment if enabled
+	if e.enableSelfAssessment && reasoning.SelfAssessment != nil {
+		log.Printf("[Dialogue] Self-Assessment:")
+		log.Printf("[Dialogue]   Confidence: %.2f", reasoning.SelfAssessment.Confidence)
+		if len(reasoning.SelfAssessment.RecentSuccesses) > 0 {
+			log.Printf("[Dialogue]   Successes: %d", len(reasoning.SelfAssessment.RecentSuccesses))
+		}
+		if len(reasoning.SelfAssessment.RecentFailures) > 0 {
+			log.Printf("[Dialogue]   Failures: %d", len(reasoning.SelfAssessment.RecentFailures))
+		}
+		if len(reasoning.SelfAssessment.FocusAreas) > 0 {
+			log.Printf("[Dialogue]   Focus Areas: %v", reasoning.SelfAssessment.FocusAreas)
+		}
+	}
+	
+	// Store learnings as memories if enabled
+	if e.storeInsights && len(reasoning.Learnings) > 0 {
+		for _, learning := range reasoning.Learnings {
+			e.storeLearning(ctx, learning)
+		}
+		log.Printf("[Dialogue] Stored %d learnings in memory", len(reasoning.Learnings))
+	}
 	
 	// Check token budget
 	if totalTokens >= e.maxTokensPerCycle {
@@ -154,15 +205,20 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		metrics.TokensUsed = totalTokens
 		return StopReasonMaxThoughts, nil
 	}
+
 	
-	// PHASE 2: Goal Management
-	log.Printf("[Dialogue] PHASE 2: Goal Management")
+	// PHASE 2: Reasoning-Driven Goal Management
+	log.Printf("[Dialogue] PHASE 2: Reasoning-Driven Goal Management")
 	
-	// Identify knowledge gaps and failures
-	gaps, err := e.identifyKnowledgeGaps(ctx)
-	if err != nil {
-		log.Printf("[Dialogue] WARNING: Failed to identify gaps: %v", err)
-		gaps = []string{}
+	// Use insights from reflection to identify gaps
+	gaps := reasoning.KnowledgeGaps
+	if len(gaps) == 0 {
+		// Fallback to old method if reasoning didn't find any
+		gaps, err = e.identifyKnowledgeGaps(ctx)
+		if err != nil {
+			log.Printf("[Dialogue] WARNING: Failed to identify gaps: %v", err)
+			gaps = []string{}
+		}
 	}
 	
 	failures, err := e.identifyRecentFailures(ctx)
@@ -174,23 +230,51 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	// Update state with findings
 	state.KnowledgeGaps = gaps
 	state.RecentFailures = failures
+	state.Patterns = reasoning.Patterns
 	
 	if len(gaps) > 0 {
-		log.Printf("[Dialogue] Identified %d knowledge gaps", len(gaps))
+		log.Printf("[Dialogue] Identified %d knowledge gaps from reasoning", len(gaps))
 	}
 	if len(failures) > 0 {
 		log.Printf("[Dialogue] Identified %d recent failures", len(failures))
 	}
+	if len(reasoning.Patterns) > 0 {
+		log.Printf("[Dialogue] Detected %d patterns", len(reasoning.Patterns))
+	}
 	
-	// Form new goals if needed
-	newGoals := e.formGoals(state)
+	// Create goals from LLM proposals if available
+	newGoals := []Goal{}
+	if len(reasoning.GoalsToCreate) > 0 {
+		log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
+		for _, proposal := range reasoning.GoalsToCreate {
+			// Check for duplicates
+			isDuplicate := false
+			for _, existingGoal := range state.ActiveGoals {
+				if strings.Contains(strings.ToLower(existingGoal.Description), strings.ToLower(proposal.Description[:min(len(proposal.Description), 30)])) {
+					isDuplicate = true
+					log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(proposal.Description, 40))
+					break
+				}
+			}
+			
+			if isDuplicate {
+				continue
+			}
+			
+			goal := e.createGoalFromProposal(proposal)
+			newGoals = append(newGoals, goal)
+			log.Printf("[Dialogue] Created goal from LLM proposal: %s (priority: %d)", truncate(goal.Description, 60), goal.Priority)
+			log.Printf("[Dialogue]   Reasoning: %s", truncate(proposal.Reasoning, 80))
+		}
+	} else {
+		// Fallback to old goal formation
+		newGoals = e.formGoals(state)
+	}
+	
 	if len(newGoals) > 0 {
 		state.ActiveGoals = append(state.ActiveGoals, newGoals...)
 		metrics.GoalsCreated = len(newGoals)
-		log.Printf("[Dialogue] Created %d new goals", len(newGoals))
-		for _, goal := range newGoals {
-			log.Printf("[Dialogue]   - %s (priority: %d)", goal.Description, goal.Priority)
-		}
+		log.Printf("[Dialogue] Created %d new goals total", len(newGoals))
 	}
 	
 
@@ -883,6 +967,170 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// performEnhancedReflection performs structured reasoning about recent activity
+func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalState) (*ReasoningResponse, int, error) {
+	// Find recent memories for context
+	embedding, err := e.embedder.Embed(ctx, "recent activity patterns successes failures")
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to generate embedding: %w", err)
+	}
+	
+	query := memory.RetrievalQuery{
+		Limit:    10,
+		MinScore: 0.3,
+	}
+	
+	results, err := e.storage.Search(ctx, query, embedding)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to search memories: %w", err)
+	}
+	
+	// Build context for reasoning
+	memoryContext := "Recent memories:\n"
+	if len(results) == 0 {
+		memoryContext += "No recent memories found.\n"
+	} else {
+		for i, result := range results {
+			outcome := result.Memory.OutcomeTag
+			if outcome == "" {
+				outcome = "unrated"
+			}
+			memoryContext += fmt.Sprintf("%d. [%s] %s\n", i+1, outcome, truncate(result.Memory.Content, 100))
+		}
+	}
+	
+	// Add current goals context
+	goalsContext := fmt.Sprintf("\nCurrent active goals: %d\n", len(state.ActiveGoals))
+	if len(state.ActiveGoals) > 0 {
+		for i, goal := range state.ActiveGoals {
+			goalsContext += fmt.Sprintf("%d. %s (progress: %.0f%%, priority: %d)\n", 
+				i+1, truncate(goal.Description, 60), goal.Progress*100, goal.Priority)
+		}
+	}
+	
+	// Build prompt based on reasoning depth
+	var prompt string
+	switch e.reasoningDepth {
+	case "deep":
+		prompt = fmt.Sprintf(`%s%s
+
+Perform deep analysis:
+1. Reflect on what these memories reveal about recent interactions
+2. Identify at least 3 insights or patterns
+3. Assess your strengths and weaknesses honestly
+4. Identify knowledge gaps that need addressing
+5. Propose 1-3 specific goals with detailed action plans
+6. Extract learnings about what strategies work
+7. Provide comprehensive self-assessment
+
+Be thorough and analytical. Focus on actionable insights.`, memoryContext, goalsContext)
+		
+	case "moderate":
+		prompt = fmt.Sprintf(`%s%s
+
+Analyze recent activity:
+1. What patterns do you see in these memories?
+2. What are you doing well? What needs improvement?
+3. What knowledge gaps should you address?
+4. Propose 1-2 goals with action plans
+5. What have you learned about effective strategies?
+
+Be analytical but concise.`, memoryContext, goalsContext)
+		
+	default: // conservative
+		prompt = fmt.Sprintf(`%s%s
+
+Brief analysis:
+1. Key takeaway from recent memories?
+2. One strength, one weakness
+3. Most important knowledge gap to address?
+4. Propose one goal if needed
+
+Keep it focused and actionable.`, memoryContext, goalsContext)
+	}
+	
+	// Call LLM with structured reasoning
+	return e.callLLMWithStructuredReasoning(ctx, prompt, true)
+}
+
+// createGoalFromProposal creates a Goal from an LLM proposal
+func (e *Engine) createGoalFromProposal(proposal GoalProposal) Goal {
+	goal := Goal{
+		ID:          fmt.Sprintf("goal_%d", time.Now().UnixNano()),
+		Description: proposal.Description,
+		Source:      GoalSourceKnowledgeGap, // Could be smarter based on reasoning
+		Priority:    proposal.Priority,
+		Created:     time.Now(),
+		Progress:    0.0,
+		Status:      GoalStatusActive,
+		Actions:     []Action{},
+	}
+	
+	// Create actions from LLM's action plan if dynamic planning enabled
+	if e.dynamicActionPlanning && len(proposal.ActionPlan) > 0 {
+		for _, planStep := range proposal.ActionPlan {
+			action := e.parseActionFromPlan(planStep)
+			goal.Actions = append(goal.Actions, action)
+		}
+		log.Printf("[Dialogue] Created %d actions from LLM action plan", len(goal.Actions))
+	}
+	
+	return goal
+}
+
+// parseActionFromPlan converts an LLM action plan step into an Action
+func (e *Engine) parseActionFromPlan(planStep string) Action {
+	// Simple parsing: look for tool keywords
+	tool := ActionToolSearch // Default to search
+	planLower := strings.ToLower(planStep)
+	
+	if strings.Contains(planLower, "parse") || strings.Contains(planLower, "read") || strings.Contains(planLower, "fetch") {
+		tool = ActionToolWebParse
+	} else if strings.Contains(planLower, "search") || strings.Contains(planLower, "find") || strings.Contains(planLower, "look up") {
+		tool = ActionToolSearch
+	} else if strings.Contains(planLower, "test") || strings.Contains(planLower, "experiment") || strings.Contains(planLower, "try") {
+		tool = ActionToolSandbox
+	}
+	
+	return Action{
+		Description: planStep,
+		Tool:        tool,
+		Status:      ActionStatusPending,
+		Timestamp:   time.Now(),
+	}
+}
+
+// storeLearning stores a learning as a collective memory
+func (e *Engine) storeLearning(ctx context.Context, learning Learning) error {
+	content := fmt.Sprintf("LEARNING [%s]: %s (Context: %s, Confidence: %.2f)",
+		learning.Category, learning.What, learning.Context, learning.Confidence)
+	
+	embedding, err := e.embedder.Embed(ctx, content)
+	if err != nil {
+		log.Printf("[Dialogue] WARNING: Failed to embed learning: %v", err)
+		return err
+	}
+	
+	mem := &memory.Memory{
+		Content:       content,
+		Importance:    learning.Confidence, // Use confidence as importance
+		IsCollective:  true,                // Learnings are collective knowledge
+		ConceptTags:   []string{"learning", learning.Category},
+		OutcomeTag:    "good", // Learnings are positive
+		ValidationCount: 1,    // Pre-validated
+		TrustScore:    learning.Confidence,
+	}
+	
+	_, err = e.storage.Store(ctx, mem, embedding)
+	if err != nil {
+		log.Printf("[Dialogue] WARNING: Failed to store learning: %v", err)
+		return err
+	}
+	
+	log.Printf("[Dialogue] Stored learning: %s", truncate(learning.What, 60))
+	return nil
+}
+
 // generateJitter returns a random duration within the jitter window
 func generateJitter(windowMinutes int) time.Duration {
 	if windowMinutes <= 0 {
@@ -892,4 +1140,5 @@ func generateJitter(windowMinutes int) time.Duration {
 	// Random value between -windowMinutes and +windowMinutes
 	jitterMinutes := rand.Intn(windowMinutes*2+1) - windowMinutes
 	return time.Duration(jitterMinutes) * time.Minute
+
 }
