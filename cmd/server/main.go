@@ -8,6 +8,7 @@ import (
 	"go-llama/internal/api"
 	"go-llama/internal/config"
 	"go-llama/internal/db"
+	"go-llama/internal/dialogue"
 	"go-llama/internal/memory"
 	redisdb "go-llama/internal/redis"
 )
@@ -32,7 +33,23 @@ func main() {
 		log.Printf("[Main] ✓ GrowerAI principles initialized")
 	}
 
+	// Initialize GrowerAI dialogue state (Phase 3.1)
+	log.Printf("[Main] Initializing GrowerAI dialogue state...")
+	if err := dialogue.InitializeDefaultState(db.DB); err != nil {
+		log.Printf("[Main] WARNING: Failed to initialize dialogue state: %v", err)
+	} else {
+		log.Printf("[Main] ✓ GrowerAI dialogue state initialized")
+	}
+
 	rdb := redisdb.NewClient(cfg)
+
+	// Initialize GrowerAI dialogue state (Phase 3.1)
+	log.Printf("[Main] Initializing GrowerAI dialogue state...")
+	if err := dialogue.InitializeDefaultState(db.DB); err != nil {
+		log.Printf("[Main] WARNING: Failed to initialize dialogue state: %v", err)
+	} else {
+		log.Printf("[Main] ✓ GrowerAI dialogue state initialized")
+	}
 
 	// Start GrowerAI compression worker if enabled
 	if cfg.GrowerAI.Compression.Enabled {
@@ -145,6 +162,51 @@ func main() {
 		}
 	} else {
 		log.Printf("[Main] GrowerAI compression disabled in config")
+	}
+
+	// Start GrowerAI dialogue worker if enabled (Phase 3.1)
+	if cfg.GrowerAI.Dialogue.Enabled {
+		log.Printf("[Main] Initializing GrowerAI dialogue worker...")
+
+		storage, err := memory.NewStorage(
+			cfg.GrowerAI.Qdrant.URL,
+			cfg.GrowerAI.Qdrant.Collection,
+			cfg.GrowerAI.Qdrant.APIKey,
+		)
+		if err != nil {
+			log.Printf("[Main] WARNING: Failed to initialize storage for dialogue: %v", err)
+		} else {
+			embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+			stateManager := dialogue.NewStateManager(db.DB)
+
+			engine := dialogue.NewEngine(
+				storage,
+				embedder,
+				stateManager,
+				cfg.GrowerAI.ReasoningModel.URL,
+				cfg.GrowerAI.ReasoningModel.Name,
+				cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
+				cfg.GrowerAI.Dialogue.MaxDurationMinutes,
+				cfg.GrowerAI.Dialogue.MaxThoughtsPerCycle,
+				cfg.GrowerAI.Dialogue.ActionRequirementInterval,
+				cfg.GrowerAI.Dialogue.NoveltyWindowHours,
+			)
+
+			worker := dialogue.NewWorker(
+				engine,
+				cfg.GrowerAI.Dialogue.BaseIntervalMinutes,
+				cfg.GrowerAI.Dialogue.JitterWindowMinutes,
+			)
+
+			// Start worker in background goroutine
+			go worker.Start()
+
+			log.Printf("[Main] ✓ GrowerAI dialogue worker started (interval: %d±%d minutes)",
+				cfg.GrowerAI.Dialogue.BaseIntervalMinutes,
+				cfg.GrowerAI.Dialogue.JitterWindowMinutes)
+		}
+	} else {
+		log.Printf("[Main] GrowerAI dialogue disabled in config")
 	}
 
 	r := api.SetupRouter(cfg, rdb)

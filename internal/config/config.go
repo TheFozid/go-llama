@@ -103,6 +103,17 @@ type GrowerAIConfig struct {
 		LinkDecayRate          float64 `json:"link_decay_rate"`          // How fast unused links weaken
 		CoOccurrenceThrottle   int     `json:"co_occurrence_throttle"`   // Minutes between counting same co-occurrence
 	} `json:"linking"`
+	// Phase 3.1: Internal Dialogue System
+	Dialogue struct {
+		Enabled                   bool `json:"enabled"`
+		BaseIntervalMinutes       int  `json:"base_interval_minutes"`
+		JitterWindowMinutes       int  `json:"jitter_window_minutes"`
+		MaxTokensPerCycle         int  `json:"max_tokens_per_cycle"`
+		MaxDurationMinutes        int  `json:"max_duration_minutes"`
+		MaxThoughtsPerCycle       int  `json:"max_thoughts_per_cycle"`
+		ActionRequirementInterval int  `json:"action_requirement_interval"`
+		NoveltyWindowHours        int  `json:"novelty_window_hours"`
+	} `json:"dialogue"`
 }
 
 type Config struct {
@@ -213,6 +224,28 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	}
 	if gai.Linking.CoOccurrenceThrottle == 0 {
 		gai.Linking.CoOccurrenceThrottle = 60 // 60 minutes (1 hour) default
+	}
+	// Dialogue system defaults (Phase 3.1)
+	if gai.Dialogue.BaseIntervalMinutes == 0 {
+		gai.Dialogue.BaseIntervalMinutes = 15
+	}
+	if gai.Dialogue.JitterWindowMinutes == 0 {
+		gai.Dialogue.JitterWindowMinutes = 10
+	}
+	if gai.Dialogue.MaxTokensPerCycle == 0 {
+		gai.Dialogue.MaxTokensPerCycle = 1000
+	}
+	if gai.Dialogue.MaxDurationMinutes == 0 {
+		gai.Dialogue.MaxDurationMinutes = 10
+	}
+	if gai.Dialogue.MaxThoughtsPerCycle == 0 {
+		gai.Dialogue.MaxThoughtsPerCycle = 20
+	}
+	if gai.Dialogue.ActionRequirementInterval == 0 {
+		gai.Dialogue.ActionRequirementInterval = 5
+	}
+	if gai.Dialogue.NoveltyWindowHours == 0 {
+		gai.Dialogue.NoveltyWindowHours = 2
 	}
 	
 	// Retrieval defaults

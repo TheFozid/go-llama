@@ -1,0 +1,102 @@
+// internal/dialogue/types.go
+package dialogue
+
+import (
+	"time"
+)
+
+// Goal represents a self-directed learning objective
+type Goal struct {
+	ID          string    `json:"id"`
+	Description string    `json:"description"`
+	Source      string    `json:"source"` // "user_failure", "knowledge_gap", "curiosity", "principle"
+	Priority    int       `json:"priority"` // 1-10
+	Created     time.Time `json:"created"`
+	Progress    float64   `json:"progress"` // 0.0 to 1.0
+	Actions     []Action  `json:"actions"`
+	Status      string    `json:"status"` // "active", "completed", "abandoned"
+	Outcome     string    `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
+}
+
+// Action represents a step taken toward completing a goal
+type Action struct {
+	Description string    `json:"description"`
+	Tool        string    `json:"tool"` // "search", "web_parse", "sandbox", "memory_consolidation"
+	Status      string    `json:"status"` // "pending", "in_progress", "completed"
+	Result      string    `json:"result,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// InternalState represents the system's working memory between dialogue cycles
+type InternalState struct {
+	ActiveGoals     []Goal   `json:"active_goals"`
+	CompletedGoals  []Goal   `json:"completed_goals"`
+	KnowledgeGaps   []string `json:"knowledge_gaps"`
+	RecentFailures  []string `json:"recent_failures"`
+	Patterns        []string `json:"patterns"`
+	LastCycleTime   time.Time `json:"last_cycle_time"`
+	CycleCount      int      `json:"cycle_count"`
+}
+
+// ThoughtRecord logs an internal thought during a dialogue cycle
+type ThoughtRecord struct {
+	CycleID     int       `json:"cycle_id"`
+	ThoughtNum  int       `json:"thought_num"`
+	Content     string    `json:"content"`
+	TokensUsed  int       `json:"tokens_used"`
+	Timestamp   time.Time `json:"timestamp"`
+	ActionTaken bool      `json:"action_taken"` // Did this thought result in external action?
+}
+
+// CycleMetrics tracks performance of a dialogue cycle
+type CycleMetrics struct {
+	CycleID          int           `json:"cycle_id"`
+	StartTime        time.Time     `json:"start_time"`
+	EndTime          time.Time     `json:"end_time"`
+	Duration         time.Duration `json:"duration"`
+	ThoughtCount     int           `json:"thought_count"`
+	ActionCount      int           `json:"action_count"`
+	TokensUsed       int           `json:"tokens_used"`
+	GoalsCreated     int           `json:"goals_created"`
+	GoalsCompleted   int           `json:"goals_completed"`
+	MemoriesStored   int           `json:"memories_stored"`
+	StopReason       string        `json:"stop_reason"` // "max_thoughts", "max_time", "action_requirement", "natural_stop"
+}
+
+// GoalSource constants
+const (
+	GoalSourceUserFailure  = "user_failure"
+	GoalSourceKnowledgeGap = "knowledge_gap"
+	GoalSourceCuriosity    = "curiosity"
+	GoalSourcePrinciple    = "principle"
+)
+
+// GoalStatus constants
+const (
+	GoalStatusActive    = "active"
+	GoalStatusCompleted = "completed"
+	GoalStatusAbandoned = "abandoned"
+)
+
+// ActionStatus constants
+const (
+	ActionStatusPending    = "pending"
+	ActionStatusInProgress = "in_progress"
+	ActionStatusCompleted  = "completed"
+)
+
+// ActionTool constants
+const (
+	ActionToolSearch              = "search"
+	ActionToolWebParse            = "web_parse"
+	ActionToolSandbox             = "sandbox"
+	ActionToolMemoryConsolidation = "memory_consolidation"
+)
+
+// StopReason constants
+const (
+	StopReasonMaxThoughts       = "max_thoughts"
+	StopReasonMaxTime           = "max_time"
+	StopReasonActionRequirement = "action_requirement"
+	StopReasonNaturalStop       = "natural_stop"
+)

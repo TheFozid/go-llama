@@ -109,6 +109,16 @@
       "max_links_per_memory": 10,
       "link_decay_rate": 0.02,
       "co_occurrence_throttle": 60
+    },
+    "dialogue": {
+      "enabled": false,
+      "base_interval_minutes": 15,
+      "jitter_window_minutes": 10,
+      "max_tokens_per_cycle": 1000,
+      "max_duration_minutes": 10,
+      "max_thoughts_per_cycle": 20,
+      "action_requirement_interval": 5,
+      "novelty_window_hours": 2
     }
   },
   "searxng": {

@@ -7,6 +7,7 @@ import (
 	"go-llama/internal/user"
 	"go-llama/internal/chat"
 	"go-llama/internal/memory"
+	"go-llama/internal/dialogue"  // NEW
 	"log"
 )
 
@@ -30,6 +31,15 @@ func Init(cfg *config.Config) error {
 	
 	// Auto-migrate GrowerAI principles
 	if err := db.AutoMigrate(&memory.Principle{}); err != nil {
+		return err
+	}
+	
+	// Auto-migrate dialogue state tables (Phase 3.1)
+	if err := db.AutoMigrate(
+		&dialogue.DialogueState{},
+		&dialogue.DialogueMetrics{},
+		&dialogue.DialogueThought{},
+	); err != nil {
 		return err
 	}
 	
