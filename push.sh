@@ -61,7 +61,7 @@ docker buildx build \
   -t "$IMAGE_BASE:$VERSION" \
   -t "$IMAGE_BASE:$MAJOR.$MINOR" \
   -t "$IMAGE_BASE:$MAJOR" \
-  --load .
+  --push .
 
 echo
 echo "🌐 Pushing git changes..."
