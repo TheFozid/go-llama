@@ -114,8 +114,7 @@ type GrowerAIConfig struct {
 		ActionRequirementInterval int  `json:"action_requirement_interval"`
 		NoveltyWindowHours        int  `json:"novelty_window_hours"`
 	} `json:"dialogue"`
-}
-
+	
 	// Phase 3.2: Tool Infrastructure
 	Tools struct {
 		SearXNG struct {
