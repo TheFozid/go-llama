@@ -1112,16 +1112,21 @@ func (e *Engine) storeLearning(ctx context.Context, learning Learning) error {
 	}
 	
 	mem := &memory.Memory{
-		Content:       content,
-		Importance:    learning.Confidence, // Use confidence as importance
-		IsCollective:  true,                // Learnings are collective knowledge
-		ConceptTags:   []string{"learning", learning.Category},
-		OutcomeTag:    "good", // Learnings are positive
-		ValidationCount: 1,    // Pre-validated
-		TrustScore:    learning.Confidence,
+		Content:         content,
+		ImportanceScore: learning.Confidence, // Use confidence as importance
+		IsCollective:    true,                // Learnings are collective knowledge
+		ConceptTags:     []string{"learning", learning.Category},
+		OutcomeTag:      "good",              // Learnings are positive
+		ValidationCount: 1,                   // Pre-validated
+		TrustScore:      learning.Confidence,
+		Tier:            memory.TierRecent,   // Start in recent tier
+		CreatedAt:       time.Now(),
+		LastAccessedAt:  time.Now(),
+		AccessCount:     0,
+		Embedding:       embedding,
 	}
 	
-	_, err = e.storage.Store(ctx, mem, embedding)
+	err = e.storage.Store(ctx, mem)
 	if err != nil {
 		log.Printf("[Dialogue] WARNING: Failed to store learning: %v", err)
 		return err
