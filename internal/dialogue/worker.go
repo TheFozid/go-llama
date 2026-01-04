@@ -89,14 +89,3 @@ func (w *Worker) runCycleSafely() {
 		log.Printf("[DialogueWorker] ERROR in dialogue cycle: %v", err)
 	}
 }
-
-// generateJitter returns a random duration within the jitter window
-func generateJitter(windowMinutes int) time.Duration {
-	if windowMinutes <= 0 {
-		return 0
-	}
-	
-	// Random value between -windowMinutes and +windowMinutes
-	jitterMinutes := rand.Intn(windowMinutes*2+1) - windowMinutes
-	return time.Duration(jitterMinutes) * time.Minute
-}
