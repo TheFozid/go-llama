@@ -231,6 +231,12 @@ func main() {
 				cfg.GrowerAI.Dialogue.MaxThoughtsPerCycle,
 				cfg.GrowerAI.Dialogue.ActionRequirementInterval,
 				cfg.GrowerAI.Dialogue.NoveltyWindowHours,
+				cfg.GrowerAI.Dialogue.ReasoningDepth,
+				cfg.GrowerAI.Dialogue.EnableSelfAssessment,
+				cfg.GrowerAI.Dialogue.EnableMetaLearning,
+				cfg.GrowerAI.Dialogue.EnableStrategyTracking,
+				cfg.GrowerAI.Dialogue.StoreInsights,
+				cfg.GrowerAI.Dialogue.DynamicActionPlanning,
 			)
 
 			worker := dialogue.NewWorker(
