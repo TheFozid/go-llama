@@ -743,7 +743,7 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to send request: %w", err)
@@ -847,7 +847,7 @@ CRITICAL: Respond ONLY with valid JSON. No preamble, no explanation, just the JS
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to send request: %w", err)
