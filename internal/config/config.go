@@ -145,6 +145,7 @@ type GrowerAIConfig struct {
 			LogLevel       string `json:"log_level"`
 		} `json:"sandbox"`
 	} `json:"tools"`
+}
 
 type Config struct {
 	Server struct {
