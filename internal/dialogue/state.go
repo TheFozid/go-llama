@@ -13,7 +13,7 @@ import (
 
 // DialogueState represents the persistent internal state (singleton)
 type DialogueState struct {
-	ID             int            `gorm:"primaryKey;default:1" json:"id"`
+	ID             int            `gorm:"primaryKey" json:"id"`
 	ActiveGoals    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"active_goals"`
 	CompletedGoals datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_goals"`
 	KnowledgeGaps  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"knowledge_gaps"`
@@ -181,16 +181,7 @@ func (sm *StateManager) SaveThought(ctx context.Context, thought *ThoughtRecord)
 
 // InitializeDefaultState ensures the singleton state record exists
 func InitializeDefaultState(db *gorm.DB) error {
-	var count int64
-	if err := db.Model(&DialogueState{}).Count(&count).Error; err != nil {
-		return fmt.Errorf("failed to count dialogue state: %w", err)
-	}
-
-	if count > 0 {
-		return nil // Already initialized
-	}
-
-	// Create default empty state
+	// Use FirstOrCreate to ensure singleton exists (will create if missing)
 	defaultState := DialogueState{
 		ID:             1,
 		ActiveGoals:    datatypes.JSON([]byte("[]")),
@@ -202,8 +193,8 @@ func InitializeDefaultState(db *gorm.DB) error {
 		CycleCount:     0,
 	}
 
-	if err := db.Create(&defaultState).Error; err != nil {
-		return fmt.Errorf("failed to create default dialogue state: %w", err)
+	if err := db.Where(DialogueState{ID: 1}).FirstOrCreate(&defaultState).Error; err != nil {
+		return fmt.Errorf("failed to initialize default dialogue state: %w", err)
 	}
 
 	return nil
