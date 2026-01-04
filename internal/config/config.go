@@ -113,6 +113,13 @@ type GrowerAIConfig struct {
 		MaxThoughtsPerCycle       int  `json:"max_thoughts_per_cycle"`
 		ActionRequirementInterval int  `json:"action_requirement_interval"`
 		NoveltyWindowHours        int  `json:"novelty_window_hours"`
+		// Enhanced reasoning
+		ReasoningDepth            string `json:"reasoning_depth"`             // "conservative", "moderate", "deep"
+		EnableSelfAssessment      bool   `json:"enable_self_assessment"`      // Analyze strengths/weaknesses
+		EnableMetaLearning        bool   `json:"enable_meta_learning"`        // Learn about learning strategies
+		EnableStrategyTracking    bool   `json:"enable_strategy_tracking"`    // Track what works/doesn't
+		StoreInsights             bool   `json:"store_insights"`              // Store learnings in memory
+		DynamicActionPlanning     bool   `json:"dynamic_action_planning"`     // LLM generates action plans
 	} `json:"dialogue"`
 	
 	// Phase 3.2: Tool Infrastructure
@@ -256,6 +263,7 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	if gai.Linking.CoOccurrenceThrottle == 0 {
 		gai.Linking.CoOccurrenceThrottle = 60 // 60 minutes (1 hour) default
 	}
+
 	// Dialogue system defaults (Phase 3.1)
 	if gai.Dialogue.BaseIntervalMinutes == 0 {
 		gai.Dialogue.BaseIntervalMinutes = 15
@@ -277,6 +285,26 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	}
 	if gai.Dialogue.NoveltyWindowHours == 0 {
 		gai.Dialogue.NoveltyWindowHours = 2
+	}
+	// Enhanced reasoning defaults
+	if gai.Dialogue.ReasoningDepth == "" {
+		gai.Dialogue.ReasoningDepth = "conservative"
+	}
+	// Enable all enhanced features by default
+	if !gai.Dialogue.EnableSelfAssessment {
+		gai.Dialogue.EnableSelfAssessment = true
+	}
+	if !gai.Dialogue.EnableMetaLearning {
+		gai.Dialogue.EnableMetaLearning = true
+	}
+	if !gai.Dialogue.EnableStrategyTracking {
+		gai.Dialogue.EnableStrategyTracking = true
+	}
+	if !gai.Dialogue.StoreInsights {
+		gai.Dialogue.StoreInsights = true
+	}
+	if !gai.Dialogue.DynamicActionPlanning {
+		gai.Dialogue.DynamicActionPlanning = true
 	}
 	
 	// Tools defaults (Phase 3.2)

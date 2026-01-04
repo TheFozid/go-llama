@@ -100,3 +100,50 @@ const (
 	StopReasonActionRequirement = "action_requirement"
 	StopReasonNaturalStop       = "natural_stop"
 )
+
+// ReasoningResponse represents structured LLM reasoning output
+type ReasoningResponse struct {
+	Reflection      string              `json:"reflection"`
+	Insights        []string            `json:"insights"`
+	Strengths       []string            `json:"strengths"`
+	Weaknesses      []string            `json:"weaknesses"`
+	KnowledgeGaps   []string            `json:"knowledge_gaps"`
+	Patterns        []string            `json:"patterns"`
+	GoalsToCreate   []GoalProposal      `json:"goals_to_create"`
+	Learnings       []Learning          `json:"learnings"`
+	SelfAssessment  *SelfAssessment     `json:"self_assessment,omitempty"`
+}
+
+// GoalProposal represents a goal the LLM wants to create
+type GoalProposal struct {
+	Description  string   `json:"description"`
+	Priority     int      `json:"priority"`
+	Reasoning    string   `json:"reasoning"`
+	ActionPlan   []string `json:"action_plan"`
+	ExpectedTime string   `json:"expected_time"` // e.g., "2 cycles", "1 week"
+}
+
+// Learning represents something learned from experience
+type Learning struct {
+	What       string `json:"what"`        // What was learned
+	Context    string `json:"context"`     // When/where it was learned
+	Confidence float64 `json:"confidence"` // 0.0-1.0
+	Category   string `json:"category"`    // "strategy", "user_preference", "tool_effectiveness", "self_knowledge"
+}
+
+// SelfAssessment represents self-knowledge evaluation
+type SelfAssessment struct {
+	RecentSuccesses []string `json:"recent_successes"`
+	RecentFailures  []string `json:"recent_failures"`
+	SkillGaps       []string `json:"skill_gaps"`
+	Confidence      float64  `json:"confidence"` // Overall confidence 0.0-1.0
+	FocusAreas      []string `json:"focus_areas"` // What to prioritize
+}
+
+// ActionPlanStep represents a step in a dynamic action plan
+type ActionPlanStep struct {
+	Description string `json:"description"`
+	Tool        string `json:"tool"`
+	Query       string `json:"query,omitempty"`
+	ExpectedOutcome string `json:"expected_outcome"`
+}

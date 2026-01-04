@@ -696,6 +696,129 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	return content, tokens, nil
 }
 
+// callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
+func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
+	systemPrompt := `You are GrowerAI's internal reasoning system. You think deeply, analyze patterns, and learn from experience.
+
+Your responses must be valid JSON in this exact format:
+{
+  "reflection": "2-3 sentence reflection on recent activity",
+  "insights": ["key insight 1", "key insight 2"],
+  "strengths": ["what you're good at"],
+  "weaknesses": ["what you struggle with"],
+  "knowledge_gaps": ["topics you need to learn about"],
+  "patterns": ["patterns you've observed"],
+  "goals_to_create": [
+    {
+      "description": "goal description",
+      "priority": 8,
+      "reasoning": "why this goal matters",
+      "action_plan": ["step 1", "step 2"],
+      "expected_time": "2 cycles"
+    }
+  ],
+  "learnings": [
+    {
+      "what": "what you learned",
+      "context": "when/where",
+      "confidence": 0.8,
+      "category": "strategy"
+    }
+  ],
+  "self_assessment": {
+    "recent_successes": ["success 1"],
+    "recent_failures": ["failure 1"],
+    "skill_gaps": ["gap 1"],
+    "confidence": 0.7,
+    "focus_areas": ["area 1"]
+  }
+}
+
+CRITICAL: Respond ONLY with valid JSON. No preamble, no explanation, just the JSON object.`
+
+	reqBody := map[string]interface{}{
+		"model": e.llmModel,
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": systemPrompt,
+			},
+			{
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"temperature": 0.7,
+		"stream":      false,
+	}
+	
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	
+	req, err := http.NewRequestWithContext(ctx, "POST", e.llmURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, 0, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
+	}
+	
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, 0, fmt.Errorf("failed to decode response: %w", err)
+	}
+	
+	if len(result.Choices) == 0 {
+		return nil, 0, fmt.Errorf("no choices returned from LLM")
+	}
+	
+	content := strings.TrimSpace(result.Choices[0].Message.Content)
+	tokens := result.Usage.TotalTokens
+	
+	// Parse JSON response
+	// Remove markdown code fences if present
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	var reasoning ReasoningResponse
+	if err := json.Unmarshal([]byte(content), &reasoning); err != nil {
+		log.Printf("[Dialogue] WARNING: Failed to parse JSON reasoning: %v", err)
+		log.Printf("[Dialogue] Raw response: %s", content)
+		// Return minimal valid response
+		return &ReasoningResponse{
+			Reflection: content,
+			Insights:   []string{},
+		}, tokens, nil
+	}
+	
+	return &reasoning, tokens, nil
+}
+
+
 // executeAction executes a tool-based action
 func (e *Engine) executeAction(ctx context.Context, action *Action) (string, error) {
 	// Map action tool to actual tool execution
