@@ -263,15 +263,35 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 				// Create new actions based on thought (simplified)
 				// In future, LLM could suggest specific actions
 				if len(topGoal.Actions) == 0 {
+					// Create appropriate search action based on goal type
+					var searchQuery string
+					
+					// Extract key terms from goal description for search
+					desc := strings.ToLower(topGoal.Description)
+					
+					if strings.Contains(desc, "research") {
+						// Extract what to research
+						searchQuery = strings.TrimPrefix(desc, "research ")
+						searchQuery = strings.TrimPrefix(searchQuery, "other ")
+						searchQuery = strings.TrimPrefix(searchQuery, "human like ")
+					} else if strings.Contains(desc, "learn about:") {
+						searchQuery = strings.TrimPrefix(desc, "learn about: ")
+					} else if strings.Contains(desc, "choose") || strings.Contains(desc, "select") {
+						// For choice/selection goals, extract the subject
+						searchQuery = desc
+					} else {
+						searchQuery = topGoal.Description
+					}
+					
 					// Create initial search action
 					newAction := Action{
-						Description: fmt.Sprintf("Search for information about: %s", topGoal.Description),
+						Description: searchQuery,
 						Tool:        ActionToolSearch,
 						Status:      ActionStatusPending,
 						Timestamp:   time.Now(),
 					}
 					topGoal.Actions = append(topGoal.Actions, newAction)
-					log.Printf("[Dialogue] Created new action: %s", newAction.Description)
+					log.Printf("[Dialogue] Created search action: %s", truncate(searchQuery, 60))
 				}
 			}
 		}
@@ -397,9 +417,90 @@ func (e *Engine) reflectOnRecentActivity(ctx context.Context) (string, int, erro
 
 // identifyKnowledgeGaps finds topics the system doesn't know about
 func (e *Engine) identifyKnowledgeGaps(ctx context.Context) ([]string, error) {
-	// For Phase 3.1, we'll just return empty
-	// In Phase 3.2+, this would analyze failed searches, etc.
-	return []string{}, nil
+	// Search for recent user messages that mention goals or requests
+	embedding, err := e.embedder.Embed(ctx, "user requests goals learning tasks research")
+	if err != nil {
+		return []string{}, err
+	}
+	
+	query := memory.RetrievalQuery{
+		Limit:    10,
+		MinScore: 0.4,
+	}
+	
+	results, err := e.storage.Search(ctx, query, embedding)
+	if err != nil {
+		return []string{}, err
+	}
+	
+	gaps := []string{}
+	
+	// Look for phrases that indicate user-requested goals
+	goalPhrases := []string{
+		"set yourself the goal",
+		"you should try to",
+		"i want you to learn",
+		"research",
+		"think about",
+		"have a think about",
+		"explore",
+		"study",
+		"investigate",
+	}
+	
+	for _, result := range results {
+		content := strings.ToLower(result.Memory.Content)
+		
+		// Check if this memory contains a goal-related phrase
+		for _, phrase := range goalPhrases {
+			if strings.Contains(content, phrase) {
+				// Extract the topic after the phrase
+				// Simple extraction: take the content and add as knowledge gap
+				gap := extractGoalTopic(content, phrase)
+				if gap != "" && len(gap) > 10 {
+					gaps = append(gaps, gap)
+					log.Printf("[Dialogue] Detected knowledge gap from user request: %s", truncate(gap, 60))
+				}
+				break
+			}
+		}
+	}
+	
+	return gaps, nil
+}
+
+// extractGoalTopic attempts to extract the main topic from a goal-related message
+func extractGoalTopic(content string, triggerPhrase string) string {
+	// Find the trigger phrase
+	idx := strings.Index(content, triggerPhrase)
+	if idx == -1 {
+		return ""
+	}
+	
+	// Get text after the trigger phrase
+	afterPhrase := content[idx+len(triggerPhrase):]
+	
+	// Take up to the next period, newline, or 200 characters
+	var topic string
+	for i, char := range afterPhrase {
+		if char == '.' || char == '\n' || i > 200 {
+			topic = afterPhrase[:i]
+			break
+		}
+	}
+	
+	if topic == "" {
+		topic = afterPhrase
+	}
+	
+	// Clean up
+	topic = strings.TrimSpace(topic)
+	topic = strings.Trim(topic, ".,!?")
+	
+	// If it starts with "to ", remove it
+	topic = strings.TrimPrefix(topic, "to ")
+	
+	return topic
 }
 
 // identifyRecentFailures finds memories tagged as "bad"
@@ -434,19 +535,49 @@ func (e *Engine) identifyRecentFailures(ctx context.Context) ([]string, error) {
 func (e *Engine) formGoals(state *InternalState) []Goal {
 	goals := []Goal{}
 	
-	// Create goals from knowledge gaps
+	// Create goals from knowledge gaps (user requests)
 	for _, gap := range state.KnowledgeGaps {
+		// Check if we already have a similar active goal
+		isDuplicate := false
+		for _, existingGoal := range state.ActiveGoals {
+			if strings.Contains(existingGoal.Description, gap[:min(len(gap), 30)]) {
+				isDuplicate = true
+				log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(gap, 40))
+				break
+			}
+		}
+		
+		if isDuplicate {
+			continue
+		}
+		
+		// Determine if this is a research goal or learning goal
+		description := ""
+		priority := 7
+		
+		if strings.Contains(strings.ToLower(gap), "research") ||
+		   strings.Contains(strings.ToLower(gap), "think about") ||
+		   strings.Contains(strings.ToLower(gap), "choose") ||
+		   strings.Contains(strings.ToLower(gap), "select") {
+			description = gap // Use the gap as-is for research goals
+			priority = 8 // Higher priority for explicit research requests
+		} else {
+			description = fmt.Sprintf("Learn about: %s", gap)
+			priority = 7
+		}
+		
 		goal := Goal{
 			ID:          fmt.Sprintf("goal_%d", time.Now().UnixNano()),
-			Description: fmt.Sprintf("Learn about: %s", gap),
+			Description: description,
 			Source:      GoalSourceKnowledgeGap,
-			Priority:    7,
+			Priority:    priority,
 			Created:     time.Now(),
 			Progress:    0.0,
 			Status:      GoalStatusActive,
 			Actions:     []Action{},
 		}
 		goals = append(goals, goal)
+		log.Printf("[Dialogue] Formed new goal from user request: %s (priority: %d)", truncate(description, 60), priority)
 	}
 	
 	// Create goals from failures
@@ -470,6 +601,14 @@ func (e *Engine) formGoals(state *InternalState) []Goal {
 	}
 	
 	return goals
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // thinkAboutGoal generates thoughts about pursuing a goal
