@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go-llama/internal/memory"
+	"go-llama/internal/tools"
 )
 
 // Engine manages the internal dialogue process
@@ -21,6 +22,7 @@ type Engine struct {
 	storage                   *memory.Storage
 	embedder                  *memory.Embedder
 	stateManager              *StateManager
+	toolRegistry              *tools.ContextualRegistry
 	llmURL                    string
 	llmModel                  string
 	maxTokensPerCycle         int
@@ -35,6 +37,7 @@ func NewEngine(
 	storage *memory.Storage,
 	embedder *memory.Embedder,
 	stateManager *StateManager,
+	toolRegistry *tools.ContextualRegistry,
 	llmURL string,
 	llmModel string,
 	maxTokensPerCycle int,
@@ -47,6 +50,7 @@ func NewEngine(
 		storage:                   storage,
 		embedder:                  embedder,
 		stateManager:              stateManager,
+		toolRegistry:              toolRegistry,
 		llmURL:                    llmURL,
 		llmModel:                  llmModel,
 		maxTokensPerCycle:         maxTokensPerCycle,
@@ -189,6 +193,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		}
 	}
 	
+
 	// PHASE 3: Goal Pursuit (if we have active goals)
 	if len(state.ActiveGoals) > 0 {
 		log.Printf("[Dialogue] PHASE 3: Goal Pursuit (%d active goals)", len(state.ActiveGoals))
@@ -199,42 +204,102 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		
 		log.Printf("[Dialogue] Pursuing goal: %s", topGoal.Description)
 		
-		// Work on the goal (this is where tool usage would go in Phase 3.2+)
-		// For Phase 3.1, we just think about it
-		goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
-		if err != nil {
-			log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
-		} else {
-			thoughtCount++
-			totalTokens += tokens
-			actionCount++ // Thinking about goal counts as action
+		// Phase 3.2: Execute actions with tools
+		actionExecuted := false
+		for i := range topGoal.Actions {
+			action := &topGoal.Actions[i]
 			
-			e.stateManager.SaveThought(ctx, &ThoughtRecord{
-				CycleID:     state.CycleCount,
-				ThoughtNum:  thoughtCount,
-				Content:     goalThought,
-				TokensUsed:  tokens,
-				ActionTaken: true,
-				Timestamp:   time.Now(),
-			})
-			
-			log.Printf("[Dialogue] Goal thought: %s", truncate(goalThought, 80))
-			
-			// Update goal progress (simplified for Phase 3.1)
-			topGoal.Progress += 0.1
-			if topGoal.Progress >= 1.0 {
-				topGoal.Status = GoalStatusCompleted
-				topGoal.Outcome = "neutral" // Will be evaluated later
-				log.Printf("[Dialogue] ✓ Goal completed: %s", topGoal.Description)
-				metrics.GoalsCompleted++
+			// Skip completed actions
+			if action.Status == ActionStatusCompleted {
+				continue
 			}
 			
-			// Update goal in state
-			for i := range state.ActiveGoals {
-				if state.ActiveGoals[i].ID == topGoal.ID {
-					state.ActiveGoals[i] = topGoal
-					break
+			// Execute pending action
+			if action.Status == ActionStatusPending {
+				action.Status = ActionStatusInProgress
+				
+				log.Printf("[Dialogue] Executing action: %s using tool '%s'", action.Description, action.Tool)
+				
+				// Execute tool
+				result, err := e.executeAction(ctx, action)
+				if err != nil {
+					log.Printf("[Dialogue] Action failed: %v", err)
+					action.Result = fmt.Sprintf("ERROR: %v", err)
+					action.Status = ActionStatusCompleted // Mark as completed even on failure
+				} else {
+					action.Result = result
+					action.Status = ActionStatusCompleted
+					actionCount++
+					actionExecuted = true
+					log.Printf("[Dialogue] Action completed: %s", truncate(result, 80))
 				}
+				action.Timestamp = time.Now()
+				
+				// Only execute one action per cycle
+				break
+			}
+		}
+		
+		// If no actions were executed, think about the goal and create new actions
+		if !actionExecuted {
+			goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
+			if err != nil {
+				log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
+			} else {
+				thoughtCount++
+				totalTokens += tokens
+				
+				e.stateManager.SaveThought(ctx, &ThoughtRecord{
+					CycleID:     state.CycleCount,
+					ThoughtNum:  thoughtCount,
+					Content:     goalThought,
+					TokensUsed:  tokens,
+					ActionTaken: false,
+					Timestamp:   time.Now(),
+				})
+				
+				log.Printf("[Dialogue] Goal thought: %s", truncate(goalThought, 80))
+				
+				// Create new actions based on thought (simplified)
+				// In future, LLM could suggest specific actions
+				if len(topGoal.Actions) == 0 {
+					// Create initial search action
+					newAction := Action{
+						Description: fmt.Sprintf("Search for information about: %s", topGoal.Description),
+						Tool:        ActionToolSearch,
+						Status:      ActionStatusPending,
+						Timestamp:   time.Now(),
+					}
+					topGoal.Actions = append(topGoal.Actions, newAction)
+					log.Printf("[Dialogue] Created new action: %s", newAction.Description)
+				}
+			}
+		}
+		
+		// Update goal progress based on completed actions
+		completedActions := 0
+		for _, action := range topGoal.Actions {
+			if action.Status == ActionStatusCompleted {
+				completedActions++
+			}
+		}
+		
+		if len(topGoal.Actions) > 0 {
+			topGoal.Progress = float64(completedActions) / float64(len(topGoal.Actions))
+		}
+		
+		if topGoal.Progress >= 1.0 {
+			topGoal.Status = GoalStatusCompleted
+			topGoal.Outcome = "neutral" // Will be evaluated later
+			log.Printf("[Dialogue] ✓ Goal completed: %s", topGoal.Description)
+			metrics.GoalsCompleted++
+		}
+		
+		// Update goal in state
+		for i := range state.ActiveGoals {
+			if state.ActiveGoals[i].ID == topGoal.ID {
+				state.ActiveGoals[i] = topGoal
+				break
 			}
 		}
 	}
@@ -488,6 +553,45 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	tokens := result.Usage.TotalTokens
 	
 	return content, tokens, nil
+}
+
+// executeAction executes a tool-based action
+func (e *Engine) executeAction(ctx context.Context, action *Action) (string, error) {
+	// Map action tool to actual tool execution
+	switch action.Tool {
+	case ActionToolSearch:
+		// Extract search query from action description
+		// For now, use the full description as the query
+		params := map[string]interface{}{
+			"query": action.Description,
+		}
+		
+		result, err := e.toolRegistry.ExecuteIdle(ctx, tools.ToolNameSearch, params)
+		if err != nil {
+			return "", fmt.Errorf("search tool failed: %w", err)
+		}
+		
+		if !result.Success {
+			return "", fmt.Errorf("search failed: %s", result.Error)
+		}
+		
+		return result.Output, nil
+		
+	case ActionToolWebParse:
+		// Phase 3.4: Web parsing not yet implemented
+		return "", fmt.Errorf("web_parse tool not yet implemented")
+		
+	case ActionToolSandbox:
+		// Phase 3.5: Sandbox not yet implemented
+		return "", fmt.Errorf("sandbox tool not yet implemented")
+		
+	case ActionToolMemoryConsolidation:
+		// This is internal, not a real tool
+		return "Memory consolidation completed", nil
+		
+	default:
+		return "", fmt.Errorf("unknown tool: %s", action.Tool)
+	}
 }
 
 // Helper functions

@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"go-llama/internal/api"
 	"go-llama/internal/config"
 	"go-llama/internal/db"
 	"go-llama/internal/dialogue"
 	"go-llama/internal/memory"
+	"go-llama/internal/tools"
 	redisdb "go-llama/internal/redis"
 )
 
@@ -164,6 +166,44 @@ func main() {
 		log.Printf("[Main] GrowerAI compression disabled in config")
 	}
 
+	// Initialize GrowerAI tool registry (Phase 3.2)
+	log.Printf("[Main] Initializing GrowerAI tool registry...")
+	toolRegistry := tools.NewRegistry()
+	toolConfigs := make(map[string]tools.ToolConfig)
+	
+	// Register SearXNG tool if enabled
+	if cfg.GrowerAI.Tools.SearXNG.Enabled {
+		searxngConfig := tools.ToolConfig{
+			Enabled:               cfg.GrowerAI.Tools.SearXNG.Enabled,
+			TimeoutInteractive:    time.Duration(cfg.GrowerAI.Tools.SearXNG.TimeoutInteractive) * time.Second,
+			TimeoutIdle:           time.Duration(cfg.GrowerAI.Tools.SearXNG.TimeoutIdle) * time.Second,
+			MaxResultsInteractive: cfg.GrowerAI.Tools.SearXNG.MaxResultsInteractive,
+			MaxResultsIdle:        cfg.GrowerAI.Tools.SearXNG.MaxResultsIdle,
+		}
+		
+		searxngTool := tools.NewSearXNGTool(cfg.GrowerAI.Tools.SearXNG.URL, searxngConfig)
+		if err := toolRegistry.Register(searxngTool); err != nil {
+			log.Printf("[Main] WARNING: Failed to register SearXNG tool: %v", err)
+		} else {
+			toolConfigs[tools.ToolNameSearch] = searxngConfig
+			log.Printf("[Main] ✓ SearXNG tool registered (url: %s)", cfg.GrowerAI.Tools.SearXNG.URL)
+		}
+	}
+	
+	// Web parse tool (Phase 3.4 - placeholder)
+	if cfg.GrowerAI.Tools.WebParse.Enabled {
+		log.Printf("[Main] WebParse tool enabled but not yet implemented (Phase 3.4)")
+	}
+	
+	// Sandbox tool (Phase 3.5 - placeholder)
+	if cfg.GrowerAI.Tools.Sandbox.Enabled {
+		log.Printf("[Main] Sandbox tool enabled but not yet implemented (Phase 3.5)")
+	}
+	
+	// Create contextual registry
+	contextualRegistry := tools.NewContextualRegistry(toolRegistry, toolConfigs)
+	log.Printf("[Main] ✓ Tool registry initialized with %d tools", len(toolRegistry.List()))
+
 	// Start GrowerAI dialogue worker if enabled (Phase 3.1)
 	if cfg.GrowerAI.Dialogue.Enabled {
 		log.Printf("[Main] Initializing GrowerAI dialogue worker...")
@@ -183,6 +223,7 @@ func main() {
 				storage,
 				embedder,
 				stateManager,
+				contextualRegistry,
 				cfg.GrowerAI.ReasoningModel.URL,
 				cfg.GrowerAI.ReasoningModel.Name,
 				cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
@@ -208,7 +249,7 @@ func main() {
 	} else {
 		log.Printf("[Main] GrowerAI dialogue disabled in config")
 	}
-
+	
 	r := api.SetupRouter(cfg, rdb)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	fmt.Printf("Starting server on %s%s\n", addr, cfg.Server.Subpath)

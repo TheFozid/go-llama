@@ -55,13 +55,13 @@ echo "🚀 Building & pushing multi-arch images..."
 docker buildx build \
   --platform linux/amd64 \
   --cache-from type=registry,ref="$IMAGE_BASE:buildcache" \
-  --cache-to type=registry,ref="$IMAGE_BASE:buildcache",mode=max \
+  --cache-to type=registry,ref="$IMAGE_BASE:buildcache",mode=min \
   --build-arg BUILDKIT_INLINE_CACHE=1 \
   -t "$IMAGE_BASE:latest" \
   -t "$IMAGE_BASE:$VERSION" \
   -t "$IMAGE_BASE:$MAJOR.$MINOR" \
   -t "$IMAGE_BASE:$MAJOR" \
-  --push .
+  --load .
 
 echo
 echo "🌐 Pushing git changes..."
@@ -70,8 +70,8 @@ git push --tags
 
 # Selective cleanup (don't prune build cache!)
 echo "🧹 Cleaning up old images..."
-docker system prune -f --filter "until=168h"  # Keep last week
-docker builder prune --keep-storage 10GB -f   # Keep 10GB cache
+docker system prune -f --filter "until=84h"
+docker buildx prune --filter "until=84h" -f
 
 echo
 echo "✅ Release v$VERSION complete"

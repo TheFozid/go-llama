@@ -119,6 +119,35 @@
       "max_thoughts_per_cycle": 20,
       "action_requirement_interval": 5,
       "novelty_window_hours": 2
+    },
+    "tools": {
+      "searxng": {
+        "enabled": true,
+        "url": "http://searxng:8080/search",
+        "timeout_interactive": 5,
+        "timeout_idle": 60,
+        "max_results_interactive": 3,
+        "max_results_idle": 20,
+        "safe_search": true
+      },
+      "webparse": {
+        "enabled": false,
+        "max_page_size_mb": 10,
+        "timeout": 30,
+        "user_agent": "GrowerAI/1.0",
+        "chunk_size": 4000
+      },
+      "sandbox": {
+        "enabled": false,
+        "base_image": "alpine:latest",
+        "cpu_limit": "2.0",
+        "memory_limit": "4G",
+        "storage_quota": "20G",
+        "network_mode": "vpn",
+        "vpn_container": "growerai-vpn",
+        "workspace_path": "/workspace",
+        "log_level": "info"
+      }
     }
   },
   "searxng": {

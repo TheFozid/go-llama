@@ -116,6 +116,37 @@ type GrowerAIConfig struct {
 	} `json:"dialogue"`
 }
 
+	// Phase 3.2: Tool Infrastructure
+	Tools struct {
+		SearXNG struct {
+			Enabled               bool   `json:"enabled"`
+			URL                   string `json:"url"`
+			TimeoutInteractive    int    `json:"timeout_interactive"`    // seconds
+			TimeoutIdle           int    `json:"timeout_idle"`           // seconds
+			MaxResultsInteractive int    `json:"max_results_interactive"`
+			MaxResultsIdle        int    `json:"max_results_idle"`
+			SafeSearch            bool   `json:"safe_search"`
+		} `json:"searxng"`
+		WebParse struct {
+			Enabled        bool   `json:"enabled"`
+			MaxPageSizeMB  int    `json:"max_page_size_mb"`
+			Timeout        int    `json:"timeout"` // seconds
+			UserAgent      string `json:"user_agent"`
+			ChunkSize      int    `json:"chunk_size"`
+		} `json:"webparse"`
+		Sandbox struct {
+			Enabled        bool   `json:"enabled"`
+			BaseImage      string `json:"base_image"`
+			CPULimit       string `json:"cpu_limit"`
+			MemoryLimit    string `json:"memory_limit"`
+			StorageQuota   string `json:"storage_quota"`
+			NetworkMode    string `json:"network_mode"`
+			VPNContainer   string `json:"vpn_container"`
+			WorkspacePath  string `json:"workspace_path"`
+			LogLevel       string `json:"log_level"`
+		} `json:"sandbox"`
+	} `json:"tools"`
+
 type Config struct {
 	Server struct {
 		Host      string `json:"host"`
@@ -246,6 +277,64 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	}
 	if gai.Dialogue.NoveltyWindowHours == 0 {
 		gai.Dialogue.NoveltyWindowHours = 2
+	}
+	
+	// Tools defaults (Phase 3.2)
+	if gai.Tools.SearXNG.URL == "" {
+		gai.Tools.SearXNG.URL = "http://searxng:8080/search"
+	}
+	if gai.Tools.SearXNG.TimeoutInteractive == 0 {
+		gai.Tools.SearXNG.TimeoutInteractive = 5
+	}
+	if gai.Tools.SearXNG.TimeoutIdle == 0 {
+		gai.Tools.SearXNG.TimeoutIdle = 60
+	}
+	if gai.Tools.SearXNG.MaxResultsInteractive == 0 {
+		gai.Tools.SearXNG.MaxResultsInteractive = 3
+	}
+	if gai.Tools.SearXNG.MaxResultsIdle == 0 {
+		gai.Tools.SearXNG.MaxResultsIdle = 20
+	}
+	// SafeSearch defaults to false (zero value)
+	
+	// WebParse defaults (Phase 3.4)
+	if gai.Tools.WebParse.MaxPageSizeMB == 0 {
+		gai.Tools.WebParse.MaxPageSizeMB = 10
+	}
+	if gai.Tools.WebParse.Timeout == 0 {
+		gai.Tools.WebParse.Timeout = 30
+	}
+	if gai.Tools.WebParse.UserAgent == "" {
+		gai.Tools.WebParse.UserAgent = "GrowerAI/1.0"
+	}
+	if gai.Tools.WebParse.ChunkSize == 0 {
+		gai.Tools.WebParse.ChunkSize = 4000
+	}
+	
+	// Sandbox defaults (Phase 3.5)
+	if gai.Tools.Sandbox.BaseImage == "" {
+		gai.Tools.Sandbox.BaseImage = "alpine:latest"
+	}
+	if gai.Tools.Sandbox.CPULimit == "" {
+		gai.Tools.Sandbox.CPULimit = "2.0"
+	}
+	if gai.Tools.Sandbox.MemoryLimit == "" {
+		gai.Tools.Sandbox.MemoryLimit = "4G"
+	}
+	if gai.Tools.Sandbox.StorageQuota == "" {
+		gai.Tools.Sandbox.StorageQuota = "20G"
+	}
+	if gai.Tools.Sandbox.NetworkMode == "" {
+		gai.Tools.Sandbox.NetworkMode = "vpn"
+	}
+	if gai.Tools.Sandbox.VPNContainer == "" {
+		gai.Tools.Sandbox.VPNContainer = "growerai-vpn"
+	}
+	if gai.Tools.Sandbox.WorkspacePath == "" {
+		gai.Tools.Sandbox.WorkspacePath = "/workspace"
+	}
+	if gai.Tools.Sandbox.LogLevel == "" {
+		gai.Tools.Sandbox.LogLevel = "info"
 	}
 	
 	// Retrieval defaults
