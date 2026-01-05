@@ -190,15 +190,62 @@ func main() {
 		}
 	}
 	
-	// Web parse tool (Phase 3.4 - placeholder)
-	if cfg.GrowerAI.Tools.WebParse.Enabled {
-		log.Printf("[Main] WebParse tool enabled but not yet implemented (Phase 3.4)")
-	}
-	
-	// Sandbox tool (Phase 3.5 - placeholder)
-	if cfg.GrowerAI.Tools.Sandbox.Enabled {
-		log.Printf("[Main] Sandbox tool enabled but not yet implemented (Phase 3.5)")
-	}
+// Register Web Parse tools if enabled (Phase 3.4)
+if cfg.GrowerAI.Tools.WebParse.Enabled {
+    webParseConfig := tools.ToolConfig{
+        Enabled:               cfg.GrowerAI.Tools.WebParse.Enabled,
+        TimeoutInteractive:    time.Duration(cfg.GrowerAI.Tools.WebParse.Timeout) * time.Second,
+        TimeoutIdle:           time.Duration(cfg.GrowerAI.Tools.WebParse.Timeout) * time.Second,
+    }
+    
+    userAgent := cfg.GrowerAI.Tools.WebParse.UserAgent
+    maxPageSizeMB := cfg.GrowerAI.Tools.WebParse.MaxPageSizeMB
+    chunkSize := cfg.GrowerAI.Tools.WebParse.ChunkSize
+    
+    // Use compression model for web parsing (optimized for summarization)
+    llmURL := cfg.GrowerAI.Compression.Model.URL
+    llmModel := cfg.GrowerAI.Compression.Model.Name
+    
+    // Register metadata tool
+    metadataTool := tools.NewWebParserMetadataTool(userAgent, webParseConfig)
+    if err := toolRegistry.Register(metadataTool); err != nil {
+        log.Printf("[Main] WARNING: Failed to register web_parse_metadata tool: %v", err)
+    } else {
+        log.Printf("[Main] ✓ Web parser metadata tool registered")
+    }
+    
+    // Register general summary tool
+    generalTool := tools.NewWebParserGeneralTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig)
+    if err := toolRegistry.Register(generalTool); err != nil {
+        log.Printf("[Main] WARNING: Failed to register web_parse_general tool: %v", err)
+    } else {
+        log.Printf("[Main] ✓ Web parser general tool registered")
+    }
+    
+    // Register contextual summary tool
+    contextualTool := tools.NewWebParserContextualTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig)
+    if err := toolRegistry.Register(contextualTool); err != nil {
+        log.Printf("[Main] WARNING: Failed to register web_parse_contextual tool: %v", err)
+    } else {
+        log.Printf("[Main] ✓ Web parser contextual tool registered")
+    }
+    
+    // Register chunked access tool
+    chunkedTool := tools.NewWebParserChunkedTool(userAgent, maxPageSizeMB, chunkSize, webParseConfig)
+    if err := toolRegistry.Register(chunkedTool); err != nil {
+        log.Printf("[Main] WARNING: Failed to register web_parse_chunked tool: %v", err)
+    } else {
+        log.Printf("[Main] ✓ Web parser chunked tool registered")
+    }
+    
+    log.Printf("[Main] ✓ Web parsing enabled (4 tools, max page: %dMB, chunk: %d chars)", 
+        maxPageSizeMB, chunkSize)
+}
+
+// Sandbox tool (Phase 3.5 - placeholder)
+if cfg.GrowerAI.Tools.Sandbox.Enabled {
+    log.Printf("[Main] Sandbox tool enabled but not yet implemented (Phase 3.5)")
+}
 	
 	// Create contextual registry
 	contextualRegistry := tools.NewContextualRegistry(toolRegistry, toolConfigs)

@@ -131,11 +131,11 @@
         "safe_search": true
       },
       "webparse": {
-        "enabled": false,
+        "enabled": true,
         "max_page_size_mb": 10,
         "timeout": 30,
         "user_agent": "GrowerAI/1.0",
-        "chunk_size": 4000
+        "chunk_size": 2000
       },
       "sandbox": {
         "enabled": false,

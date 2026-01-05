@@ -935,9 +935,79 @@ func (e *Engine) executeAction(ctx context.Context, action *Action) (string, err
 		
 		return result.Output, nil
 		
-	case ActionToolWebParse:
-		// Phase 3.4: Web parsing not yet implemented
-		return "", fmt.Errorf("web_parse tool not yet implemented")
+case ActionToolWebParse,
+     ActionToolWebParseMetadata,
+     ActionToolWebParseGeneral,
+     ActionToolWebParseContextual,
+     ActionToolWebParseChunked:
+	
+	// Extract URL from action description
+	// Formats handled: 
+	//   - "https://example.com"
+	//   - "Parse URL: https://example.com"
+	//   - "Search result: https://example.com - title"
+	url := strings.TrimSpace(action.Description)
+	
+	// Clean up common prefixes
+	if idx := strings.Index(url, "http"); idx != -1 {
+		url = url[idx:] // Start from http
+	}
+	
+	// Remove everything after first space (titles, descriptions)
+	if idx := strings.Index(url, " "); idx != -1 {
+		url = url[:idx]
+	}
+	
+	// Basic validation
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return "", fmt.Errorf("invalid URL in action description: %s", action.Description)
+	}
+	
+	params := map[string]interface{}{
+		"url": url,
+	}
+	
+	// For contextual parsing, try to extract purpose from goal context
+	if action.Tool == ActionToolWebParseContextual {
+		// The dialogue engine should have set this up, but provide fallback
+		params["purpose"] = "Extract relevant information for research goal"
+	}
+	
+	// For chunked parsing, look for chunk index
+	if action.Tool == ActionToolWebParseChunked {
+		// Default to first chunk - LLM should specify in future iterations
+		params["chunk_index"] = 0
+		
+		// Try to parse chunk index from description
+		// Format: "Read chunk 3 from URL" or "chunk_index: 3"
+		desc := strings.ToLower(action.Description)
+		if strings.Contains(desc, "chunk") {
+			// Simple extraction - matches "chunk 3", "chunk 0", etc.
+			parts := strings.Fields(desc)
+			for i, part := range parts {
+				if part == "chunk" && i+1 < len(parts) {
+					if chunkIdx, err := fmt.Sscanf(parts[i+1], "%d", new(int)); err == nil && chunkIdx >= 0 {
+						var idx int
+						fmt.Sscanf(parts[i+1], "%d", &idx)
+						params["chunk_index"] = idx
+						break
+					}
+				}
+			}
+		}
+	}
+	
+	// Execute the appropriate web parse tool
+	result, err := e.toolRegistry.ExecuteIdle(ctx, action.Tool, params)
+	if err != nil {
+		return "", fmt.Errorf("web parse tool failed: %w", err)
+	}
+	
+	if !result.Success {
+		return "", fmt.Errorf("web parse failed: %s", result.Error)
+	}
+	
+	return result.Output, nil
 		
 	case ActionToolSandbox:
 		// Phase 3.5: Sandbox not yet implemented

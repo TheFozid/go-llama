@@ -90,7 +90,11 @@ const (
 // ActionTool constants
 const (
 	ActionToolSearch              = "search"
-	ActionToolWebParse            = "web_parse"
+	ActionToolWebParse            = "web_parse"              // Generic (deprecated)
+	ActionToolWebParseMetadata    = "web_parse_metadata"    // Phase 3.4: Lightweight metadata
+	ActionToolWebParseGeneral     = "web_parse_general"     // Phase 3.4: Auto-summary
+	ActionToolWebParseContextual  = "web_parse_contextual"  // Phase 3.4: Purpose-driven
+	ActionToolWebParseChunked     = "web_parse_chunked"     // Phase 3.4: Chunk access
 	ActionToolSandbox             = "sandbox"
 	ActionToolMemoryConsolidation = "memory_consolidation"
 )
