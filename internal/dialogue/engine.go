@@ -801,7 +801,7 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 				"content": prompt,
 			},
 		},
-		"temperature": 0.7,
+		"temperature": 0.3,
 		"stream":      false,
 	}
 	
@@ -855,22 +855,18 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 
 // callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
-systemPrompt := `You are GrowerAI's internal reasoning system.
+systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY valid JSON.
 
-CRITICAL JSON RULES:
-1. Every array MUST have closing bracket: ["item1", "item2"]
-2. Every field MUST end with comma except the last one
-3. ALL strings MUST be in double quotes
-4. NO trailing commas before closing brace
+CRITICAL: Check each array has BOTH [ and ] brackets.
 
-REQUIRED FORMAT (copy this structure EXACTLY):
+VALID EXAMPLES:
 {
-  "reflection": "your reflection here",
-  "insights": ["insight 1", "insight 2"],
-  "strengths": ["strength 1"],
-  "weaknesses": ["weakness 1"],
-  "knowledge_gaps": ["gap 1"],
-  "patterns": ["pattern 1"],
+  "reflection": "text here",
+  "insights": ["item1", "item2"],
+  "strengths": [],
+  "weaknesses": ["weakness1"],
+  "knowledge_gaps": [],
+  "patterns": [],
   "goals_to_create": [],
   "learnings": [],
   "self_assessment": {
@@ -882,7 +878,13 @@ REQUIRED FORMAT (copy this structure EXACTLY):
   }
 }
 
-RESPOND ONLY WITH VALID JSON. NO PREAMBLE. NO MARKDOWN.`
+RULES:
+1. Every array needs BOTH [ and ]
+2. Put comma after ] if more fields follow
+3. No comma after last field
+4. Empty arrays are fine: []
+
+OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
@@ -959,9 +961,29 @@ RESPOND ONLY WITH VALID JSON. NO PREAMBLE. NO MARKDOWN.`
 		
 		// Try to fix common JSON errors
 		fixedContent := fixCommonJSONErrors(content)
+		
+		// Log what we fixed (first 500 chars)
+		if fixedContent != content {
+			log.Printf("[Dialogue] Applied JSON fixes (first 500 chars): %s", truncateResponse(fixedContent, 500))
+		}
+		
 		if err := json.Unmarshal([]byte(fixedContent), &reasoning); err != nil {
-			log.Printf("[Dialogue] WARNING: Failed to parse even after JSON fixes")
-			// Return minimal valid response with the original text as reflection
+			log.Printf("[Dialogue] WARNING: Failed to parse even after JSON fixes: %v", err)
+			
+			// Last attempt: try to extract just the reflection field
+			var partialParse map[string]interface{}
+			if err := json.Unmarshal([]byte(fixedContent), &partialParse); err == nil {
+				if refl, ok := partialParse["reflection"].(string); ok {
+					log.Printf("[Dialogue] Extracted reflection field only, using degraded mode")
+					return &ReasoningResponse{
+						Reflection: refl,
+						Insights:   []string{},
+					}, tokens, nil
+				}
+			}
+			
+			// Complete fallback
+			log.Printf("[Dialogue] Complete JSON parse failure, using fallback mode")
 			return &ReasoningResponse{
 				Reflection: "Failed to parse structured reasoning. Using fallback mode.",
 				Insights:   []string{},
@@ -1319,25 +1341,95 @@ func fixCommonJSONErrors(jsonStr string) string {
 	fixed = strings.ReplaceAll(fixed, "]\n  \"", "],\n  \"")
 	fixed = strings.ReplaceAll(fixed, "]\n\n  \"", "],\n\n  \"")
 	
-	// NEW: Fix array items missing closing bracket
-	// Pattern: "item"],  \n  "next_field"
-	// Should be: "item"]\n  "next_field"
+	// Parse line by line to fix structural issues
 	lines := strings.Split(fixed, "\n")
-	for i := 0; i < len(lines)-1; i++ {
+	var fixedLines []string
+	
+	for i := 0; i < len(lines); i++ {
 		line := strings.TrimSpace(lines[i])
-		nextLine := strings.TrimSpace(lines[i+1])
 		
-		// If line ends with quote+comma and next starts with quote
-		// This is likely end of array without closing bracket
-		if strings.HasSuffix(line, "\",") && strings.HasPrefix(nextLine, "\"") {
-			// Check if this should be end of array (next line is new field)
-			if strings.Contains(nextLine, "\":") {
-				// Insert closing bracket before the comma
-				lines[i] = strings.TrimSuffix(line, ",") + "],"
+		// Skip empty lines
+		if line == "" {
+			fixedLines = append(fixedLines, lines[i])
+			continue
+		}
+		
+		// Check if this line starts an array but never closes it
+		if strings.Contains(line, "\":") && strings.Contains(line, "[") && !strings.Contains(line, "]") {
+			// This is an array field like: "insights": ["item1", "item2"
+			// Need to find where it closes
+			
+			// Count how many items we have
+			arrayStartIdx := i
+			insideArray := true
+			arrayLines := []string{lines[i]}
+			
+			// Look ahead for array items and closing
+			for j := i + 1; j < len(lines) && insideArray; j++ {
+				nextLine := strings.TrimSpace(lines[j])
+				arrayLines = append(arrayLines, lines[j])
+				
+				// Check if this is a new field (ends array)
+				if strings.Contains(nextLine, "\":") && !strings.HasPrefix(nextLine, "\"") {
+					// New field started, array was never closed
+					// Add closing bracket to previous line
+					if len(arrayLines) >= 2 {
+						prevIdx := len(arrayLines) - 2
+						prevLine := strings.TrimSpace(arrayLines[prevIdx])
+						
+						// Add ] before comma if needed
+						if strings.HasSuffix(prevLine, ",") {
+							arrayLines[prevIdx] = strings.TrimSuffix(arrayLines[prevIdx], ",") + "],"
+						} else if strings.HasSuffix(prevLine, "\"") {
+							arrayLines[prevIdx] = arrayLines[prevIdx] + "],"
+						}
+					}
+					insideArray = false
+					
+					// Don't re-add the new field line yet
+					j--
+					arrayLines = arrayLines[:len(arrayLines)-1]
+				} else if strings.Contains(nextLine, "]") {
+					// Array properly closed
+					insideArray = false
+				}
+				
+				i = j
+			}
+			
+			// Add all fixed array lines
+			fixedLines = append(fixedLines, arrayLines...)
+			continue
+		}
+		
+		// Fix trailing comma before closing brace
+		if line == "}," || line == "}" {
+			// Check if previous line has comma
+			if len(fixedLines) > 0 {
+				prevIdx := len(fixedLines) - 1
+				prevLine := strings.TrimSpace(fixedLines[prevIdx])
+				
+				// If it's the last field before }, remove comma
+				if line == "}" && strings.HasSuffix(prevLine, ",") && !strings.HasSuffix(prevLine, "],") {
+					fixedLines[prevIdx] = strings.TrimSuffix(fixedLines[prevIdx], ",")
+				}
 			}
 		}
+		
+		fixedLines = append(fixedLines, lines[i])
 	}
-	fixed = strings.Join(lines, "\n")
+	
+	fixed = strings.Join(fixedLines, "\n")
+	
+	// Final cleanup: remove trailing commas before }
+	fixed = strings.ReplaceAll(fixed, ",\n}", "\n}")
+	fixed = strings.ReplaceAll(fixed, ", }", " }")
+	
+	// Fix double commas
+	fixed = strings.ReplaceAll(fixed, ",,", ",")
+	
+	// Fix missing commas between array items (common error)
+	fixed = strings.ReplaceAll(fixed, "\" \"", "\", \"")
 	
 	return fixed
 }
