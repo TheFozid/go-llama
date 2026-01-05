@@ -1245,6 +1245,9 @@ func fixCommonJSONErrors(jsonStr string) string {
 	// This is a simple fix - in production you'd want more sophisticated handling
 	fixed := strings.ReplaceAll(jsonStr, "]\n  \"", "],\n  \"")
 	fixed = strings.ReplaceAll(fixed, "]\n\n  \"", "],\n\n  \"")
-	
+	// NEW: Fix missing comma after array that ends with quote
+	fixed = strings.ReplaceAll(fixed, "\",\n  \"", "\"],\n  \"")
+	fixed = strings.ReplaceAll(fixed, ".\",\n  \"", ".\"],\n  \"")
+
 	return fixed
 }
