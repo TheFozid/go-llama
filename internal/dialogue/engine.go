@@ -377,6 +377,28 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 					}
 					topGoal.Actions = append(topGoal.Actions, newAction)
 					log.Printf("[Dialogue] Created search action: %s", truncate(searchQuery, 60))
+// NEW: If the last completed action was a search, create a parse action
+if len(topGoal.Actions) > 0 {
+	lastAction := topGoal.Actions[len(topGoal.Actions)-1]
+	
+	// Check if last action was a completed search
+	if lastAction.Tool == ActionToolSearch && lastAction.Status == ActionStatusCompleted {
+		// Extract URLs from the search result
+		urls := e.extractURLsFromSearchResults(lastAction.Result)
+		
+		if len(urls) > 0 {
+			// Create parse action for the first (most relevant) URL
+			parseAction := Action{
+				Description: urls[0],
+				Tool:        ActionToolWebParseGeneral,
+				Status:      ActionStatusPending,
+				Timestamp:   time.Now(),
+			}
+			topGoal.Actions = append(topGoal.Actions, parseAction)
+			log.Printf("[Dialogue] Created web_parse_general action for: %s", truncate(urls[0], 60))
+		}
+	}
+}
 				}
 			}
 		}
@@ -393,12 +415,44 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 			topGoal.Progress = float64(completedActions) / float64(len(topGoal.Actions))
 		}
 		
-		if topGoal.Progress >= 1.0 {
-			topGoal.Status = GoalStatusCompleted
-			topGoal.Outcome = "neutral" // Will be evaluated later
-			log.Printf("[Dialogue] ✓ Goal completed: %s", topGoal.Description)
-			metrics.GoalsCompleted++
+if topGoal.Progress >= 1.0 {
+	// Validate that the goal actually achieved something useful
+	hasUsefulOutcome := false
+	hasFailures := false
+	
+	for _, action := range topGoal.Actions {
+		if action.Status == ActionStatusCompleted {
+			// Check if action result contains error
+			if strings.Contains(action.Result, "ERROR") || 
+			   strings.Contains(action.Result, "Failed") ||
+			   strings.Contains(action.Result, "failed") {
+				hasFailures = true
+			}
+			
+			// Check if action produced meaningful output (>100 chars)
+			if len(action.Result) > 100 && !hasFailures {
+				hasUsefulOutcome = true
+			}
 		}
+	}
+	
+	// Mark goal based on outcome quality
+	if hasUsefulOutcome {
+		topGoal.Status = GoalStatusCompleted
+		topGoal.Outcome = "good"
+		log.Printf("[Dialogue] ✓ Goal completed successfully: %s", topGoal.Description)
+		metrics.GoalsCompleted++
+	} else if hasFailures {
+		topGoal.Status = GoalStatusAbandoned
+		topGoal.Outcome = "bad"
+		log.Printf("[Dialogue] ⚠ Goal abandoned (actions failed): %s", truncate(topGoal.Description, 60))
+	} else {
+		// Actions completed but results too short/empty
+		topGoal.Status = GoalStatusAbandoned
+		topGoal.Outcome = "neutral"
+		log.Printf("[Dialogue] ⚠ Goal abandoned (no useful output): %s", truncate(topGoal.Description, 60))
+	}
+}
 		
 		// Update goal in state
 		for i := range state.ActiveGoals {
@@ -783,45 +837,34 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 
 // callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
-	systemPrompt := `You are GrowerAI's internal reasoning system. You think deeply, analyze patterns, and learn from experience.
+systemPrompt := `You are GrowerAI's internal reasoning system.
 
-CRITICAL: You must respond with ONLY valid JSON. No preamble, no explanation, no markdown.
+CRITICAL JSON RULES:
+1. Every array MUST have closing bracket: ["item1", "item2"]
+2. Every field MUST end with comma except the last one
+3. ALL strings MUST be in double quotes
+4. NO trailing commas before closing brace
 
-REQUIRED FORMAT (every field must be present, use empty arrays [] if no items):
+REQUIRED FORMAT (copy this structure EXACTLY):
 {
-  "reflection": "string - 2-3 sentence reflection",
-  "insights": ["array of strings", "each insight as separate string"],
-  "strengths": ["array of strings", "each strength as separate string"],
-  "weaknesses": ["array of strings", "each weakness as separate string"],
-  "knowledge_gaps": ["array of strings"],
-  "patterns": ["array of strings"],
-  "goals_to_create": [
-    {
-      "description": "goal description",
-      "priority": 8,
-      "reasoning": "why this goal matters",
-      "action_plan": ["step 1", "step 2"],
-      "expected_time": "2 cycles"
-    }
-  ],
-  "learnings": [
-    {
-      "what": "what you learned",
-      "context": "when/where",
-      "confidence": 0.8,
-      "category": "strategy"
-    }
-  ],
+  "reflection": "your reflection here",
+  "insights": ["insight 1", "insight 2"],
+  "strengths": ["strength 1"],
+  "weaknesses": ["weakness 1"],
+  "knowledge_gaps": ["gap 1"],
+  "patterns": ["pattern 1"],
+  "goals_to_create": [],
+  "learnings": [],
   "self_assessment": {
-    "recent_successes": ["success 1"],
-    "recent_failures": ["failure 1"],
-    "skill_gaps": ["gap 1"],
+    "recent_successes": [],
+    "recent_failures": [],
+    "skill_gaps": [],
     "confidence": 0.7,
-    "focus_areas": ["area 1"]
+    "focus_areas": []
   }
 }
 
-CRITICAL: Respond ONLY with valid JSON. No preamble, no explanation, just the JSON object.`
+RESPOND ONLY WITH VALID JSON. NO PREAMBLE. NO MARKDOWN.`
 
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
@@ -917,23 +960,34 @@ CRITICAL: Respond ONLY with valid JSON. No preamble, no explanation, just the JS
 func (e *Engine) executeAction(ctx context.Context, action *Action) (string, error) {
 	// Map action tool to actual tool execution
 	switch action.Tool {
-	case ActionToolSearch:
-		// Extract search query from action description
-		// For now, use the full description as the query
-		params := map[string]interface{}{
-			"query": action.Description,
-		}
+case ActionToolSearch:
+	// Extract search query from action description
+	// For now, use the full description as the query
+	params := map[string]interface{}{
+		"query": action.Description,
+	}
+	
+	result, err := e.toolRegistry.ExecuteIdle(ctx, tools.ToolNameSearch, params)
+	if err != nil {
+		return "", fmt.Errorf("search tool failed: %w", err)
+	}
+	
+	if !result.Success {
+		return "", fmt.Errorf("search failed: %s", result.Error)
+	}
+	
+	// NEW: Extract URLs from search results and create parse actions
+	// This connects search → web parsing automatically
+	urls := e.extractURLsFromSearchResults(result.Output)
+	if len(urls) > 0 {
+		log.Printf("[Dialogue] Extracted %d URLs from search results", len(urls))
 		
-		result, err := e.toolRegistry.ExecuteIdle(ctx, tools.ToolNameSearch, params)
-		if err != nil {
-			return "", fmt.Errorf("search tool failed: %w", err)
-		}
-		
-		if !result.Success {
-			return "", fmt.Errorf("search failed: %s", result.Error)
-		}
-		
-		return result.Output, nil
+		// Add parse action for the first URL (most relevant)
+		// Note: This happens in the calling code, so we'll just log for now
+		// The actual action creation happens in the goal pursuit phase
+	}
+	
+	return result.Output, nil
 		
 case ActionToolWebParse,
      ActionToolWebParseMetadata,
@@ -1238,16 +1292,56 @@ func truncateResponse(s string, maxLen int) string {
 
 // fixCommonJSONErrors attempts to fix common JSON generation errors from LLMs
 func fixCommonJSONErrors(jsonStr string) string {
-	// Common error: missing closing bracket after array that has closing quote
-	// Pattern: "array": ["item1", "item2"]\n  "next_field"
-	// Should be: "array": ["item1", "item2"],\n  "next_field"
+	// Remove markdown fences
+	fixed := strings.ReplaceAll(jsonStr, "```json", "")
+	fixed = strings.ReplaceAll(fixed, "```", "")
+	fixed = strings.TrimSpace(fixed)
 	
-	// This is a simple fix - in production you'd want more sophisticated handling
-	fixed := strings.ReplaceAll(jsonStr, "]\n  \"", "],\n  \"")
+	// Fix missing comma after array with closing bracket on new line
+	fixed = strings.ReplaceAll(fixed, "]\n  \"", "],\n  \"")
 	fixed = strings.ReplaceAll(fixed, "]\n\n  \"", "],\n\n  \"")
-	// NEW: Fix missing comma after array that ends with quote
-	fixed = strings.ReplaceAll(fixed, "\",\n  \"", "\"],\n  \"")
-	fixed = strings.ReplaceAll(fixed, ".\",\n  \"", ".\"],\n  \"")
-
+	
+	// NEW: Fix array items missing closing bracket
+	// Pattern: "item"],  \n  "next_field"
+	// Should be: "item"]\n  "next_field"
+	lines := strings.Split(fixed, "\n")
+	for i := 0; i < len(lines)-1; i++ {
+		line := strings.TrimSpace(lines[i])
+		nextLine := strings.TrimSpace(lines[i+1])
+		
+		// If line ends with quote+comma and next starts with quote
+		// This is likely end of array without closing bracket
+		if strings.HasSuffix(line, "\",") && strings.HasPrefix(nextLine, "\"") {
+			// Check if this should be end of array (next line is new field)
+			if strings.Contains(nextLine, "\":") {
+				// Insert closing bracket before the comma
+				lines[i] = strings.TrimSuffix(line, ",") + "],"
+			}
+		}
+	}
+	fixed = strings.Join(lines, "\n")
+	
 	return fixed
+}
+
+// extractURLsFromSearchResults extracts URLs from SearXNG search output
+func (e *Engine) extractURLsFromSearchResults(searchOutput string) []string {
+	urls := []string{}
+	lines := strings.Split(searchOutput, "\n")
+	
+	for _, line := range lines {
+		// SearXNG format: "    URL: https://example.com"
+		if strings.Contains(line, "URL: ") {
+			parts := strings.Split(line, "URL: ")
+			if len(parts) > 1 {
+				url := strings.TrimSpace(parts[1])
+				// Validate it's a proper URL
+				if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+					urls = append(urls, url)
+				}
+			}
+		}
+	}
+	
+	return urls
 }
