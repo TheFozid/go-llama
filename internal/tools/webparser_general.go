@@ -30,11 +30,17 @@ func NewWebParserGeneralTool(userAgent string, llmURL string, llmModel string, m
 		timeout = 30 * time.Second
 	}
 
+	// LLM timeout should be generous for summarization
+	llmTimeout := timeout
+	if llmTimeout < 90*time.Second {
+		llmTimeout = 90 * time.Second // Minimum 90s for LLM processing
+	}
+	
 	return &WebParserGeneralTool{
 		client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
 		llmURL:        llmURL,
 		llmModel:      llmModel,
-		llmClient:     &http.Client{Timeout: 60 * time.Second},
+		llmClient:     &http.Client{Timeout: llmTimeout},
 		config:        config,
 		maxPageSizeMB: maxPageSizeMB,
 	}

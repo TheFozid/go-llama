@@ -30,11 +30,17 @@ func NewWebParserContextualTool(userAgent string, llmURL string, llmModel string
 		timeout = 60 * time.Second
 	}
 
+	// LLM timeout should be generous for contextual extraction
+	llmTimeout := timeout
+	if llmTimeout < 120*time.Second {
+		llmTimeout = 120 * time.Second // Minimum 2 minutes for contextual analysis
+	}
+	
 	return &WebParserContextualTool{
 		client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
 		llmURL:        llmURL,
 		llmModel:      llmModel,
-		llmClient:     &http.Client{Timeout: 90 * time.Second}, // Longer for contextual analysis
+		llmClient:     &http.Client{Timeout: llmTimeout},
 		config:        config,
 		maxPageSizeMB: maxPageSizeMB,
 	}
