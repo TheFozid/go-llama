@@ -27,7 +27,7 @@ func NewWebParserContextualTool(userAgent string, llmURL string, llmModel string
 	// Use idle timeout (longer for thorough extraction)
 	timeout := time.Duration(config.TimeoutIdle) * time.Second
 	if timeout == 0 {
-		timeout = 60 * time.Second
+		timeout = 241 * time.Second
 	}
 
 	// LLM timeout should be generous for contextual extraction

@@ -315,7 +315,7 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 		gai.Tools.SearXNG.TimeoutInteractive = 5
 	}
 	if gai.Tools.SearXNG.TimeoutIdle == 0 {
-		gai.Tools.SearXNG.TimeoutIdle = 60
+		gai.Tools.SearXNG.TimeoutIdle = 2400
 	}
 	if gai.Tools.SearXNG.MaxResultsInteractive == 0 {
 		gai.Tools.SearXNG.MaxResultsInteractive = 3

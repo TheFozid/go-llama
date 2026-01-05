@@ -53,7 +53,7 @@ func (cr *ContextualRegistry) ExecuteIdle(ctx context.Context, toolName string, 
 	config, exists := cr.configs[toolName]
 	if !exists {
 		config = ToolConfig{
-			TimeoutIdle:    60 * time.Second,
+			TimeoutIdle:    245 * time.Second,
 			MaxResultsIdle: 20,
 		}
 	}

@@ -21,7 +21,7 @@ func NewWebParserChunkedTool(userAgent string, maxPageSizeMB int, chunkSize int,
 	// Use idle timeout (longer for large page fetching)
 	timeout := time.Duration(config.TimeoutIdle) * time.Second
 	if timeout == 0 {
-		timeout = 60 * time.Second
+		timeout = 240 * time.Second
 	}
 
 	if chunkSize == 0 {
