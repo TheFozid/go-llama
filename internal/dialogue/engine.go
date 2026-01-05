@@ -325,29 +325,30 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 			}
 		}
 		
-		// If no actions were executed, think about the goal and create new actions
+		// If no actions were executed, check if we should create new actions
 		if !actionExecuted {
-			goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
-			if err != nil {
-				log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
-			} else {
-				thoughtCount++
-				totalTokens += tokens
-				
-				e.stateManager.SaveThought(ctx, &ThoughtRecord{
-					CycleID:     state.CycleCount,
-					ThoughtNum:  thoughtCount,
-					Content:     goalThought,
-					TokensUsed:  tokens,
-					ActionTaken: false,
-					Timestamp:   time.Now(),
-				})
-				
-				log.Printf("[Dialogue] Goal thought: %s", truncate(goalThought, 80))
-				
-				// Create new actions based on thought (simplified)
-				// In future, LLM could suggest specific actions
-				if len(topGoal.Actions) == 0 {
+			// Only create new actions if goal has NO actions at all
+			// If it has actions, they should be executed next cycle
+			if len(topGoal.Actions) == 0 {
+				goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
+				if err != nil {
+					log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
+				} else {
+					thoughtCount++
+					totalTokens += tokens
+					
+					e.stateManager.SaveThought(ctx, &ThoughtRecord{
+						CycleID:     state.CycleCount,
+						ThoughtNum:  thoughtCount,
+						Content:     goalThought,
+						TokensUsed:  tokens,
+						ActionTaken: false,
+						Timestamp:   time.Now(),
+					})
+					
+					log.Printf("[Dialogue] Goal thought: %s", truncate(goalThought, 80))
+					
+					// Create initial search action based on goal type
 					// Create appropriate search action based on goal type
 					var searchQuery string
 					
@@ -377,28 +378,36 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 					}
 					topGoal.Actions = append(topGoal.Actions, newAction)
 					log.Printf("[Dialogue] Created search action: %s", truncate(searchQuery, 60))
-// NEW: If the last completed action was a search, create a parse action
-if len(topGoal.Actions) > 0 {
-	lastAction := topGoal.Actions[len(topGoal.Actions)-1]
-	
-	// Check if last action was a completed search
-	if lastAction.Tool == ActionToolSearch && lastAction.Status == ActionStatusCompleted {
-		// Extract URLs from the search result
-		urls := e.extractURLsFromSearchResults(lastAction.Result)
-		
-		if len(urls) > 0 {
-			// Create parse action for the first (most relevant) URL
-			parseAction := Action{
-				Description: urls[0],
-				Tool:        ActionToolWebParseGeneral,
-				Status:      ActionStatusPending,
-				Timestamp:   time.Now(),
+				}
+			} else {
+				// Goal has pending actions - log and wait for next cycle
+				pendingCount := 0
+				for _, action := range topGoal.Actions {
+					if action.Status == ActionStatusPending {
+						pendingCount++
+					}
+				}
+				log.Printf("[Dialogue] Goal has %d pending actions, will execute next cycle", pendingCount)
 			}
-			topGoal.Actions = append(topGoal.Actions, parseAction)
-			log.Printf("[Dialogue] Created web_parse_general action for: %s", truncate(urls[0], 60))
 		}
-	}
-}
+		
+			lastAction := topGoal.Actions[len(topGoal.Actions)-1]
+			
+			// Check if last action was a completed search
+			if lastAction.Tool == ActionToolSearch && lastAction.Status == ActionStatusCompleted {
+				// Extract URLs from the search result
+				urls := e.extractURLsFromSearchResults(lastAction.Result)
+				
+				if len(urls) > 0 {
+					// Create parse action for the first (most relevant) URL
+					parseAction := Action{
+						Description: urls[0],
+						Tool:        ActionToolWebParseGeneral,
+						Status:      ActionStatusPending,
+						Timestamp:   time.Now(),
+					}
+					topGoal.Actions = append(topGoal.Actions, parseAction)
+					log.Printf("[Dialogue] Created web_parse_general action for: %s", truncate(urls[0], 60))
 				}
 			}
 		}
