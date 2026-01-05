@@ -891,12 +891,19 @@ CRITICAL: Respond ONLY with valid JSON. No preamble, no explanation, just the JS
 	var reasoning ReasoningResponse
 	if err := json.Unmarshal([]byte(content), &reasoning); err != nil {
 		log.Printf("[Dialogue] WARNING: Failed to parse JSON reasoning: %v", err)
-		log.Printf("[Dialogue] Raw response: %s", content)
-		// Return minimal valid response
-		return &ReasoningResponse{
-			Reflection: content,
-			Insights:   []string{},
-		}, tokens, nil
+		log.Printf("[Dialogue] Raw response (first 500 chars): %s", truncateResponse(content, 500))
+		
+		// Try to fix common JSON errors
+		fixedContent := fixCommonJSONErrors(content)
+		if err := json.Unmarshal([]byte(fixedContent), &reasoning); err != nil {
+			log.Printf("[Dialogue] WARNING: Failed to parse even after JSON fixes")
+			// Return minimal valid response with the original text as reflection
+			return &ReasoningResponse{
+				Reflection: "Failed to parse structured reasoning. Using fallback mode.",
+				Insights:   []string{},
+			}, tokens, nil
+		}
+		log.Printf("[Dialogue] ✓ Successfully parsed JSON after fixes")
 	}
 	
 	return &reasoning, tokens, nil
@@ -1146,4 +1153,25 @@ func generateJitter(windowMinutes int) time.Duration {
 	jitterMinutes := rand.Intn(windowMinutes*2+1) - windowMinutes
 	return time.Duration(jitterMinutes) * time.Minute
 
+}
+
+// truncateResponse truncates a string for logging
+func truncateResponse(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "... (truncated)"
+}
+
+// fixCommonJSONErrors attempts to fix common JSON generation errors from LLMs
+func fixCommonJSONErrors(jsonStr string) string {
+	// Common error: missing closing bracket after array that has closing quote
+	// Pattern: "array": ["item1", "item2"]\n  "next_field"
+	// Should be: "array": ["item1", "item2"],\n  "next_field"
+	
+	// This is a simple fix - in production you'd want more sophisticated handling
+	fixed := strings.ReplaceAll(jsonStr, "]\n  \"", "],\n  \"")
+	fixed = strings.ReplaceAll(fixed, "]\n\n  \"", "],\n\n  \"")
+	
+	return fixed
 }
