@@ -520,6 +520,227 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 	return nil
 }
 
+// EvolveIdentity updates slot 0 (system name/identity) based on experiences and learnings
+// Called separately from principle evolution to allow independent identity development
+func EvolveIdentity(db *gorm.DB, storage *Storage, llmURL string, llmModel string) error {
+	ctx := context.Background()
+	
+	log.Printf("[Principles] Evaluating identity evolution (slot 0)...")
+	
+	// Get current identity
+	var currentIdentity Principle
+	if err := db.Where("slot = ?", 0).First(&currentIdentity).Error; err != nil {
+		return fmt.Errorf("failed to load current identity: %w", err)
+	}
+	
+	currentName := currentIdentity.Content
+	if currentName == "" {
+		currentName = "GrowerAI" // Fallback
+	}
+	
+	log.Printf("[Principles] Current identity: %s (rating: %.2f, validations: %d)", 
+		currentName, currentIdentity.Rating, currentIdentity.ValidationCount)
+	
+	// Gather evidence about identity from memories
+	// Look for learnings about self, successful patterns, user interactions
+	var identityMemories []*Memory
+	
+	// Search for memories tagged with "learning", "self_knowledge", "strategy"
+	searchTags := []string{"learning", "self_knowledge", "strategy", "tool_usage", "goal_completion"}
+	
+	for _, tag := range searchTags {
+		scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+			CollectionName: storage.CollectionName,
+			Filter: &qdrant.Filter{
+				Must: []*qdrant.Condition{
+					qdrant.NewMatch("concept_tags", tag),
+					qdrant.NewMatch("outcome_tag", "good"),
+				},
+			},
+			Limit:       qdrant.PtrOf(uint32(10)),
+			WithPayload: qdrant.NewWithPayload(true),
+		})
+		
+		if err != nil {
+			log.Printf("[Principles] WARNING: Failed to search for %s memories: %v", tag, err)
+			continue
+		}
+		
+		for _, point := range scrollResult {
+			mem := storage.pointToMemoryFromScroll(point)
+			identityMemories = append(identityMemories, &mem)
+		}
+	}
+	
+	if len(identityMemories) < 10 {
+		log.Printf("[Principles] Insufficient evidence for identity evolution (%d memories, need 10+)", len(identityMemories))
+		return nil
+	}
+	
+	log.Printf("[Principles] Found %d identity-relevant memories", len(identityMemories))
+	
+	// Build evidence summary
+	evidenceBuilder := strings.Builder{}
+	for i, mem := range identityMemories {
+		if i >= 20 {
+			break // Limit to 20 examples
+		}
+		evidenceBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, mem.Content))
+	}
+	
+	// Ask LLM to propose a refined identity
+	newIdentity, confidence, err := proposeIdentity(ctx, llmURL, llmModel, currentName, evidenceBuilder.String())
+	if err != nil {
+		log.Printf("[Principles] Failed to generate identity proposal: %v", err)
+		return nil // Non-fatal
+	}
+	
+	// Only update if confidence is high enough and name is different
+	if confidence >= 0.7 && newIdentity != currentName && newIdentity != "" {
+		updates := map[string]interface{}{
+			"content":          newIdentity,
+			"rating":           confidence,
+			"validation_count": currentIdentity.ValidationCount + 1,
+			"updated_at":       time.Now(),
+		}
+		
+		if err := db.Model(&Principle{}).Where("slot = ?", 0).Updates(updates).Error; err != nil {
+			return fmt.Errorf("failed to update identity: %w", err)
+		}
+		
+		log.Printf("[Principles] ✓ Identity evolved: '%s' → '%s' (confidence: %.2f)", 
+			currentName, newIdentity, confidence)
+	} else if newIdentity == currentName {
+		// Increase validation count for confirmed identity
+		if err := db.Model(&Principle{}).Where("slot = ?", 0).
+			UpdateColumn("validation_count", gorm.Expr("validation_count + ?", 1)).Error; err != nil {
+			log.Printf("[Principles] WARNING: Failed to increment identity validation: %v", err)
+		}
+		log.Printf("[Principles] Identity confirmed: '%s' (validations: %d)", currentName, currentIdentity.ValidationCount+1)
+	} else {
+		log.Printf("[Principles] Identity unchanged (confidence %.2f too low or invalid proposal)", confidence)
+	}
+	
+	return nil
+}
+
+// proposeIdentity uses LLM to suggest an evolved identity based on experiences
+func proposeIdentity(ctx context.Context, llmURL string, llmModel string, currentName string, evidence string) (string, float64, error) {
+	prompt := fmt.Sprintf(`You are analyzing an AI system's identity based on its experiences and learnings.
+
+Current Identity: %s
+
+Evidence from experiences (learnings, successful patterns, capabilities):
+%s
+
+Based on this evidence, propose an evolved identity name that:
+1. Reflects the system's actual capabilities and behaviors
+2. Is memorable and meaningful (2-20 characters)
+3. Captures what makes this system unique
+4. Can be a proper name, descriptive name, or evolved version of current name
+
+Examples of good identity evolution:
+- "GrowerAI" → "GrowthMind" (if focused on learning)
+- "GrowerAI" → "Sage" (if wisdom-focused)
+- "GrowerAI" → "ResearchBot" (if tool-heavy)
+- "GrowerAI" → "GrowerAI" (if current name still fits best)
+
+Respond ONLY with valid JSON:
+{
+  "proposed_name": "YourProposedName",
+  "confidence": 0.85,
+  "reasoning": "Brief explanation of why this name fits"
+}`, currentName, evidence)
+
+	reqBody := map[string]interface{}{
+		"model": llmModel,
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": "You are an identity evolution analyzer. Propose meaningful, appropriate names based on evidence.",
+			},
+			{
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"temperature": 0.5,
+		"stream":      false,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", 0, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", 0, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", 0, fmt.Errorf("no choices returned from LLM")
+	}
+
+	content := strings.TrimSpace(result.Choices[0].Message.Content)
+	
+	// Remove markdown fences if present
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	// Parse JSON response
+	var proposal struct {
+		ProposedName string  `json:"proposed_name"`
+		Confidence   float64 `json:"confidence"`
+		Reasoning    string  `json:"reasoning"`
+	}
+	
+	if err := json.Unmarshal([]byte(content), &proposal); err != nil {
+		return "", 0, fmt.Errorf("failed to parse identity proposal: %w", err)
+	}
+	
+	// Validate proposal
+	if len(proposal.ProposedName) < 2 || len(proposal.ProposedName) > 20 {
+		return "", 0, fmt.Errorf("proposed name length invalid: %s", proposal.ProposedName)
+	}
+	
+	if proposal.Confidence < 0 || proposal.Confidence > 1 {
+		proposal.Confidence = 0.5 // Default to neutral
+	}
+	
+	log.Printf("[Principles] Identity proposal: '%s' (confidence: %.2f) - %s", 
+		proposal.ProposedName, proposal.Confidence, proposal.Reasoning)
+	
+	return proposal.ProposedName, proposal.Confidence, nil
+}
+
 // generatePrincipleFromPattern uses LLM to synthesize an actionable principle from evidence
 func generatePrincipleFromPattern(ctx context.Context, llmURL string, llmModel string, concepts []string, evidence string, frequency int) (string, error) {
 	prompt := fmt.Sprintf(`Analyze these successful interactions and extract ONE actionable principle.
