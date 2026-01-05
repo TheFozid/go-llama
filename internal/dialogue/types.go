@@ -151,18 +151,38 @@ func (s StringOrArray) ToSlice() []string {
 	return []string(s)
 }
 
-// GoalsOrString handles JSON that can be string, empty array, or array of goals
+// GoalsOrString handles JSON that can be string, empty array, array of strings, or array of goals
 type GoalsOrString []GoalProposal
 
 func (g *GoalsOrString) UnmarshalJSON(data []byte) error {
-	// Try array of goals first
+	// Try array of GoalProposal objects first
 	var goals []GoalProposal
 	if err := json.Unmarshal(data, &goals); err == nil {
 		*g = GoalsOrString(goals)
 		return nil
 	}
 	
-	// Try string (ignore it)
+	// Try array of strings (LLM sometimes does this)
+	var stringArray []string
+	if err := json.Unmarshal(data, &stringArray); err == nil {
+		// Convert strings to GoalProposal objects
+		proposals := make([]GoalProposal, 0, len(stringArray))
+		for _, s := range stringArray {
+			if s != "" {
+				proposals = append(proposals, GoalProposal{
+					Description:  s,
+					Priority:     7, // Default priority
+					Reasoning:    "Generated from simplified goal description",
+					ActionPlan:   []string{},
+					ExpectedTime: "unknown",
+				})
+			}
+		}
+		*g = GoalsOrString(proposals)
+		return nil
+	}
+	
+	// Try single string (ignore it)
 	var str string
 	if err := json.Unmarshal(data, &str); err == nil {
 		*g = GoalsOrString{}
