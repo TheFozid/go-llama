@@ -168,9 +168,10 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	log.Printf("[Dialogue] Reflection: %s", truncate(reasoning.Reflection, 80))
 	
 	// Log insights
-	if len(reasoning.Insights) > 0 {
-		log.Printf("[Dialogue] Generated %d insights", len(reasoning.Insights))
-		for i, insight := range reasoning.Insights {
+	insights := reasoning.Insights.ToSlice()
+	if len(insights) > 0 {
+		log.Printf("[Dialogue] Generated %d insights", len(insights))
+		for i, insight := range insights {
 			log.Printf("[Dialogue]   Insight %d: %s", i+1, truncate(insight, 80))
 		}
 	}
@@ -211,7 +212,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	log.Printf("[Dialogue] PHASE 2: Reasoning-Driven Goal Management")
 	
 	// Use insights from reflection to identify gaps
-	gaps := reasoning.KnowledgeGaps
+	gaps := reasoning.KnowledgeGaps.ToSlice()
 	if len(gaps) == 0 {
 		// Fallback to old method if reasoning didn't find any
 		gaps, err = e.identifyKnowledgeGaps(ctx)
@@ -230,7 +231,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	// Update state with findings
 	state.KnowledgeGaps = gaps
 	state.RecentFailures = failures
-	state.Patterns = reasoning.Patterns
+	state.Patterns = reasoning.Patterns.ToSlice()
 	
 	if len(gaps) > 0 {
 		log.Printf("[Dialogue] Identified %d knowledge gaps from reasoning", len(gaps))
@@ -784,14 +785,16 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
 	systemPrompt := `You are GrowerAI's internal reasoning system. You think deeply, analyze patterns, and learn from experience.
 
-Your responses must be valid JSON in this exact format:
+CRITICAL: You must respond with ONLY valid JSON. No preamble, no explanation, no markdown.
+
+REQUIRED FORMAT (every field must be present, use empty arrays [] if no items):
 {
-  "reflection": "2-3 sentence reflection on recent activity",
-  "insights": ["key insight 1", "key insight 2"],
-  "strengths": ["what you're good at"],
-  "weaknesses": ["what you struggle with"],
-  "knowledge_gaps": ["topics you need to learn about"],
-  "patterns": ["patterns you've observed"],
+  "reflection": "string - 2-3 sentence reflection",
+  "insights": ["array of strings", "each insight as separate string"],
+  "strengths": ["array of strings", "each strength as separate string"],
+  "weaknesses": ["array of strings", "each weakness as separate string"],
+  "knowledge_gaps": ["array of strings"],
+  "patterns": ["array of strings"],
   "goals_to_create": [
     {
       "description": "goal description",

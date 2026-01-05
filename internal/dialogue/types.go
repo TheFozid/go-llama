@@ -104,14 +104,45 @@ const (
 // ReasoningResponse represents structured LLM reasoning output
 type ReasoningResponse struct {
 	Reflection      string              `json:"reflection"`
-	Insights        []string            `json:"insights"`
-	Strengths       []string            `json:"strengths"`
-	Weaknesses      []string            `json:"weaknesses"`
-	KnowledgeGaps   []string            `json:"knowledge_gaps"`
-	Patterns        []string            `json:"patterns"`
+	Insights        StringOrArray       `json:"insights"`
+	Strengths       StringOrArray       `json:"strengths"`
+	Weaknesses      StringOrArray       `json:"weaknesses"`
+	KnowledgeGaps   StringOrArray       `json:"knowledge_gaps"`
+	Patterns        StringOrArray       `json:"patterns"`
 	GoalsToCreate   []GoalProposal      `json:"goals_to_create"`
 	Learnings       []Learning          `json:"learnings"`
 	SelfAssessment  *SelfAssessment     `json:"self_assessment,omitempty"`
+}
+
+// StringOrArray handles JSON that can be either a string or array of strings
+type StringOrArray []string
+
+// UnmarshalJSON handles both string and array formats
+func (s *StringOrArray) UnmarshalJSON(data []byte) error {
+	// Try array first
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*s = StringOrArray(arr)
+		return nil
+	}
+	
+	// Try string
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		if str == "" {
+			*s = StringOrArray{}
+		} else {
+			*s = StringOrArray{str}
+		}
+		return nil
+	}
+	
+	return fmt.Errorf("field must be string or array of strings")
+}
+
+// ToSlice converts to []string
+func (s StringOrArray) ToSlice() []string {
+	return []string(s)
 }
 
 // GoalProposal represents a goal the LLM wants to create
