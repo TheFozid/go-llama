@@ -196,18 +196,37 @@ func (g GoalsOrString) ToSlice() []GoalProposal {
 	return []GoalProposal(g)
 }
 
-// LearningsOrString handles JSON that can be string, empty array, or array of learnings
+// LearningsOrString handles JSON that can be string, empty array, array of strings, or array of learnings
 type LearningsOrString []Learning
 
 func (l *LearningsOrString) UnmarshalJSON(data []byte) error {
-	// Try array of learnings first
+	// Try array of Learning objects first
 	var learnings []Learning
 	if err := json.Unmarshal(data, &learnings); err == nil {
 		*l = LearningsOrString(learnings)
 		return nil
 	}
 	
-	// Try string (ignore it)
+	// Try array of strings (LLM sometimes does this)
+	var stringArray []string
+	if err := json.Unmarshal(data, &stringArray); err == nil {
+		// Convert strings to Learning objects
+		learningObjs := make([]Learning, 0, len(stringArray))
+		for _, s := range stringArray {
+			if s != "" {
+				learningObjs = append(learningObjs, Learning{
+					What:       s,
+					Context:    "Generated during dialogue cycle",
+					Confidence: 0.7, // Default confidence
+					Category:   "general",
+				})
+			}
+		}
+		*l = LearningsOrString(learningObjs)
+		return nil
+	}
+	
+	// Try single string (ignore it)
 	var str string
 	if err := json.Unmarshal(data, &str); err == nil {
 		*l = LearningsOrString{}
