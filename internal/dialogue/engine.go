@@ -1359,8 +1359,6 @@ func fixCommonJSONErrors(jsonStr string) string {
 			// This is an array field like: "insights": ["item1", "item2"
 			// Need to find where it closes
 			
-			// Count how many items we have
-			arrayStartIdx := i
 			insideArray := true
 			arrayLines := []string{lines[i]}
 			
