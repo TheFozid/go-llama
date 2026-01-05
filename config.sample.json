@@ -133,7 +133,7 @@
       "webparse": {
         "enabled": true,
         "max_page_size_mb": 10,
-        "timeout": 30,
+        "timeout": 120,
         "user_agent": "GrowerAI/1.0",
         "chunk_size": 2000
       },

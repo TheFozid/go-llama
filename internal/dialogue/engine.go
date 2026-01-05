@@ -243,15 +243,21 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		log.Printf("[Dialogue] Detected %d patterns", len(reasoning.Patterns))
 	}
 	
-	// Create goals from LLM proposals if available
+	// Create goals from LLM proposals if available (but not if we have too many already)
 	newGoals := []Goal{}
-		if len(reasoning.GoalsToCreate.ToSlice()) > 0 {
+	if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 5 {
 		log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
 		for _, proposal := range reasoning.GoalsToCreate.ToSlice() {
-			// Check for duplicates
+			// Check for duplicates with more aggressive matching
 			isDuplicate := false
+			proposalLower := strings.ToLower(proposal.Description)
+			
 			for _, existingGoal := range state.ActiveGoals {
-				if strings.Contains(strings.ToLower(existingGoal.Description), strings.ToLower(proposal.Description[:min(len(proposal.Description), 30)])) {
+				existingLower := strings.ToLower(existingGoal.Description)
+				
+				// Check if either contains the other (more aggressive)
+				if strings.Contains(existingLower, proposalLower[:min(len(proposalLower), 30)]) ||
+				   strings.Contains(proposalLower, existingLower[:min(len(existingLower), 30)]) {
 					isDuplicate = true
 					log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(proposal.Description, 40))
 					break
@@ -510,21 +516,49 @@ if topGoal.Progress >= 1.0 {
 		}
 	}
 	
-	// PHASE 5: Cleanup (move completed goals)
+	// PHASE 5: Cleanup (move completed/abandoned goals and limit active goals)
 	completedCount := 0
+	abandonedCount := 0
 	activeGoals := []Goal{}
+	
 	for _, goal := range state.ActiveGoals {
 		if goal.Status == GoalStatusCompleted {
 			state.CompletedGoals = append(state.CompletedGoals, goal)
 			completedCount++
+		} else if goal.Status == GoalStatusAbandoned {
+			state.CompletedGoals = append(state.CompletedGoals, goal)
+			abandonedCount++
+		} else if goal.Progress == 0.0 && time.Since(goal.Created) > 24*time.Hour {
+			// Abandon goals with no progress after 24 hours
+			goal.Status = GoalStatusAbandoned
+			goal.Outcome = "neutral"
+			state.CompletedGoals = append(state.CompletedGoals, goal)
+			abandonedCount++
+			log.Printf("[Dialogue] Auto-abandoned stale goal: %s", truncate(goal.Description, 60))
 		} else {
 			activeGoals = append(activeGoals, goal)
 		}
 	}
+	
+	// Limit active goals to top 5 by priority
+	if len(activeGoals) > 5 {
+		sortedGoals := sortGoalsByPriority(activeGoals)
+		activeGoals = sortedGoals[:5]
+		
+		// Abandon the rest
+		for i := 5; i < len(sortedGoals); i++ {
+			sortedGoals[i].Status = GoalStatusAbandoned
+			sortedGoals[i].Outcome = "neutral"
+			state.CompletedGoals = append(state.CompletedGoals, sortedGoals[i])
+			abandonedCount++
+		}
+		log.Printf("[Dialogue] Pruned active goals from %d to 5 (abandoned %d low-priority)", len(sortedGoals), len(sortedGoals)-5)
+	}
+	
 	state.ActiveGoals = activeGoals
 	
-	if completedCount > 0 {
-		log.Printf("[Dialogue] Moved %d completed goals to history", completedCount)
+	if completedCount > 0 || abandonedCount > 0 {
+		log.Printf("[Dialogue] Moved %d completed and %d abandoned goals to history", completedCount, abandonedCount)
 	}
 	
 	// Update metrics
