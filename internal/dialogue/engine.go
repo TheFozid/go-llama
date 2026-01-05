@@ -349,7 +349,6 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 					log.Printf("[Dialogue] Goal thought: %s", truncate(goalThought, 80))
 					
 					// Create initial search action based on goal type
-					// Create appropriate search action based on goal type
 					var searchQuery string
 					
 					// Extract key terms from goal description for search
@@ -391,6 +390,9 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 			}
 		}
 		
+		// After executing actions, check if we should create follow-up actions
+		// (e.g., parse action after search completes)
+		if len(topGoal.Actions) > 0 {
 			lastAction := topGoal.Actions[len(topGoal.Actions)-1]
 			
 			// Check if last action was a completed search
@@ -411,6 +413,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 				}
 			}
 		}
+
 		
 // Update goal progress based on completed actions
 completedActions := 0
