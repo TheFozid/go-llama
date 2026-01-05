@@ -115,8 +115,8 @@ type ReasoningResponse struct {
 	Weaknesses      StringOrArray       `json:"weaknesses"`
 	KnowledgeGaps   StringOrArray       `json:"knowledge_gaps"`
 	Patterns        StringOrArray       `json:"patterns"`
-	GoalsToCreate   []GoalProposal      `json:"goals_to_create"`
-	Learnings       []Learning          `json:"learnings"`
+	GoalsToCreate   GoalsOrString       `json:"goals_to_create"`      // NEW: Flexible type
+	Learnings       LearningsOrString   `json:"learnings"`            // NEW: Flexible type
 	SelfAssessment  *SelfAssessment     `json:"self_assessment,omitempty"`
 }
 
@@ -149,6 +149,56 @@ func (s *StringOrArray) UnmarshalJSON(data []byte) error {
 // ToSlice converts to []string
 func (s StringOrArray) ToSlice() []string {
 	return []string(s)
+}
+
+// GoalsOrString handles JSON that can be string, empty array, or array of goals
+type GoalsOrString []GoalProposal
+
+func (g *GoalsOrString) UnmarshalJSON(data []byte) error {
+	// Try array of goals first
+	var goals []GoalProposal
+	if err := json.Unmarshal(data, &goals); err == nil {
+		*g = GoalsOrString(goals)
+		return nil
+	}
+	
+	// Try string (ignore it)
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		*g = GoalsOrString{}
+		return nil
+	}
+	
+	return fmt.Errorf("goals_to_create must be array or string")
+}
+
+func (g GoalsOrString) ToSlice() []GoalProposal {
+	return []GoalProposal(g)
+}
+
+// LearningsOrString handles JSON that can be string, empty array, or array of learnings
+type LearningsOrString []Learning
+
+func (l *LearningsOrString) UnmarshalJSON(data []byte) error {
+	// Try array of learnings first
+	var learnings []Learning
+	if err := json.Unmarshal(data, &learnings); err == nil {
+		*l = LearningsOrString(learnings)
+		return nil
+	}
+	
+	// Try string (ignore it)
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		*l = LearningsOrString{}
+		return nil
+	}
+	
+	return fmt.Errorf("learnings must be array or string")
+}
+
+func (l LearningsOrString) ToSlice() []Learning {
+	return []Learning(l)
 }
 
 // GoalProposal represents a goal the LLM wants to create

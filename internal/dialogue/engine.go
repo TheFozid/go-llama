@@ -192,8 +192,8 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	}
 	
 	// Store learnings as memories if enabled
-	if e.storeInsights && len(reasoning.Learnings) > 0 {
-		for _, learning := range reasoning.Learnings {
+	if e.storeInsights && len(reasoning.Learnings.ToSlice()) > 0 {
+	for _, learning := range reasoning.Learnings.ToSlice() {
 			e.storeLearning(ctx, learning)
 		}
 		log.Printf("[Dialogue] Stored %d learnings in memory", len(reasoning.Learnings))
@@ -245,9 +245,9 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	
 	// Create goals from LLM proposals if available
 	newGoals := []Goal{}
-	if len(reasoning.GoalsToCreate) > 0 {
+		if len(reasoning.GoalsToCreate.ToSlice()) > 0 {
 		log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
-		for _, proposal := range reasoning.GoalsToCreate {
+		for _, proposal := range reasoning.GoalsToCreate.ToSlice() {
 			// Check for duplicates
 			isDuplicate := false
 			for _, existingGoal := range state.ActiveGoals {
@@ -403,17 +403,35 @@ if len(topGoal.Actions) > 0 {
 			}
 		}
 		
-		// Update goal progress based on completed actions
-		completedActions := 0
-		for _, action := range topGoal.Actions {
-			if action.Status == ActionStatusCompleted {
-				completedActions++
-			}
-		}
-		
-		if len(topGoal.Actions) > 0 {
-			topGoal.Progress = float64(completedActions) / float64(len(topGoal.Actions))
-		}
+// Update goal progress based on completed actions
+completedActions := 0
+totalActions := len(topGoal.Actions)
+
+for _, action := range topGoal.Actions {
+	if action.Status == ActionStatusCompleted {
+		completedActions++
+	}
+}
+
+// Only calculate progress if we have actions
+if totalActions > 0 {
+	topGoal.Progress = float64(completedActions) / float64(totalActions)
+} else {
+	// No actions yet, no progress
+	topGoal.Progress = 0.0
+}
+
+// NEW: Don't mark complete if we just did a search and could parse
+// Check if the last completed action was a search
+if completedActions > 0 && totalActions == completedActions {
+	lastAction := topGoal.Actions[totalActions-1]
+	
+	// If last action was search, wait for parse action to be created
+	if lastAction.Tool == ActionToolSearch {
+		log.Printf("[Dialogue] Search completed, waiting for parse action creation")
+		topGoal.Progress = 0.99 // Almost complete, not fully complete
+	}
+}
 		
 if topGoal.Progress >= 1.0 {
 	// Validate that the goal actually achieved something useful
