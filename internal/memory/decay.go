@@ -751,7 +751,6 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 		// Use age=999999 to get ALL memories (sorted by age)
 		batchSize := 100
 		processedIDs := make(map[string]bool) // Track what we've seen to avoid reprocessing
-		lastMemoryID := ""
 		
 		for {
 			// Fetch batch
@@ -817,7 +816,6 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 					memoriesUpdated++
 				}
 				
-				lastMemoryID = mem.ID
 			}
 			
 			// If we got fewer than batchSize NEW memories, we've reached the end
