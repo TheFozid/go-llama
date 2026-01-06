@@ -837,7 +837,6 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 	return nil
 }
 
-// recalculateTrustScores applies Bayesian trust formula to all memories with validations
 func (w *DecayWorker) recalculateTrustScores(ctx context.Context) error {
 	// Bayesian trust formula:
 	// trust_score = (good_validations + prior) / (total_validations + 2*prior)
@@ -851,11 +850,11 @@ func (w *DecayWorker) recalculateTrustScores(ctx context.Context) error {
 	tiers := []MemoryTier{TierRecent, TierMedium, TierLong, TierAncient}
 	
 	for _, tier := range tiers {
-		offset := 0
+		processedIDs := make(map[string]bool) // Track processed memories
 		
 		for {
-			// Fetch memories with ValidationCount > 0
-			memories, err := w.storage.FindMemoriesForCompression(ctx, tier, 0, batchSize)
+			// Fetch memories batch
+			memories, err := w.storage.FindMemoriesForCompression(ctx, tier, 999999, batchSize)
 			if err != nil {
 				return fmt.Errorf("failed to fetch memories for trust calculation: %w", err)
 			}
@@ -864,9 +863,23 @@ func (w *DecayWorker) recalculateTrustScores(ctx context.Context) error {
 				break
 			}
 			
+			// Filter out already-processed memories
+			newMemories := []Memory{}
+			for _, mem := range memories {
+				if !processedIDs[mem.ID] {
+					newMemories = append(newMemories, mem)
+					processedIDs[mem.ID] = true
+				}
+			}
+			
+			if len(newMemories) == 0 {
+				// All memories in this batch were already processed
+				break
+			}
+			
 			// Process each memory
-			for i := range memories {
-				mem := &memories[i]
+			for i := range newMemories {
+				mem := &newMemories[i]
 				
 				// Skip if no validations yet
 				if mem.ValidationCount == 0 {
@@ -908,13 +921,13 @@ func (w *DecayWorker) recalculateTrustScores(ctx context.Context) error {
 				}
 			}
 			
-			offset += len(memories)
-			
-			// If we got fewer than batchSize, we've reached the end
-			if len(memories) < batchSize {
+			// If we got fewer than batchSize NEW memories, we've reached the end
+			if len(newMemories) < batchSize {
 				break
 			}
 		}
+		
+		log.Printf("[TrustCalc] Tier %s complete (%d memories processed)", tier, len(processedIDs))
 	}
 	
 	if totalUpdated > 0 {
