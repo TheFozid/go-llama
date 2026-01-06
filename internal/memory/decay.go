@@ -736,7 +736,6 @@ func (w *DecayWorker) selectMemoriesForCompression(
 func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 	// Configuration
 	minLinkStrength := 0.1 // Remove links with strength below 10%
-	batchSize := 100       // Process in batches to avoid memory pressure
 	
 	totalMemoriesScanned := 0
 	totalLinksRemoved := 0
@@ -748,10 +747,15 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 	for _, tier := range tiers {
 		log.Printf("[LinkPruning] Scanning tier %s for weak links...", tier)
 		
-		// Fetch memories in batches (age=0 means get all)
-		offset := 0
+		// Get all memories in this tier with links
+		// Use age=999999 to get ALL memories (sorted by age)
+		batchSize := 100
+		processedIDs := make(map[string]bool) // Track what we've seen to avoid reprocessing
+		lastMemoryID := ""
+		
 		for {
-			memories, err := w.storage.FindMemoriesForCompression(ctx, tier, 0, batchSize)
+			// Fetch batch
+			memories, err := w.storage.FindMemoriesForCompression(ctx, tier, 999999, batchSize)
 			if err != nil {
 				return fmt.Errorf("failed to fetch memories for link pruning: %w", err)
 			}
@@ -760,9 +764,23 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 				break // No more memories in this tier
 			}
 			
+			// Filter out already-processed memories (since we can't offset)
+			newMemories := []Memory{}
+			for _, mem := range memories {
+				if !processedIDs[mem.ID] {
+					newMemories = append(newMemories, mem)
+					processedIDs[mem.ID] = true
+				}
+			}
+			
+			if len(newMemories) == 0 {
+				// All memories in this batch were already processed
+				break
+			}
+			
 			// Process each memory
-			for i := range memories {
-				mem := &memories[i]
+			for i := range newMemories {
+				mem := &newMemories[i]
 				
 				// Skip if no links
 				if len(mem.RelatedMemories) == 0 {
@@ -798,18 +816,17 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 					totalLinksRemoved += removedCount
 					memoriesUpdated++
 				}
+				
+				lastMemoryID = mem.ID
 			}
 			
-			// Move to next batch
-			offset += len(memories)
-			
-			// If we got fewer than batchSize, we've reached the end
-			if len(memories) < batchSize {
+			// If we got fewer than batchSize NEW memories, we've reached the end
+			if len(newMemories) < batchSize {
 				break
 			}
 		}
 		
-		log.Printf("[LinkPruning] Tier %s complete", tier)
+		log.Printf("[LinkPruning] Tier %s complete (%d memories scanned)", tier, len(processedIDs))
 	}
 	
 	if totalLinksRemoved > 0 {
