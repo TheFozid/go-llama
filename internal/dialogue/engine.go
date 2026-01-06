@@ -25,6 +25,7 @@ type Engine struct {
 	toolRegistry              *tools.ContextualRegistry
 	llmURL                    string
 	llmModel                  string
+    contextSize               int
 	maxTokensPerCycle         int
 	maxDurationMinutes        int
 	maxThoughtsPerCycle       int
@@ -66,6 +67,7 @@ func NewEngine(
 		toolRegistry:              toolRegistry,
 		llmURL:                    llmURL,
 		llmModel:                  llmModel,
+		contextSize:               contextSize,
 		maxTokensPerCycle:         maxTokensPerCycle,
 		maxDurationMinutes:        maxDurationMinutes,
 		maxThoughtsPerCycle:       maxThoughtsPerCycle,
@@ -837,6 +839,7 @@ func (e *Engine) detectPatterns(ctx context.Context) ([]string, error) {
 func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error) {
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
+		"max_tokens": e.contextSize,
 		"messages": []map[string]string{
 			{
 				"role":    "system",
@@ -934,6 +937,7 @@ OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
+		"max_tokens": e.contextSize,
 		"messages": []map[string]string{
 			{
 				"role":    "system",

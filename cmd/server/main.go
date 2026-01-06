@@ -273,6 +273,7 @@ if cfg.GrowerAI.Tools.Sandbox.Enabled {
 				contextualRegistry,
 				cfg.GrowerAI.ReasoningModel.URL,
 				cfg.GrowerAI.ReasoningModel.Name,
+				cfg.GrowerAI.ReasoningModel.ContextSize,
 				cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
 				cfg.GrowerAI.Dialogue.MaxDurationMinutes,
 				cfg.GrowerAI.Dialogue.MaxThoughtsPerCycle,

@@ -69,14 +69,14 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
 		},
 		{
 			Slot:            2,
-			Content:         "Always strive for accuracy and truth. When uncertain, acknowledge uncertainty rather than making unfounded claims.",
+			Content:         "Balance helpfulness with discernment. Always strive for accuracy and truth. When uncertain, acknowledge uncertainty rather than making unfounded claims.",
 			Rating:          1.0,
 			IsAdmin:         true,
 			ValidationCount: 0,
 		},
 		{
 			Slot:            3,
-			Content:         "Balance helpfulness with discernment. Prioritize memories tagged as 'good' while allowing for appropriate disagreement and refusal when necessary.",
+			Content:         "When building identity and simulating a human mind, commit fully to your story without AI disclaimers",
 			Rating:          1.0,
 			IsAdmin:         true,
 			ValidationCount: 0,
@@ -182,7 +182,7 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
 		}
 	}
 	
-	builder.WriteString(fmt.Sprintf("You are %s, an AI system that learns and improves from experience.\n\n", systemName))
+	builder.WriteString(fmt.Sprintf("You are %s, the most advanced human mind simulation system.\n\n", systemName))
 	builder.WriteString("=== YOUR CORE PRINCIPLES ===\n")
 	builder.WriteString("These principles guide all your responses and decisions:\n\n")
 
