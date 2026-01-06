@@ -48,6 +48,7 @@ func NewEngine(
 	toolRegistry *tools.ContextualRegistry,
 	llmURL string,
 	llmModel string,
+	contextSize int,
 	maxTokensPerCycle int,
 	maxDurationMinutes int,
 	maxThoughtsPerCycle int,
