@@ -15,6 +15,7 @@ type LLMConfig struct {
 }
 
 type GrowerAIConfig struct {
+	Enabled bool `json:"enabled"` 
 	ReasoningModel struct {
 		Name        string `json:"name"`
 		URL         string `json:"url"`

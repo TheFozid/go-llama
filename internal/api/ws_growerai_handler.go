@@ -16,6 +16,13 @@ import (
 
 // handleGrowerAIWebSocket processes GrowerAI messages via WebSocket with streaming
 func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, content string, userID uint) {
+	// Check if GrowerAI is globally enabled
+	if !cfg.GrowerAI.Enabled {
+		log.Printf("[GrowerAI-WS] GrowerAI disabled in config")
+		conn.WriteJSON(map[string]string{"error": "GrowerAI is currently disabled"})
+		return
+	}
+
 	log.Printf("[GrowerAI-WS] Processing message from user %d in chat %d", userID, chatInst.ID)
 
 	if cfg.GrowerAI.ReasoningModel.URL == "" {
