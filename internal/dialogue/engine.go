@@ -866,7 +866,7 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to send request: %w", err)
@@ -964,7 +964,7 @@ OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to send request: %w", err)
@@ -1201,7 +1201,7 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	}
 	
 	query := memory.RetrievalQuery{
-		Limit:    10,
+		Limit:    8,
 		MinScore: 0.3,
 	}
 	
