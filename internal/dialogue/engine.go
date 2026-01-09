@@ -772,18 +772,30 @@ func (e *Engine) identifyRecentFailures(ctx context.Context) ([]string, error) {
 // formGoals creates new goals based on state
 func (e *Engine) formGoals(state *InternalState) []Goal {
 	goals := []Goal{}
+	ctx := context.Background()
 	
 	// Create goals from knowledge gaps (user requests)
 	for _, gap := range state.KnowledgeGaps {
+		// Determine if this is a research goal or learning goal
+		description := ""
+		priority := 7
+		
+		if strings.Contains(strings.ToLower(gap), "research") ||
+		   strings.Contains(strings.ToLower(gap), "think about") ||
+		   strings.Contains(strings.ToLower(gap), "choose") ||
+		   strings.Contains(strings.ToLower(gap), "select") {
+			description = gap // Use the gap as-is for research goals
+			priority = 8 // Higher priority for explicit research requests
+		} else {
+			description = fmt.Sprintf("Learn about: %s", gap)
+			priority = 7
+		}
+		
 		// Check for duplicates using semantic similarity
 		if e.isGoalDuplicate(ctx, description, state.ActiveGoals) {
 			log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(description, 40))
 			continue
 		}
-		
-		// Determine if this is a research goal or learning goal
-		description := ""
-		priority := 7
 		
 		if strings.Contains(strings.ToLower(gap), "research") ||
 		   strings.Contains(strings.ToLower(gap), "think about") ||
