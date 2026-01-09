@@ -237,7 +237,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 				userInterests = []string{}
 			}
 			
-			exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, "")
+			exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, "", []string{})
 			state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
 			metrics.GoalsCreated++
 			
