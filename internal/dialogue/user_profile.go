@@ -2,7 +2,9 @@ package dialogue
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"time"
 	
