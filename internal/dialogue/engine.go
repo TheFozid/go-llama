@@ -251,23 +251,9 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 5 {
 		log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
 		for _, proposal := range reasoning.GoalsToCreate.ToSlice() {
-			// Check for duplicates with more aggressive matching
-			isDuplicate := false
-			proposalLower := strings.ToLower(proposal.Description)
-			
-			for _, existingGoal := range state.ActiveGoals {
-				existingLower := strings.ToLower(existingGoal.Description)
-				
-				// Check if either contains the other (more aggressive)
-				if strings.Contains(existingLower, proposalLower[:min(len(proposalLower), 30)]) ||
-				   strings.Contains(proposalLower, existingLower[:min(len(existingLower), 30)]) {
-					isDuplicate = true
-					log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(proposal.Description, 40))
-					break
-				}
-			}
-			
-			if isDuplicate {
+			// Check for duplicates using semantic similarity
+			if e.isGoalDuplicate(ctx, proposal.Description, state.ActiveGoals) {
+				log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(proposal.Description, 40))
 				continue
 			}
 			
@@ -319,13 +305,35 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 				if err != nil {
 					log.Printf("[Dialogue] Action failed: %v", err)
 					action.Result = fmt.Sprintf("ERROR: %v", err)
-					action.Status = ActionStatusCompleted // Mark as completed even on failure
-				} else {
-					action.Result = result
 					action.Status = ActionStatusCompleted
-					actionCount++
-					actionExecuted = true
-					log.Printf("[Dialogue] Action completed: %s", truncate(result, 80))
+					
+					// Mark goal as having failures
+					topGoal.Outcome = "bad"
+					
+					// Don't increment actionCount - this was a failure
+					actionExecuted = true // Still counts as execution attempt
+					
+					log.Printf("[Dialogue] ⚠ Action failed, goal marked as bad outcome")
+				} else {
+					// Check if result indicates success
+					resultLower := strings.ToLower(result)
+					if strings.Contains(resultLower, "error") || 
+					   strings.Contains(resultLower, "failed") ||
+					   strings.Contains(resultLower, "403") ||
+					   strings.Contains(resultLower, "404") ||
+					   strings.Contains(resultLower, "timeout") {
+						log.Printf("[Dialogue] Action completed but result indicates failure")
+						action.Result = result
+						action.Status = ActionStatusCompleted
+						topGoal.Outcome = "bad"
+						actionExecuted = true
+					} else {
+						action.Result = result
+						action.Status = ActionStatusCompleted
+						actionCount++
+						actionExecuted = true
+						log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
+					}
 				}
 				action.Timestamp = time.Now()
 				
@@ -410,15 +418,37 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 				urls := e.extractURLsFromSearchResults(lastAction.Result)
 				
 				if len(urls) > 0 {
-					// Create parse action for the first (most relevant) URL
-					parseAction := Action{
-						Description: urls[0],
-						Tool:        ActionToolWebParseGeneral,
-						Status:      ActionStatusPending,
-						Timestamp:   time.Now(),
+					// Determine which parser to use based on goal
+					goalLower := strings.ToLower(topGoal.Description)
+					var parseAction Action
+					
+					// Use contextual parser for research/analysis goals
+					if strings.Contains(goalLower, "research") ||
+					   strings.Contains(goalLower, "analyze") ||
+					   strings.Contains(goalLower, "understand") ||
+					   strings.Contains(goalLower, "learn about") {
+						// Create contextual parse with specific purpose
+						purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
+						parseAction = Action{
+							Description: urls[0],
+							Tool:        ActionToolWebParseContextual,
+							Status:      ActionStatusPending,
+							Timestamp:   time.Now(),
+							Metadata:    map[string]interface{}{"purpose": purpose},
+						}
+						log.Printf("[Dialogue] Created contextual parse action with purpose: %s", truncate(purpose, 60))
+					} else {
+						// Use general parser for simpler goals
+						parseAction = Action{
+							Description: urls[0],
+							Tool:        ActionToolWebParseGeneral,
+							Status:      ActionStatusPending,
+							Timestamp:   time.Now(),
+						}
+						log.Printf("[Dialogue] Created general parse action for: %s", truncate(urls[0], 60))
 					}
+					
 					topGoal.Actions = append(topGoal.Actions, parseAction)
-					log.Printf("[Dialogue] Created web_parse_general action for: %s", truncate(urls[0], 60))
 				}
 			}
 		}
@@ -745,17 +775,9 @@ func (e *Engine) formGoals(state *InternalState) []Goal {
 	
 	// Create goals from knowledge gaps (user requests)
 	for _, gap := range state.KnowledgeGaps {
-		// Check if we already have a similar active goal
-		isDuplicate := false
-		for _, existingGoal := range state.ActiveGoals {
-			if strings.Contains(existingGoal.Description, gap[:min(len(gap), 30)]) {
-				isDuplicate = true
-				log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(gap, 40))
-				break
-			}
-		}
-		
-		if isDuplicate {
+		// Check for duplicates using semantic similarity
+		if e.isGoalDuplicate(ctx, description, state.ActiveGoals) {
+			log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(description, 40))
 			continue
 		}
 		
@@ -810,6 +832,100 @@ func (e *Engine) formGoals(state *InternalState) []Goal {
 	
 	return goals
 }
+
+// isGoalDuplicate checks if a proposed goal is too similar to existing goals
+// Uses both string matching and semantic similarity
+func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, existingGoals []Goal) bool {
+	proposalLower := strings.ToLower(proposalDesc)
+	
+	// Quick check: exact match or very similar strings
+	for _, existingGoal := range existingGoals {
+		existingLower := strings.ToLower(existingGoal.Description)
+		
+		// Exact match
+		if proposalLower == existingLower {
+			return true
+		}
+		
+		// Check if first 30 chars match (existing logic)
+		minLen := min(len(proposalLower), len(existingLower))
+		if minLen > 30 {
+			minLen = 30
+		}
+		if strings.Contains(existingLower, proposalLower[:minLen]) ||
+		   strings.Contains(proposalLower, existingLower[:minLen]) {
+			return true
+		}
+	}
+	
+	// Semantic similarity check using embeddings
+	// Only check if we have at least 3 existing goals (avoid overhead for small lists)
+	if len(existingGoals) >= 3 {
+		proposalEmbedding, err := e.embedder.Embed(ctx, proposalDesc)
+		if err != nil {
+			log.Printf("[Dialogue] WARNING: Failed to generate embedding for duplicate check: %v", err)
+			return false // Don't block on embedding failure
+		}
+		
+		// Compare with each existing goal
+		for _, existingGoal := range existingGoals {
+			existingEmbedding, err := e.embedder.Embed(ctx, existingGoal.Description)
+			if err != nil {
+				continue // Skip this comparison
+			}
+			
+			// Calculate cosine similarity
+			similarity := cosineSimilarity(proposalEmbedding, existingEmbedding)
+			
+			// If similarity > 0.85, consider it a duplicate
+			if similarity > 0.85 {
+				log.Printf("[Dialogue] Detected semantic duplicate (%.2f similarity): '%s' ~= '%s'",
+					similarity, truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
+				return true
+			}
+		}
+	}
+	
+	return false
+}
+
+// cosineSimilarity calculates cosine similarity between two vectors
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return 0.0
+	}
+	
+	var dotProduct, normA, normB float64
+	
+	for i := 0; i < len(a); i++ {
+		dotProduct += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	
+	if normA == 0 || normB == 0 {
+		return 0.0
+	}
+	
+	return dotProduct / (sqrt(normA) * sqrt(normB))
+}
+
+// sqrt is a simple square root helper
+func sqrt(x float64) float64 {
+	if x < 0 {
+		return 0
+	}
+	// Use Newton's method for square root
+	if x == 0 {
+		return 0
+	}
+	z := x
+	for i := 0; i < 10; i++ {
+		z = (z + x/z) / 2
+	}
+	return z
+}
+
 
 // min returns the minimum of two integers
 func min(a, b int) int {
@@ -1114,10 +1230,18 @@ case ActionToolWebParse,
 		"url": url,
 	}
 	
-	// For contextual parsing, try to extract purpose from goal context
+	// For contextual parsing, extract purpose from metadata if available
 	if action.Tool == ActionToolWebParseContextual {
-		// The dialogue engine should have set this up, but provide fallback
-		params["purpose"] = "Extract relevant information for research goal"
+		if action.Metadata != nil {
+			if purpose, ok := action.Metadata["purpose"].(string); ok && purpose != "" {
+				params["purpose"] = purpose
+				log.Printf("[Dialogue] Using contextual parser with purpose: %s", truncate(purpose, 60))
+			} else {
+				params["purpose"] = "Extract relevant information for research goal"
+			}
+		} else {
+			params["purpose"] = "Extract relevant information for research goal"
+		}
 	}
 	
 	// For chunked parsing, look for chunk index

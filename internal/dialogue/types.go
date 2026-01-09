@@ -22,11 +22,12 @@ type Goal struct {
 
 // Action represents a step taken toward completing a goal
 type Action struct {
-	Description string    `json:"description"`
-	Tool        string    `json:"tool"` // "search", "web_parse", "sandbox", "memory_consolidation"
-	Status      string    `json:"status"` // "pending", "in_progress", "completed"
-	Result      string    `json:"result,omitempty"`
-	Timestamp   time.Time `json:"timestamp"`
+	Description string                 `json:"description"`
+	Tool        string                 `json:"tool"` // "search", "web_parse", "sandbox", "memory_consolidation"
+	Status      string                 `json:"status"` // "pending", "in_progress", "completed"
+	Result      string                 `json:"result,omitempty"`
+	Timestamp   time.Time              `json:"timestamp"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"` // For passing extra params like purpose
 }
 
 // InternalState represents the system's working memory between dialogue cycles
