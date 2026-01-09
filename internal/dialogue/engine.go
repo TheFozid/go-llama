@@ -285,7 +285,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	// Check for meta-loops and trigger exploration if needed
 	inMetaLoop, loopTopic := e.detectMetaLoop(state)
 	
-	if inMetaLoop {
+if inMetaLoop {
 		log.Printf("[Dialogue] Meta-loop detected, switching to exploratory mode")
 		
 		// Get user interests for context
@@ -299,8 +299,18 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 			log.Printf("[Dialogue] User interests identified: %v", userInterests)
 		}
 		
+		// Extract recent goal descriptions to avoid repetition
+		recentGoalDescriptions := []string{}
+		recentGoals := state.CompletedGoals
+		if len(recentGoals) > 5 {
+			recentGoals = recentGoals[len(recentGoals)-5:]
+		}
+		for _, goal := range recentGoals {
+			recentGoalDescriptions = append(recentGoalDescriptions, goal.Description)
+		}
+		
 		// Create exploratory goal
-		exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, loopTopic)
+		exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, loopTopic, recentGoalDescriptions)
 		
 		// Add to state immediately
 		state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
@@ -1109,45 +1119,88 @@ func (e *Engine) detectMetaLoop(state *InternalState) (bool, string) {
 }
 
 // generateExploratoryGoal creates a curiosity-driven goal based on context
-func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []string, avoidTopic string) Goal {
+func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []string, avoidTopic string, recentGoalDescriptions []string) Goal {
 	var description string
 	var priority int
 	
 	if len(userInterests) > 0 {
-		// 80% of time: explore user interests
-		// Pick a random user interest and explore related topics
-		selectedTopic := userInterests[rand.Intn(len(userInterests))]
+		// Filter out generic terms
+		genericTerms := []string{"general", "context", "learning", "user", "curiosity", 
+		                        "personal", "interests", "data", "memory", "conversation"}
 		
-		// Generate related exploration
-		variations := []string{
-			fmt.Sprintf("Research recent developments in %s", selectedTopic),
-			fmt.Sprintf("Explore practical applications of %s", selectedTopic),
-			fmt.Sprintf("Investigate current trends in %s", selectedTopic),
-			fmt.Sprintf("Analyze emerging technologies related to %s", selectedTopic),
+		specificInterests := []string{}
+		for _, interest := range userInterests {
+			isGeneric := false
+			for _, generic := range genericTerms {
+				if interest == generic {
+					isGeneric = true
+					break
+				}
+			}
+			if !isGeneric {
+				specificInterests = append(specificInterests, interest)
+			}
 		}
 		
-		description = variations[rand.Intn(len(variations))]
-		priority = 6 // Medium priority for user-interest exploration
+		// Use specific interests if we have them
+		candidates := specificInterests
+		if len(candidates) == 0 {
+			candidates = userInterests
+		}
 		
-		log.Printf("[Dialogue] Generated user-interest exploratory goal: %s", description)
-	} else {
-		// 20% of time or when no user interests: system curiosity
-		// Broad exploratory topics
+		// Pick a topic that hasn't been explored in recent goals
+		selectedTopic := ""
+		for _, candidate := range candidates {
+			alreadyExplored := false
+			for _, recentGoal := range recentGoalDescriptions {
+				if strings.Contains(strings.ToLower(recentGoal), strings.ToLower(candidate)) {
+					alreadyExplored = true
+					break
+				}
+			}
+			if !alreadyExplored {
+				selectedTopic = candidate
+				break
+			}
+		}
+		
+		// Fallback if all explored
+		if selectedTopic == "" && len(candidates) > 0 {
+			selectedTopic = candidates[0]
+		}
+		
+		if selectedTopic != "" {
+			// Generate SPECIFIC variations
+			variations := []string{
+				fmt.Sprintf("Research how %s relates to human-AI interaction", selectedTopic),
+				fmt.Sprintf("Explore practical examples of %s in conversational AI", selectedTopic),
+				fmt.Sprintf("Investigate current approaches to %s in chatbot development", selectedTopic),
+				fmt.Sprintf("Analyze how %s contributes to natural dialogue", selectedTopic),
+			}
+			
+			description = variations[rand.Intn(len(variations))]
+			priority = 6
+			
+			log.Printf("[Dialogue] Generated user-interest exploratory goal: %s", description)
+		}
+	}
+	
+	// Fallback: conversation-focused topics
+	if description == "" {
 		exploratoryTopics := []string{
-			"Research current technological breakthroughs",
-			"Explore recent scientific discoveries",
-			"Investigate emerging global trends",
-			"Analyze developments in artificial intelligence",
-			"Research advances in renewable energy",
-			"Explore new programming paradigms",
-			"Investigate developments in space exploration",
-			"Research breakthroughs in medical science",
+			"Research how chatbots develop consistent personalities",
+			"Explore techniques for natural conversation flow in AI",
+			"Investigate how AI can express empathy and emotional intelligence",
+			"Research methods for AI to maintain conversational context",
+			"Explore how dialogue systems handle ambiguity",
+			"Investigate storytelling techniques in conversational AI",
+			"Research how AI can develop and maintain a backstory",
 		}
 		
 		description = exploratoryTopics[rand.Intn(len(exploratoryTopics))]
-		priority = 5 // Lower priority for pure curiosity
+		priority = 5
 		
-		log.Printf("[Dialogue] Generated curiosity-driven exploratory goal: %s", description)
+		log.Printf("[Dialogue] Generated conversation-focused exploratory goal: %s", description)
 	}
 	
 	return Goal{
@@ -1161,7 +1214,6 @@ func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []st
 		Actions:     []Action{},
 	}
 }
-
 
 // cosineSimilarity calculates cosine similarity between two vectors
 func cosineSimilarity(a, b []float32) float64 {

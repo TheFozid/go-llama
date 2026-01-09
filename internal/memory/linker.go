@@ -30,10 +30,15 @@ func (l *Linker) CreateLinks(ctx context.Context, memories []Memory) error {
 		return nil // Nothing to link
 	}
 
-	log.Printf("[Linker] Creating links for %d memories in cluster", len(memories))
+log.Printf("[Linker] Creating links for %d memories in cluster", len(memories))
+	
+	linksCreated := 0
+	linksSkipped := 0
 	
 	// For each memory in the cluster, link it to all others
 	for i := range memories {
+		initialLinkCount := len(memories[i].RelatedMemories)
+		
 		for j := range memories {
 			if i == j {
 				continue // Don't link to self
@@ -44,6 +49,13 @@ func (l *Linker) CreateLinks(ctx context.Context, memories []Memory) error {
 				return err
 			}
 		}
+		
+		newLinkCount := len(memories[i].RelatedMemories)
+		added := newLinkCount - initialLinkCount
+		skipped := (len(memories) - 1) - added
+		
+		linksCreated += added
+		linksSkipped += skipped
 	}
 	
 	// Update all memories in storage
@@ -54,7 +66,8 @@ func (l *Linker) CreateLinks(ctx context.Context, memories []Memory) error {
 		}
 	}
 	
-	log.Printf("[Linker] Successfully linked %d memories", len(memories))
+	log.Printf("[Linker] Completed linking: %d links created, %d skipped (already existed or at max)", 
+		linksCreated, linksSkipped)
 	return nil
 }
 

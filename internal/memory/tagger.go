@@ -194,6 +194,40 @@ Respond with JSON only (no markdown, no explanation):
 
 // extractConcepts uses LLM to extract key semantic concepts from a memory
 func (t *Tagger) extractConcepts(ctx context.Context, content string) ([]string, error) {
+	// First, try domain-specific pattern matching for conversational AI concepts
+	domainConcepts := []string{}
+	contentLower := strings.ToLower(content)
+	
+	domainPatterns := map[string][]string{
+		"personality": {"personality", "character", "persona", "traits", "backstory", "identity"},
+		"human-like-interaction": {"human-like", "natural conversation", "conversational flow", "human-to-human", "authentic"},
+		"emotional-intelligence": {"empathy", "emotional", "feelings", "sentiment", "compassion"},
+		"memory-context": {"remember", "recall", "context", "history", "past conversation", "continuity"},
+		"learning-growth": {"learning", "growth", "improvement", "development", "evolution", "adaptive"},
+		"storytelling": {"story", "narrative", "backstory", "biography", "experience", "anecdote"},
+		"conversational-skills": {"small talk", "clarification", "ambiguity", "turn-taking", "dialogue"},
+		"response-quality": {"helpfulness", "relevance", "coherence", "consistency", "naturalness"},
+	}
+	
+	for tag, patterns := range domainPatterns {
+		for _, pattern := range patterns {
+			if strings.Contains(contentLower, pattern) {
+				domainConcepts = append(domainConcepts, tag)
+				break
+			}
+		}
+	}
+	
+	// If we found domain concepts, use them
+	if len(domainConcepts) > 0 {
+		log.Printf("[Tagger] Extracted %d domain-specific concepts: %v", len(domainConcepts), domainConcepts)
+		if len(domainConcepts) > 5 {
+			domainConcepts = domainConcepts[:5]
+		}
+		return domainConcepts, nil
+	}
+	
+	// Otherwise, fall back to LLM extraction
 	prompt := fmt.Sprintf(`Extract 3-5 key concepts from this conversation.
 
 Conversation:
