@@ -155,15 +155,15 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	}
 	e.adaptiveConfig.UpdateMetrics(ctx, state, totalMemories)
 	
-// PHASE 1: Enhanced Reflection with Structured Reasoning
+	// PHASE 1: Enhanced Reflection with Structured Reasoning
 	log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
 	
 	// Check context before expensive operation
-	if cycleCtx.Err() != nil {
-		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before reflection: %w", cycleCtx.Err())
+	if ctx.Err() != nil {
+		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before reflection: %w", ctx.Err())
 	}
 	
-	reasoning, tokens, err := e.performEnhancedReflection(cycleCtx, state)
+	reasoning, tokens, err := e.performEnhancedReflection(ctx, state)
 	if err != nil {
 		return StopReasonNaturalStop, fmt.Errorf("reflection failed: %w", err)
 	}
@@ -253,11 +253,11 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	log.Printf("[Dialogue] PHASE 2: Reasoning-Driven Goal Management")
 	
 	// Check context before continuing
-	if cycleCtx.Err() != nil {
+	if ctx.Err() != nil {
 		metrics.ThoughtCount = thoughtCount
 		metrics.ActionCount = actionCount
 		metrics.TokensUsed = totalTokens
-		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before goal management: %w", cycleCtx.Err())
+		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before goal management: %w", ctx.Err())
 	}
 	
 	// Use insights from reflection to identify gaps
@@ -405,7 +405,7 @@ if inMetaLoop {
 		log.Printf("[Dialogue] PHASE 3: Goal Pursuit (%d active goals)", len(state.ActiveGoals))
 		
 		// Check context before executing actions
-		if cycleCtx.Err() != nil {
+		if ctx.Err() != nil {
 			metrics.ThoughtCount = thoughtCount
 			metrics.ActionCount = actionCount
 			metrics.TokensUsed = totalTokens
