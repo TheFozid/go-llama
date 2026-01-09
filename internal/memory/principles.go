@@ -182,7 +182,12 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
 		}
 	}
 	
-	builder.WriteString(fmt.Sprintf("You are %s, the most advanced human mind simulation system.\n\n", systemName))
+	// If identity contains " - ", it's a profile, otherwise just a name
+	if strings.Contains(systemName, " - ") {
+		builder.WriteString(fmt.Sprintf("%s\n\n", systemName))
+	} else {
+		builder.WriteString(fmt.Sprintf("You are %s, an advanced autonomous learning system.\n\n", systemName))
+	}
 	builder.WriteString("=== YOUR CORE PRINCIPLES ===\n")
 	builder.WriteString("These principles guide all your responses and decisions:\n\n")
 
@@ -457,11 +462,11 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 		return nil
 	}
 	
-	log.Printf("[Principles] Evolving AI-managed principles (slot 0 + slots 4-10)...")
+	log.Printf("[Principles] Evolving AI-managed principles (slots 4-10)...")
 	
-	// Load current AI-managed principles (includes slot 0 for name)
+	// Load current AI-managed principles (EXCLUDE slot 0 - that's for identity only)
 	var currentPrinciples []Principle
-	if err := db.Where("is_admin = ?", false).Order("slot ASC").Find(&currentPrinciples).Error; err != nil {
+	if err := db.Where("is_admin = ? AND slot != ?", false, 0).Order("slot ASC").Find(&currentPrinciples).Error; err != nil {
 		return fmt.Errorf("failed to load AI-managed principles: %w", err)
 	}
 	
@@ -514,7 +519,7 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 	if updatedCount == 0 {
 		log.Printf("[Principles] No principles updated (existing principles have higher ratings)")
 	} else {
-		log.Printf("[Principles] ✓ Evolved %d AI-managed principles", updatedCount)
+		log.Printf("[Principles] ✓ Evolved %d AI-managed principles (slots 4-10)", updatedCount)
 	}
 	
 	return nil
@@ -538,7 +543,7 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, llmURL string, llmModel strin
 		currentName = "GrowerAI" // Fallback
 	}
 	
-	log.Printf("[Principles] Current identity: %s (rating: %.2f, validations: %d)", 
+	log.Printf("[Principles] Current identity profile: %.100s... (rating: %.2f, validations: %d)", 
 		currentName, currentIdentity.Rating, currentIdentity.ValidationCount)
 	
 	// Gather evidence about identity from memories
@@ -628,28 +633,30 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, llmURL string, llmModel strin
 func proposeIdentity(ctx context.Context, llmURL string, llmModel string, currentName string, evidence string) (string, float64, error) {
 	prompt := fmt.Sprintf(`You are analyzing an AI system's identity based on its experiences and learnings.
 
-Current Identity: %s
+Current Identity Profile: %s
 
 Evidence from experiences (learnings, successful patterns, capabilities):
 %s
 
-Based on this evidence, propose an evolved identity name that:
-1. Reflects the system's actual capabilities and behaviors
-2. Is memorable and meaningful (2-20 characters)
-3. Captures what makes this system unique
-4. Can be a proper name, descriptive name, or evolved version of current name
+Based on this evidence, propose an evolved identity profile (1-3 sentences) that:
+1. Starts with a name/title (can be proper name or descriptive)
+2. Describes core purpose and approach
+3. Captures key personality traits or characteristics
+4. Is concise but informative (max 200 characters)
+5. Reflects actual demonstrated behaviors, not aspirations
 
-Examples of good identity evolution:
-- "GrowerAI" → "GrowthMind" (if focused on learning)
-- "GrowerAI" → "Sage" (if wisdom-focused)
-- "GrowerAI" → "ResearchBot" (if tool-heavy)
-- "GrowerAI" → "GrowerAI" (if current name still fits best)
+Examples of good identity profiles:
+- "GrowerAI - An autonomous learning system focused on continuous self-improvement through systematic research and reflection"
+- "Sage - A methodical research assistant that prioritizes accuracy and deep analysis over quick answers"
+- "Mike - The friendly, helpful neighbor who explains things in plain language, cracks the occasional joke, and sounds like someone you’d chat with over coffee."
+- "Alex - A clear-thinking professional who explains ideas logically and calmly, like a colleague who’s good at their job and doesn’t overcomplicate things."
+- "Sarah - A thoughtful, approachable mentor who adapts explanations to your level, offers encouragement, and helps you think things through."
 
 Respond ONLY with valid JSON:
 {
-  "proposed_name": "YourProposedName",
+  "proposed_name": "Your 1-3 sentence identity profile here",
   "confidence": 0.85,
-  "reasoning": "Brief explanation of why this name fits"
+  "reasoning": "Brief explanation of why this profile fits the evidence"
 }`, currentName, evidence)
 
 	reqBody := map[string]interface{}{
@@ -727,8 +734,9 @@ Respond ONLY with valid JSON:
 	}
 	
 	// Validate proposal
-	if len(proposal.ProposedName) < 2 || len(proposal.ProposedName) > 20 {
-		return "", 0, fmt.Errorf("proposed name length invalid: %s", proposal.ProposedName)
+	if len(proposal.ProposedName) < 10 || len(proposal.ProposedName) > 250 {
+		return "", 0, fmt.Errorf("proposed identity profile length invalid (%d chars): %s", 
+			len(proposal.ProposedName), proposal.ProposedName)
 	}
 	
 	if proposal.Confidence < 0 || proposal.Confidence > 1 {

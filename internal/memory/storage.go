@@ -1102,24 +1102,25 @@ return &v
 
 // FindUntaggedMemories retrieves memories that haven't been tagged yet (OutcomeTag is empty)
 func (s *Storage) FindUntaggedMemories(ctx context.Context, limit int) ([]*Memory, error) {
-if limit <= 0 {
-limit = 100
-}
+	if limit <= 0 {
+		limit = 100
+	}
 
-// Query for memories where outcome_tag is empty or null
-scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
-	CollectionName: s.CollectionName,
-	Filter: &qdrant.Filter{
-		Must: []*qdrant.Condition{
-			{
-				ConditionOneOf: &qdrant.Condition_IsEmpty{
-					IsEmpty: &qdrant.IsEmptyCondition{
-						Key: "outcome_tag",
+	// Query for memories where outcome_tag is empty string OR missing
+	scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: s.CollectionName,
+		Filter: &qdrant.Filter{
+			Should: []*qdrant.Condition{
+				{
+					ConditionOneOf: &qdrant.Condition_IsEmpty{
+						IsEmpty: &qdrant.IsEmptyCondition{
+							Key: "outcome_tag",
+						},
 					},
 				},
+				qdrant.NewMatch("outcome_tag", ""),
 			},
 		},
-	},
 	Limit:      qdrant.PtrOf(uint32(limit)),
 	WithPayload: qdrant.NewWithPayload(true),
 	WithVectors: &qdrant.WithVectorsSelector{

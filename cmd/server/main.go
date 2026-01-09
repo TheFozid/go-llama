@@ -133,6 +133,14 @@ func main() {
 					storageLimits,
 					compressionWeights,
 				)
+				// Start linking worker
+				linkWorker := memory.NewLinkWorker(
+					storage,
+					linker,
+					cfg.GrowerAI.Linking.WorkerScheduleHours,
+				)
+				go linkWorker.Start()
+
 				go worker.Start()
 
 				log.Printf("[Main] ✓ GrowerAI compression worker started (schedule: every %d hours)",

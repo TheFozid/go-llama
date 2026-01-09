@@ -153,13 +153,27 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
 		if err != nil {
 			log.Printf("[GrowerAI] WARNING: Failed to generate memory embedding: %v", err)
 		} else {
-			importanceScore := 0.5
-			if len(content) > 100 {
-				importanceScore += 0.2
+			// Calculate message depth (simple heuristic from DB)
+			var messageCount int64
+			db.DB.Model(&chat.Message{}).Where("chat_id = ?", chatInst.ID).Count(&messageCount)
+			messageDepth := int(messageCount) / 2 // Divide by 2 (user + bot pairs)
+			if messageDepth < 1 {
+				messageDepth = 1
 			}
-			if len(results) > 0 {
-				importanceScore += 0.1
-			}
+			
+			// Use enhanced importance calculator
+			importanceScore := memory.EvaluateImportance(content, len(results), messageDepth)
+			
+			// Get breakdown for logging
+			breakdown := memory.GetComplexityBreakdown(content, len(results), messageDepth)
+			log.Printf("[GrowerAI] Importance score: %.3f (length=%.2f, questions=%.2f, complexity=%.2f, context=%.2f, depth=%.2f, imperative=%.2f)",
+				importanceScore,
+				breakdown["length"],
+				breakdown["questions"],
+				breakdown["complexity"],
+				breakdown["context"],
+				breakdown["depth"],
+				breakdown["imperative"])
 			
 			mem := &memory.Memory{
 				Content:         memoryContent,

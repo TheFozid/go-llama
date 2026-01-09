@@ -100,6 +100,13 @@
       "min_rating_threshold": 0.75,
       "extraction_limit": 1000
     },
+	"linking": {
+      "similarity_threshold": 0.70,
+      "max_links_per_memory": 10,
+      "link_decay_rate": 0.02,
+      "co_occurrence_throttle": 60,
+      "worker_schedule_hours": 6
+	}
     "personality": {
       "good_behavior_bias": 0.60,
       "allow_disagreement": true,

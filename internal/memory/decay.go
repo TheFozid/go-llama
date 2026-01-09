@@ -198,6 +198,13 @@ func (w *DecayWorker) runCompressionCycle() {
 	timeSinceLastEvolution := time.Since(w.lastPrincipleEvolution)
 	principleInterval := time.Duration(w.principleScheduleHours) * time.Hour
 	shouldEvolve := timeSinceLastEvolution >= principleInterval
+	
+	// Log detailed timing info for debugging
+	log.Printf("[DecayWorker] Principle evolution check: last=%s, elapsed=%s, interval=%s, shouldEvolve=%v",
+		w.lastPrincipleEvolution.Format("2006-01-02 15:04:05"),
+		timeSinceLastEvolution.Round(time.Minute),
+		principleInterval,
+		shouldEvolve)
 	w.evolutionMutex.Unlock()
 	
 	if shouldEvolve {

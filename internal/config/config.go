@@ -103,6 +103,7 @@ type GrowerAIConfig struct {
 		MaxLinksPerMemory      int     `json:"max_links_per_memory"`     // Limit graph size
 		LinkDecayRate          float64 `json:"link_decay_rate"`          // How fast unused links weaken
 		CoOccurrenceThrottle   int     `json:"co_occurrence_throttle"`   // Minutes between counting same co-occurrence
+		WorkerScheduleHours    int     `json:"worker_schedule_hours"`    // How often link worker runs
 	} `json:"linking"`
 	// Phase 3.1: Internal Dialogue System
 	Dialogue struct {
@@ -261,8 +262,8 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	if gai.Linking.LinkDecayRate == 0 {
 		gai.Linking.LinkDecayRate = 0.02
 	}
-	if gai.Linking.CoOccurrenceThrottle == 0 {
-		gai.Linking.CoOccurrenceThrottle = 60 // 60 minutes (1 hour) default
+	if gai.Linking.WorkerScheduleHours == 0 {
+		gai.Linking.WorkerScheduleHours = 6 // Run every 6 hours by default
 	}
 
 	// Dialogue system defaults (Phase 3.1)

@@ -594,6 +594,7 @@ func (e *Engine) reflectOnRecentActivity(ctx context.Context) (string, int, erro
 		// Don't filter by collective - we want everything
 		Limit:             10,
 		MinScore:          0.3,
+		IncludeCollective: true,
 	}
 	
 	results, err := e.storage.Search(ctx, query, embedding)
@@ -632,6 +633,7 @@ func (e *Engine) identifyKnowledgeGaps(ctx context.Context) ([]string, error) {
 	query := memory.RetrievalQuery{
 		Limit:    10,
 		MinScore: 0.4,
+		IncludeCollective: true,
 	}
 	
 	results, err := e.storage.Search(ctx, query, embedding)
@@ -1203,6 +1205,7 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	query := memory.RetrievalQuery{
 		Limit:    8,
 		MinScore: 0.3,
+		IncludeCollective: true,
 	}
 	
 	results, err := e.storage.Search(ctx, query, embedding)
@@ -1275,8 +1278,115 @@ Keep it focused and actionable.`, memoryContext, goalsContext)
 	}
 	
 	// Call LLM with structured reasoning
-	return e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	reasoning, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	if err != nil {
+		return nil, tokens, err
+	}
+	
+	// Override LLM's confidence with calculated confidence based on actual metrics
+	calculatedConfidence := e.calculateConfidence(ctx, state)
+	
+	// If LLM provided self-assessment, adjust the confidence
+	if reasoning.SelfAssessment != nil {
+		// Allow LLM to adjust ±0.2 from calculated baseline
+		llmConfidence := reasoning.SelfAssessment.Confidence
+		adjustment := llmConfidence - 0.5 // LLM's deviation from neutral
+		
+		// Apply adjustment (capped at ±0.2)
+		if adjustment > 0.2 {
+			adjustment = 0.2
+		} else if adjustment < -0.2 {
+			adjustment = -0.2
+		}
+		
+		finalConfidence := calculatedConfidence + adjustment
+		
+		// Clamp to valid range
+		if finalConfidence < 0.1 {
+			finalConfidence = 0.1
+		}
+		if finalConfidence > 0.9 {
+			finalConfidence = 0.9
+		}
+		
+		log.Printf("[Dialogue] Confidence: calculated=%.2f, llm_raw=%.2f, adjustment=%.2f, final=%.2f",
+			calculatedConfidence, llmConfidence, adjustment, finalConfidence)
+		
+		reasoning.SelfAssessment.Confidence = finalConfidence
+	} else {
+		// No self-assessment from LLM, use calculated confidence
+		reasoning.SelfAssessment = &SelfAssessment{
+			Confidence: calculatedConfidence,
+		}
+		log.Printf("[Dialogue] Confidence: calculated=%.2f (no LLM assessment)", calculatedConfidence)
+	}
+	
+	return reasoning, tokens, nil
 }
+
+// calculateConfidence computes confidence score based on actual metrics
+func (e *Engine) calculateConfidence(ctx context.Context, state *InternalState) float64 {
+	// Start with baseline confidence
+	confidence := 0.5
+	
+	// Factor 1: Goal completion rate (last 10 goals)
+	recentGoals := state.CompletedGoals
+	if len(recentGoals) > 10 {
+		recentGoals = recentGoals[len(recentGoals)-10:]
+	}
+	
+	if len(recentGoals) > 0 {
+		successCount := 0
+		for _, goal := range recentGoals {
+			if goal.Outcome == "good" {
+				successCount++
+			}
+		}
+		goalSuccessRate := float64(successCount) / float64(len(recentGoals))
+		confidence += (goalSuccessRate - 0.5) * 0.3 // ±0.15 based on goal success
+	}
+	
+	// Factor 2: Recent memory retrieval (are we finding relevant context?)
+	embedding, err := e.embedder.Embed(ctx, "recent activity patterns success")
+	if err == nil {
+		query := memory.RetrievalQuery{
+			Limit:             5,
+			MinScore:          0.5,
+			IncludeCollective: true,
+		}
+		results, err := e.storage.Search(ctx, query, embedding)
+		if err == nil && len(results) > 0 {
+			// Average relevance score of retrieved memories
+			avgScore := 0.0
+			for _, result := range results {
+				avgScore += result.Score
+			}
+			avgScore /= float64(len(results))
+			confidence += (avgScore - 0.5) * 0.2 // ±0.1 based on retrieval quality
+		}
+	}
+	
+	// Factor 3: Active goals progress
+	if len(state.ActiveGoals) > 0 {
+		totalProgress := 0.0
+		for _, goal := range state.ActiveGoals {
+			totalProgress += goal.Progress
+		}
+		avgProgress := totalProgress / float64(len(state.ActiveGoals))
+		confidence += (avgProgress - 0.5) * 0.2 // ±0.1 based on active progress
+	}
+	
+	// Clamp to 0.1-0.9 range (never completely certain or uncertain)
+	if confidence < 0.1 {
+		confidence = 0.1
+	}
+	if confidence > 0.9 {
+		confidence = 0.9
+	}
+	
+	return confidence
+}
+
 
 // createGoalFromProposal creates a Goal from an LLM proposal
 func (e *Engine) createGoalFromProposal(proposal GoalProposal) Goal {
