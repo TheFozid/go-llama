@@ -3,7 +3,6 @@ package memory
 import (
 	"regexp"
 	"strings"
-	"unicode"
 )
 
 // EvaluateImportance calculates importance score for a memory based on multiple factors
