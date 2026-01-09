@@ -155,13 +155,15 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	}
 	e.adaptiveConfig.UpdateMetrics(ctx, state, totalMemories)
 	
-	// PHASE 1: Enhanced Reflection with Structured Reasoning
-	log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
-
-	// PHASE 1: Enhanced Reflection with Structured Reasoning
+// PHASE 1: Enhanced Reflection with Structured Reasoning
 	log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
 	
-	reasoning, tokens, err := e.performEnhancedReflection(ctx, state)
+	// Check context before expensive operation
+	if cycleCtx.Err() != nil {
+		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before reflection: %w", cycleCtx.Err())
+	}
+	
+	reasoning, tokens, err := e.performEnhancedReflection(cycleCtx, state)
 	if err != nil {
 		return StopReasonNaturalStop, fmt.Errorf("reflection failed: %w", err)
 	}
@@ -249,6 +251,14 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	
 	// PHASE 2: Reasoning-Driven Goal Management
 	log.Printf("[Dialogue] PHASE 2: Reasoning-Driven Goal Management")
+	
+	// Check context before continuing
+	if cycleCtx.Err() != nil {
+		metrics.ThoughtCount = thoughtCount
+		metrics.ActionCount = actionCount
+		metrics.TokensUsed = totalTokens
+		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before goal management: %w", cycleCtx.Err())
+	}
 	
 	// Use insights from reflection to identify gaps
 	gaps := reasoning.KnowledgeGaps.ToSlice()
@@ -393,6 +403,15 @@ if inMetaLoop {
 	// PHASE 3: Goal Pursuit (if we have active goals)
 	if len(state.ActiveGoals) > 0 {
 		log.Printf("[Dialogue] PHASE 3: Goal Pursuit (%d active goals)", len(state.ActiveGoals))
+		
+		// Check context before executing actions
+		if cycleCtx.Err() != nil {
+			metrics.ThoughtCount = thoughtCount
+			metrics.ActionCount = actionCount
+			metrics.TokensUsed = totalTokens
+			log.Printf("[Dialogue] Cycle timeout reached during goal pursuit")
+			return StopReasonNaturalStop, nil
+		}
 		
 		// Sort goals by priority
 		sortedGoals := sortGoalsByPriority(state.ActiveGoals)
@@ -1282,6 +1301,16 @@ func (e *Engine) detectPatterns(ctx context.Context) ([]string, error) {
 
 // callLLM makes a request to the reasoning model
 func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error) {
+	// Get adaptive timeout
+	timeout := time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second
+	if timeout < 60*time.Second {
+		timeout = 60 * time.Second // Minimum 60s
+	}
+	
+	// Create timeout context
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
 		"max_tokens": e.contextSize,
@@ -1304,18 +1333,41 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
 	}
 	
-	req, err := http.NewRequestWithContext(ctx, "POST", e.llmURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(timeoutCtx, "POST", e.llmURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	client := &http.Client{Timeout: 300 * time.Second}
+	// Configure transport with response header timeout
+	transport := &http.Transport{
+		ResponseHeaderTimeout: 30 * time.Second, // Fail fast if LLM doesn't start
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          10,
+		DisableKeepAlives:     false,
+	}
+	
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+	
+	log.Printf("[Dialogue] LLM call started (timeout: %s, prompt length: %d chars)", timeout, len(prompt))
+	startTime := time.Now()
+	
 	resp, err := client.Do(req)
 	if err != nil {
+		elapsed := time.Since(startTime)
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			log.Printf("[Dialogue] LLM timeout after %s", elapsed)
+			return "", 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+		}
+		log.Printf("[Dialogue] LLM request failed after %s: %v", elapsed, err)
 		return "", 0, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+	
+	log.Printf("[Dialogue] LLM response received in %s", time.Since(startTime))
 	
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -1349,6 +1401,16 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 
 // callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
+	// Get adaptive timeout (structured reasoning may take longer)
+	timeout := time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second
+	if timeout < 120*time.Second {
+		timeout = 120 * time.Second // Minimum 2 minutes for structured reasoning
+	}
+	
+	// Create timeout context
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	
 systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY valid JSON.
 
 CRITICAL: Check each array has BOTH [ and ] brackets.
@@ -1397,23 +1459,47 @@ OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 		"stream":      false,
 	}
 	
-	jsonData, err := json.Marshal(reqBody)
+jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
 	}
 	
-	req, err := http.NewRequestWithContext(ctx, "POST", e.llmURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(timeoutCtx, "POST", e.llmURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	client := &http.Client{Timeout: 300 * time.Second}
+	// Configure transport with response header timeout
+	transport := &http.Transport{
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          10,
+		DisableKeepAlives:     false,
+	}
+	
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+	
+	log.Printf("[Dialogue] Structured reasoning LLM call started (timeout: %s, prompt length: %d chars)", 
+		timeout, len(prompt))
+	startTime := time.Now()
+	
 	resp, err := client.Do(req)
 	if err != nil {
+		elapsed := time.Since(startTime)
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			log.Printf("[Dialogue] Structured reasoning LLM timeout after %s", elapsed)
+			return nil, 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+		}
+		log.Printf("[Dialogue] Structured reasoning LLM request failed after %s: %v", elapsed, err)
 		return nil, 0, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+	
+	log.Printf("[Dialogue] Structured reasoning LLM response received in %s", time.Since(startTime))
 	
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -1493,6 +1579,15 @@ OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 
 // executeAction executes a tool-based action
 func (e *Engine) executeAction(ctx context.Context, action *Action) (string, error) {
+	log.Printf("[Dialogue] Executing action with tool '%s' (description: %s)", 
+		action.Tool, truncate(action.Description, 60))
+	startTime := time.Now()
+	
+	// Check context before starting
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("action cancelled before execution: %w", ctx.Err())
+	}
+	
 	// Map action tool to actual tool execution
 	switch action.Tool {
 case ActionToolSearch:
@@ -1502,14 +1597,22 @@ case ActionToolSearch:
 		"query": action.Description,
 	}
 	
+	log.Printf("[Dialogue] Calling search tool with query: %s", truncate(action.Description, 80))
 	result, err := e.toolRegistry.ExecuteIdle(ctx, tools.ToolNameSearch, params)
+	
+	elapsed := time.Since(startTime)
+	
 	if err != nil {
+		log.Printf("[Dialogue] Search tool failed after %s: %v", elapsed, err)
 		return "", fmt.Errorf("search tool failed: %w", err)
 	}
 	
 	if !result.Success {
+		log.Printf("[Dialogue] Search returned failure after %s: %s", elapsed, result.Error)
 		return "", fmt.Errorf("search failed: %s", result.Error)
 	}
+	
+	log.Printf("[Dialogue] Search completed successfully in %s", elapsed)
 	
 	// NEW: Extract URLs from search results and create parse actions
 	// This connects search → web parsing automatically
@@ -1595,14 +1698,23 @@ case ActionToolWebParse,
 	}
 	
 	// Execute the appropriate web parse tool
+	log.Printf("[Dialogue] Calling web parse tool '%s' for URL: %s", action.Tool, truncate(url, 80))
 	result, err := e.toolRegistry.ExecuteIdle(ctx, action.Tool, params)
+	
+	elapsed := time.Since(startTime)
+	
 	if err != nil {
+		log.Printf("[Dialogue] Web parse tool failed after %s: %v", elapsed, err)
 		return "", fmt.Errorf("web parse tool failed: %w", err)
 	}
 	
 	if !result.Success {
+		log.Printf("[Dialogue] Web parse returned failure after %s: %s", elapsed, result.Error)
 		return "", fmt.Errorf("web parse failed: %s", result.Error)
 	}
+	
+	log.Printf("[Dialogue] Web parse completed successfully in %s (%d chars output)", 
+		elapsed, len(result.Output))
 	
 	return result.Output, nil
 		
@@ -1612,11 +1724,15 @@ case ActionToolWebParse,
 		
 	case ActionToolMemoryConsolidation:
 		// This is internal, not a real tool
+		elapsed := time.Since(startTime)
+		log.Printf("[Dialogue] Memory consolidation completed in %s", elapsed)
 		return "Memory consolidation completed", nil
 		
 	default:
 		return "", fmt.Errorf("unknown tool: %s", action.Tool)
 	}
+	
+	// Note: Result logging happens in each case block above
 }
 
 // Helper functions

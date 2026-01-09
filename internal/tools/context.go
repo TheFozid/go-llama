@@ -42,18 +42,21 @@ func (cr *ContextualRegistry) ExecuteInteractive(ctx context.Context, toolName s
 		MaxResults:    config.MaxResultsInteractive,
 	}
 
+	log.Printf("[ContextualRegistry] ExecuteInteractive: tool=%s, timeout=%s, context=user_interaction", 
+		toolName, config.TimeoutInteractive)
+
 	return cr.registry.Execute(ctx, toolName, params, execCtx)
 }
 
 // ExecuteIdle runs a tool in idle exploration mode
-// - Longer timeouts (60s default)
+// - Longer timeouts (240s default)
 // - More results (10-20)
 // - Thoroughness over speed
 func (cr *ContextualRegistry) ExecuteIdle(ctx context.Context, toolName string, params map[string]interface{}) (*ToolResult, error) {
 	config, exists := cr.configs[toolName]
 	if !exists {
 		config = ToolConfig{
-			TimeoutIdle:    245 * time.Second,
+			TimeoutIdle:    240 * time.Second,
 			MaxResultsIdle: 20,
 		}
 	}
@@ -66,6 +69,9 @@ func (cr *ContextualRegistry) ExecuteIdle(ctx context.Context, toolName string, 
 		Timeout:       config.TimeoutIdle,
 		MaxResults:    config.MaxResultsIdle,
 	}
+
+	log.Printf("[ContextualRegistry] ExecuteIdle: tool=%s, timeout=%s, context=idle_exploration", 
+		toolName, config.TimeoutIdle)
 
 	return cr.registry.Execute(ctx, toolName, params, execCtx)
 }

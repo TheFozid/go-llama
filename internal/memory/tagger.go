@@ -18,6 +18,13 @@ type OutcomeAnalysis struct {
 	Reason     string  `json:"reason"`     // Brief explanation
 }
 
+// Timeout configuration for tagger operations
+const (
+	taggerBaseTimeout = 90 * time.Second
+	taggerMaxRetries  = 3
+	taggerRetryDelay  = 5 * time.Second
+)
+
 // Tagger handles background tagging of memories
 type Tagger struct {
 	llmURL    string
@@ -57,18 +64,20 @@ func (t *Tagger) TagMemories(ctx context.Context, storage *Storage) error {
 	for i, mem := range untagged {
 		log.Printf("[Tagger] Processing memory %d/%d (id=%s)", i+1, len(untagged), mem.ID)
 
-		// Analyze outcome
+// Analyze outcome with retry logic
 		outcome, err := t.analyzeOutcome(ctx, mem.Content)
 		if err != nil {
-			log.Printf("[Tagger] WARNING: Failed to analyze outcome for memory %s: %v", mem.ID, err)
+			log.Printf("[Tagger] WARNING: Failed to analyze outcome for memory %s after retries: %v", mem.ID, err)
+			// Skip this memory but continue processing others
 			continue
 		}
 
-		// Extract concepts
+		// Extract concepts with retry logic
 		concepts, err := t.extractConcepts(ctx, mem.Content)
 		if err != nil {
-			log.Printf("[Tagger] WARNING: Failed to extract concepts for memory %s: %v", mem.ID, err)
-			concepts = []string{} // Continue with empty concepts
+			log.Printf("[Tagger] WARNING: Failed to extract concepts for memory %s after retries: %v", mem.ID, err)
+			// Continue with empty concepts - this is non-critical
+			concepts = []string{}
 		}
 
 		// Update memory fields (but preserve embedding!)
@@ -103,7 +112,53 @@ func (t *Tagger) TagMemories(ctx context.Context, storage *Storage) error {
 }
 
 // analyzeOutcome uses LLM to determine if a conversation was good/bad/neutral
+// Includes retry logic with exponential backoff for timeout resilience
 func (t *Tagger) analyzeOutcome(ctx context.Context, content string) (*OutcomeAnalysis, error) {
+	var lastErr error
+	
+	for attempt := 1; attempt <= taggerMaxRetries; attempt++ {
+		// Create timeout context for this attempt
+		timeoutCtx, cancel := context.WithTimeout(ctx, taggerBaseTimeout)
+		
+		result, err := t.analyzeOutcomeWithTimeout(timeoutCtx, content)
+		cancel() // Clean up immediately
+		
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("[Tagger] ✓ Succeeded on attempt %d/%d", attempt, taggerMaxRetries)
+			}
+			return result, nil
+		}
+		
+		lastErr = err
+		
+		// Check if it's a timeout error
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			if attempt < taggerMaxRetries {
+				backoffDelay := taggerRetryDelay * time.Duration(attempt)
+				log.Printf("[Tagger] Attempt %d/%d timed out after %s, retrying in %s...", 
+					attempt, taggerMaxRetries, taggerBaseTimeout, backoffDelay)
+				
+				// Wait before retry (with exponential backoff)
+				select {
+				case <-time.After(backoffDelay):
+					continue
+				case <-ctx.Done():
+					return nil, fmt.Errorf("operation cancelled during retry backoff: %w", ctx.Err())
+				}
+			}
+		} else {
+			// Non-timeout error (e.g., network, JSON parse) - don't retry
+			log.Printf("[Tagger] Non-timeout error on attempt %d, not retrying: %v", attempt, err)
+			return nil, err
+		}
+	}
+	
+	return nil, fmt.Errorf("failed after %d attempts: %w", taggerMaxRetries, lastErr)
+}
+
+// analyzeOutcomeWithTimeout is the actual implementation (renamed from analyzeOutcome)
+func (t *Tagger) analyzeOutcomeWithTimeout(ctx context.Context, content string) (*OutcomeAnalysis, error) {
 	prompt := fmt.Sprintf(`Analyze this conversation and determine the outcome.
 
 Conversation:
@@ -144,8 +199,32 @@ Respond with JSON only (no markdown, no explanation):
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+// Use context timeout instead of client timeout
+	// Add transport configuration for better timeout handling
+	transport := &http.Transport{
+		ResponseHeaderTimeout: 30 * time.Second, // Fail fast if LLM doesn't start responding
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          10,
+	}
+	
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   taggerBaseTimeout, // Use our configured timeout
+	}
+	
+	log.Printf("[Tagger] Calling LLM for outcome analysis (timeout: %s)", taggerBaseTimeout)
+	startTime := time.Now()
+	
 	resp, err := client.Do(req)
+	if err != nil {
+		elapsed := time.Since(startTime)
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+		}
+		return nil, fmt.Errorf("LLM request failed after %s: %w", elapsed, err)
+	}
+	
+	log.Printf("[Tagger] LLM response received in %s", time.Since(startTime))
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +272,53 @@ Respond with JSON only (no markdown, no explanation):
 }
 
 // extractConcepts uses LLM to extract key semantic concepts from a memory
+// Includes retry logic with exponential backoff for timeout resilience
 func (t *Tagger) extractConcepts(ctx context.Context, content string) ([]string, error) {
+	var lastErr error
+	
+	for attempt := 1; attempt <= taggerMaxRetries; attempt++ {
+		// Create timeout context for this attempt
+		timeoutCtx, cancel := context.WithTimeout(ctx, taggerBaseTimeout)
+		
+		result, err := t.extractConceptsWithTimeout(timeoutCtx, content)
+		cancel() // Clean up immediately
+		
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("[Tagger] ✓ Concept extraction succeeded on attempt %d/%d", attempt, taggerMaxRetries)
+			}
+			return result, nil
+		}
+		
+		lastErr = err
+		
+		// Check if it's a timeout error
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			if attempt < taggerMaxRetries {
+				backoffDelay := taggerRetryDelay * time.Duration(attempt)
+				log.Printf("[Tagger] Concept extraction attempt %d/%d timed out, retrying in %s...", 
+					attempt, taggerMaxRetries, backoffDelay)
+				
+				// Wait before retry (with exponential backoff)
+				select {
+				case <-time.After(backoffDelay):
+					continue
+				case <-ctx.Done():
+					return nil, fmt.Errorf("operation cancelled during retry backoff: %w", ctx.Err())
+				}
+			}
+		} else {
+			// Non-timeout error - don't retry
+			log.Printf("[Tagger] Non-timeout error in concept extraction, not retrying: %v", err)
+			return nil, err
+		}
+	}
+	
+	return nil, fmt.Errorf("concept extraction failed after %d attempts: %w", taggerMaxRetries, lastErr)
+}
+
+// extractConceptsWithTimeout is the actual implementation (renamed from extractConcepts)
+func (t *Tagger) extractConceptsWithTimeout(ctx context.Context, content string) ([]string, error) {
 	// First, try domain-specific pattern matching for conversational AI concepts
 	domainConcepts := []string{}
 	contentLower := strings.ToLower(content)
@@ -267,11 +392,31 @@ Respond with JSON array only (no markdown, no explanation).`, content)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+// Use context timeout with transport configuration
+	transport := &http.Transport{
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          10,
+	}
+	
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   taggerBaseTimeout,
+	}
+	
+	log.Printf("[Tagger] Calling LLM for concept extraction (timeout: %s)", taggerBaseTimeout)
+	startTime := time.Now()
+	
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		elapsed := time.Since(startTime)
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+		}
+		return nil, fmt.Errorf("LLM request failed after %s: %w", elapsed, err)
 	}
+	
+	log.Printf("[Tagger] Concept extraction response received in %s", time.Since(startTime))
 	defer resp.Body.Close()
 
 	var llmResp struct {

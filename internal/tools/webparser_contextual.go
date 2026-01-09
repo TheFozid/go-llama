@@ -30,17 +30,29 @@ func NewWebParserContextualTool(userAgent string, llmURL string, llmModel string
 		timeout = 241 * time.Second
 	}
 
-	// LLM timeout should be generous for contextual extraction
-	llmTimeout := timeout
+	// LLM timeout should be 80% of tool timeout to allow cleanup time
+	llmTimeout := timeout * 8 / 10
 	if llmTimeout < 120*time.Second {
 		llmTimeout = 120 * time.Second // Minimum 2 minutes for contextual analysis
+	}
+	
+	// Configure HTTP transport for better timeout handling
+	transport := &http.Transport{
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second, // Fail fast if LLM doesn't start responding
+		DisableKeepAlives:     false,
 	}
 	
 	return &WebParserContextualTool{
 		client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
 		llmURL:        llmURL,
 		llmModel:      llmModel,
-		llmClient:     &http.Client{Timeout: llmTimeout},
+		llmClient:     &http.Client{
+			Timeout:   llmTimeout,
+			Transport: transport,
+		},
 		config:        config,
 		maxPageSizeMB: maxPageSizeMB,
 	}
@@ -120,12 +132,28 @@ func (t *WebParserContextualTool) Execute(ctx context.Context, params map[string
 		}, fmt.Errorf("page too large for contextual summary")
 	}
 
-	// Generate contextual summary using LLM
-	summary, tokensUsed, err := t.extractContextualInfo(ctx, content, purpose, focusAreas)
-	if err != nil {
+// Check if context is already cancelled before expensive LLM call
+	if ctx.Err() != nil {
 		return &ToolResult{
 			Success:  false,
-			Error:    fmt.Sprintf("Failed to extract information: %v", err),
+			Error:    fmt.Sprintf("Operation cancelled before extraction: %v", ctx.Err()),
+			Duration: time.Since(startTime),
+		}, ctx.Err()
+	}
+	
+	// Generate contextual summary using LLM
+	log.Printf("[WebParser] Beginning LLM extraction (page size: %d tokens)", content.EstimatedTokens)
+	summary, tokensUsed, err := t.extractContextualInfo(ctx, content, purpose, focusAreas)
+	if err != nil {
+		// Check if this was a timeout
+		errMsg := fmt.Sprintf("Failed to extract information: %v", err)
+		if ctx.Err() == context.DeadlineExceeded {
+			errMsg = fmt.Sprintf("Extraction timed out after %s: %v", time.Since(startTime), err)
+		}
+		
+		return &ToolResult{
+			Success:  false,
+			Error:    errMsg,
 			Duration: time.Since(startTime),
 		}, err
 	}
@@ -153,6 +181,10 @@ func (t *WebParserContextualTool) Execute(ctx context.Context, params map[string
 
 // extractContextualInfo uses LLM to extract relevant information based on purpose
 func (t *WebParserContextualTool) extractContextualInfo(ctx context.Context, content *ParsedContent, purpose string, focusAreas string) (string, int, error) {
+	log.Printf("[WebParser] Starting contextual extraction (URL: %s, purpose: %s)", 
+		content.URL, truncateString(purpose, 60))
+	startTime := time.Now()
+	
 	// Build contextual prompt
 	var promptBuilder strings.Builder
 	
@@ -214,17 +246,28 @@ func (t *WebParserContextualTool) extractContextualInfo(ctx context.Context, con
 		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", t.llmURL, bytes.NewBuffer(jsonData))
+req, err := http.NewRequestWithContext(ctx, "POST", t.llmURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	log.Printf("[WebParser] Sending LLM request (timeout: %s)", t.llmClient.Timeout)
+	llmStartTime := time.Now()
+	
 	resp, err := t.llmClient.Do(req)
 	if err != nil {
+		elapsed := time.Since(llmStartTime)
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("[WebParser] LLM request timed out after %s", elapsed)
+			return "", 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+		}
+		log.Printf("[WebParser] LLM request failed after %s: %v", elapsed, err)
 		return "", 0, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+	
+	log.Printf("[WebParser] LLM response received in %s", time.Since(llmStartTime))
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -250,10 +293,22 @@ func (t *WebParserContextualTool) extractContextualInfo(ctx context.Context, con
 		return "", 0, fmt.Errorf("no choices returned from LLM")
 	}
 
-	extracted := strings.TrimSpace(result.Choices[0].Message.Content)
+extracted := strings.TrimSpace(result.Choices[0].Message.Content)
 	tokensUsed := result.Usage.TotalTokens
 
+	totalDuration := time.Since(startTime)
+	log.Printf("[WebParser] Contextual extraction complete in %s (%d tokens)", 
+		totalDuration, tokensUsed)
+
 	return extracted, tokensUsed, nil
+}
+
+// truncateString helper for logging
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // truncateForPrompt limits content size for LLM prompt
