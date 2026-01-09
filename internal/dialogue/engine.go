@@ -1341,7 +1341,7 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	
 	// Configure transport with response header timeout
 	transport := &http.Transport{
-		ResponseHeaderTimeout: 30 * time.Second, // Fail fast if LLM doesn't start
+		ResponseHeaderTimeout: 90 * time.Second, // Fail fast if LLM doesn't start
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConns:          10,
 		DisableKeepAlives:     false,
@@ -1472,7 +1472,7 @@ jsonData, err := json.Marshal(reqBody)
 	
 	// Configure transport with response header timeout
 	transport := &http.Transport{
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: 90 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConns:          10,
 		DisableKeepAlives:     false,
