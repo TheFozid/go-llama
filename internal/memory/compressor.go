@@ -178,8 +178,42 @@ func (c *Compressor) CompressCluster(ctx context.Context, cluster []Memory, targ
 	return &merged, nil
 }
 
-// extractConceptTags uses LLM to extract semantic tags from content
+// extractConceptTags uses pattern matching and LLM to extract semantic tags from content
 func (c *Compressor) extractConceptTags(ctx context.Context, content string) ([]string, error) {
+	// First, try domain-specific pattern matching for conversational AI concepts
+	domainConcepts := []string{}
+	contentLower := strings.ToLower(content)
+	
+	domainPatterns := map[string][]string{
+		"personality":            {"personality", "character", "persona", "traits", "backstory", "identity"},
+		"human-like-interaction": {"human-like", "natural conversation", "conversational flow", "human-to-human", "authentic"},
+		"emotional-intelligence": {"empathy", "emotional", "feelings", "sentiment", "compassion"},
+		"memory-context":         {"remember", "recall", "context", "history", "past conversation", "continuity"},
+		"learning-growth":        {"learning", "growth", "improvement", "development", "evolution", "adaptive"},
+		"storytelling":           {"story", "narrative", "backstory", "biography", "experience", "anecdote"},
+		"conversational-skills":  {"small talk", "clarification", "ambiguity", "turn-taking", "dialogue"},
+		"response-quality":       {"helpfulness", "relevance", "coherence", "consistency", "naturalness"},
+	}
+	
+	for tag, patterns := range domainPatterns {
+		for _, pattern := range patterns {
+			if strings.Contains(contentLower, pattern) {
+				domainConcepts = append(domainConcepts, tag)
+				break
+			}
+		}
+	}
+	
+	// If we found domain concepts, use them
+	if len(domainConcepts) > 0 {
+		log.Printf("[Compressor] Extracted %d domain-specific concepts: %v", len(domainConcepts), domainConcepts)
+		if len(domainConcepts) > 5 {
+			domainConcepts = domainConcepts[:5]
+		}
+		return domainConcepts, nil
+	}
+	
+	// Otherwise, fall back to LLM extraction for generic content
 	prompt := fmt.Sprintf("Extract 3-5 single-word concept tags that best describe this content. Return ONLY the tags separated by commas, nothing else:\n\n%s", content)
 	
 	response, err := c.callLLM(ctx, prompt)
@@ -199,6 +233,7 @@ func (c *Compressor) extractConceptTags(ctx context.Context, content string) ([]
 	
 	return result, nil
 }
+
 
 // aggregateOutcomeTags determines the outcome tag for a merged memory
 func (c *Compressor) aggregateOutcomeTags(cluster []Memory) string {
