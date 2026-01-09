@@ -38,6 +38,7 @@ type Engine struct {
 	enableStrategyTracking    bool
 	storeInsights             bool
 	dynamicActionPlanning     bool
+	adaptiveConfig            *AdaptiveConfig
 }
 
 // NewEngine creates a new dialogue engine
@@ -80,6 +81,7 @@ func NewEngine(
 		enableStrategyTracking:    enableStrategyTracking,
 		storeInsights:             storeInsights,
 		dynamicActionPlanning:     dynamicActionPlanning,
+		adaptiveConfig:            NewAdaptiveConfig(0.30, 0.85, 60),
 	}
 }
 
@@ -145,6 +147,16 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	totalTokens := 0
 	recentThoughts := []string{} // For novelty filtering
 	
+	// PHASE 0: Update adaptive thresholds based on current state
+	totalMemories, err := e.storage.GetTotalMemoryCount(ctx)
+	if err != nil {
+		log.Printf("[Dialogue] WARNING: Failed to get memory count: %v", err)
+		totalMemories = 0
+	}
+	e.adaptiveConfig.UpdateMetrics(ctx, state, totalMemories)
+	
+	// PHASE 1: Enhanced Reflection with Structured Reasoning
+	log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
 
 	// PHASE 1: Enhanced Reflection with Structured Reasoning
 	log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
@@ -210,6 +222,30 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		return StopReasonMaxThoughts, nil
 	}
 
+	// Check for extended idle periods and trigger exploration
+	if len(state.ActiveGoals) == 0 {
+		timeSinceLastCycle := time.Since(state.LastCycleTime)
+		
+		// If idle for 1+ hours with no goals, explore proactively
+		if timeSinceLastCycle > 1*time.Hour {
+			log.Printf("[Dialogue] Extended idle period detected (%s), generating exploratory goal",
+				timeSinceLastCycle.Round(time.Minute))
+			
+			userInterests, err := e.analyzeUserInterests(ctx)
+			if err != nil {
+				log.Printf("[Dialogue] WARNING: Failed to analyze user interests: %v", err)
+				userInterests = []string{}
+			}
+			
+			exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, "")
+			state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
+			metrics.GoalsCreated++
+			
+			log.Printf("[Dialogue] ✓ Created idle-period exploratory goal: %s",
+				truncate(exploratoryGoal.Description, 60))
+		}
+	}
+
 	
 	// PHASE 2: Reasoning-Driven Goal Management
 	log.Printf("[Dialogue] PHASE 2: Reasoning-Driven Goal Management")
@@ -244,6 +280,76 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	}
 	if len(reasoning.Patterns) > 0 {
 		log.Printf("[Dialogue] Detected %d patterns", len(reasoning.Patterns))
+	}
+
+	// Check for meta-loops and trigger exploration if needed
+	inMetaLoop, loopTopic := e.detectMetaLoop(state)
+	
+	if inMetaLoop {
+		log.Printf("[Dialogue] Meta-loop detected, switching to exploratory mode")
+		
+		// Get user interests for context
+		userInterests, err := e.analyzeUserInterests(ctx)
+		if err != nil {
+			log.Printf("[Dialogue] WARNING: Failed to analyze user interests: %v", err)
+			userInterests = []string{}
+		}
+		
+		if len(userInterests) > 0 {
+			log.Printf("[Dialogue] User interests identified: %v", userInterests)
+		}
+		
+		// Create exploratory goal
+		exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, loopTopic)
+		
+		// Add to state immediately
+		state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
+		metrics.GoalsCreated++
+		
+		log.Printf("[Dialogue] ✓ Created exploratory goal to break meta-loop: %s", 
+			truncate(exploratoryGoal.Description, 60))
+	}
+	
+// Try to create user-aligned goal if we have capacity and no recent user-aligned goals
+	if len(state.ActiveGoals) < 3 {
+		// Check if we recently created a user-aligned goal
+		hasRecentUserGoal := false
+		for _, goal := range state.ActiveGoals {
+			if goal.Source == "user_interest" {
+				hasRecentUserGoal = true
+				break
+			}
+		}
+		
+		if !hasRecentUserGoal {
+			// Build user profile
+			userProfile, err := e.BuildUserProfile(ctx)
+			if err != nil {
+				log.Printf("[Dialogue] WARNING: Failed to build user profile: %v", err)
+			} else if len(userProfile.TopTopics) > 0 {
+				// Get recent goal descriptions to avoid duplication
+				recentTopics := []string{}
+				for _, goal := range state.ActiveGoals {
+					recentTopics = append(recentTopics, goal.Description)
+				}
+				for _, goal := range state.CompletedGoals {
+					if len(recentTopics) < 10 {
+						recentTopics = append(recentTopics, goal.Description)
+					}
+				}
+				
+				// Generate user-aligned goal
+				userGoal, err := e.GenerateUserAlignedGoal(ctx, userProfile, recentTopics)
+				if err != nil {
+					log.Printf("[Dialogue] WARNING: Failed to generate user-aligned goal: %v", err)
+				} else {
+					state.ActiveGoals = append(state.ActiveGoals, userGoal)
+					metrics.GoalsCreated++
+					log.Printf("[Dialogue] ✓ Created user-aligned goal: %s", 
+						truncate(userGoal.Description, 60))
+				}
+			}
+		}
 	}
 	
 	// Create goals from LLM proposals if available (but not if we have too many already)
@@ -889,10 +995,11 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 			// Calculate cosine similarity
 			similarity := cosineSimilarity(proposalEmbedding, existingEmbedding)
 			
-			// If similarity > 0.85, consider it a duplicate
-			if similarity > 0.85 {
-				log.Printf("[Dialogue] Detected semantic duplicate (%.2f similarity): '%s' ~= '%s'",
-					similarity, truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
+			// Use adaptive threshold for duplicate detection
+			threshold := e.adaptiveConfig.GetGoalSimilarityThreshold()
+			if similarity > threshold {
+				log.Printf("[Dialogue] Detected semantic duplicate (%.2f > %.2f threshold): '%s' ~= '%s'",
+					similarity, threshold, truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
 				return true
 			}
 		}
@@ -900,6 +1007,161 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 	
 	return false
 }
+
+// analyzeUserInterests extracts topics the user has shown interest in
+func (e *Engine) analyzeUserInterests(ctx context.Context) ([]string, error) {
+	// Search for user interactions (non-collective memories)
+	embedding, err := e.embedder.Embed(ctx, "user questions topics interests discussion")
+	if err != nil {
+		return []string{}, err
+	}
+	
+	query := memory.RetrievalQuery{
+		Limit:             20,
+		MinScore:          0.3,
+		IncludePersonal:   true,
+		IncludeCollective: false, // Only user interactions
+	}
+	
+	results, err := e.storage.Search(ctx, query, embedding)
+	if err != nil {
+		return []string{}, err
+	}
+	
+	if len(results) == 0 {
+		return []string{}, nil
+	}
+	
+	// Extract concept tags from user memories
+	topicFrequency := make(map[string]int)
+	for _, result := range results {
+		for _, tag := range result.Memory.ConceptTags {
+			topicFrequency[tag]++
+		}
+	}
+	
+	// Sort by frequency
+	type topicCount struct {
+		topic string
+		count int
+	}
+	var topics []topicCount
+	for topic, count := range topicFrequency {
+		topics = append(topics, topicCount{topic, count})
+	}
+	
+	// Sort descending by count
+	for i := 0; i < len(topics); i++ {
+		for j := i + 1; j < len(topics); j++ {
+			if topics[j].count > topics[i].count {
+				topics[i], topics[j] = topics[j], topics[i]
+			}
+		}
+	}
+	
+	// Return top topics
+	result := []string{}
+	for i := 0; i < len(topics) && i < 5; i++ {
+		result = append(result, topics[i].topic)
+	}
+	
+	return result, nil
+}
+
+// detectMetaLoop checks if system is stuck researching the same topic
+func (e *Engine) detectMetaLoop(state *InternalState) (bool, string) {
+	if len(state.CompletedGoals) < 3 {
+		return false, ""
+	}
+	
+	// Check last 5 completed goals
+	recentGoals := state.CompletedGoals
+	if len(recentGoals) > 5 {
+		recentGoals = recentGoals[len(recentGoals)-5:]
+	}
+	
+	// Count topic similarities
+	topicCounts := make(map[string]int)
+	for _, goal := range recentGoals {
+		// Extract key terms from goal description
+		desc := strings.ToLower(goal.Description)
+		
+		// Common meta-loop topics
+		if strings.Contains(desc, "memory") || strings.Contains(desc, "data") || 
+		   strings.Contains(desc, "missing") || strings.Contains(desc, "experiential") {
+			topicCounts["meta-memory"]++
+		}
+		if strings.Contains(desc, "learn about") && strings.Contains(desc, "knowledge") {
+			topicCounts["meta-learning"]++
+		}
+	}
+	
+	// If 3+ of last 5 goals are about the same meta topic, it's a loop
+	for topic, count := range topicCounts {
+		if count >= 3 {
+			log.Printf("[Dialogue] Meta-loop detected: %d/%d recent goals about '%s'", 
+				count, len(recentGoals), topic)
+			return true, topic
+		}
+	}
+	
+	return false, ""
+}
+
+// generateExploratoryGoal creates a curiosity-driven goal based on context
+func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []string, avoidTopic string) Goal {
+	var description string
+	var priority int
+	
+	if len(userInterests) > 0 {
+		// 80% of time: explore user interests
+		// Pick a random user interest and explore related topics
+		selectedTopic := userInterests[rand.Intn(len(userInterests))]
+		
+		// Generate related exploration
+		variations := []string{
+			fmt.Sprintf("Research recent developments in %s", selectedTopic),
+			fmt.Sprintf("Explore practical applications of %s", selectedTopic),
+			fmt.Sprintf("Investigate current trends in %s", selectedTopic),
+			fmt.Sprintf("Analyze emerging technologies related to %s", selectedTopic),
+		}
+		
+		description = variations[rand.Intn(len(variations))]
+		priority = 6 // Medium priority for user-interest exploration
+		
+		log.Printf("[Dialogue] Generated user-interest exploratory goal: %s", description)
+	} else {
+		// 20% of time or when no user interests: system curiosity
+		// Broad exploratory topics
+		exploratoryTopics := []string{
+			"Research current technological breakthroughs",
+			"Explore recent scientific discoveries",
+			"Investigate emerging global trends",
+			"Analyze developments in artificial intelligence",
+			"Research advances in renewable energy",
+			"Explore new programming paradigms",
+			"Investigate developments in space exploration",
+			"Research breakthroughs in medical science",
+		}
+		
+		description = exploratoryTopics[rand.Intn(len(exploratoryTopics))]
+		priority = 5 // Lower priority for pure curiosity
+		
+		log.Printf("[Dialogue] Generated curiosity-driven exploratory goal: %s", description)
+	}
+	
+	return Goal{
+		ID:          fmt.Sprintf("goal_%d", time.Now().UnixNano()),
+		Description: description,
+		Source:      GoalSourceCuriosity,
+		Priority:    priority,
+		Created:     time.Now(),
+		Progress:    0.0,
+		Status:      GoalStatusActive,
+		Actions:     []Action{},
+	}
+}
+
 
 // cosineSimilarity calculates cosine similarity between two vectors
 func cosineSimilarity(a, b []float32) float64 {
@@ -1340,7 +1602,7 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	
 	query := memory.RetrievalQuery{
 		Limit:    8,
-		MinScore: 0.3,
+		MinScore: e.adaptiveConfig.GetSearchThreshold(),
 		IncludeCollective: true,
 	}
 	

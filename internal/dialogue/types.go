@@ -72,6 +72,7 @@ const (
 	GoalSourceKnowledgeGap = "knowledge_gap"
 	GoalSourceCuriosity    = "curiosity"
 	GoalSourcePrinciple    = "principle"
+	GoalSourceUserInterest = "user_interest"
 )
 
 // GoalStatus constants
