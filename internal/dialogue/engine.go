@@ -1418,9 +1418,6 @@ content := strings.TrimSpace(result.Choices[0].Message.Content)
 	return content, tokens, nil
 }
 
-// callLLMInternal is the actual implementation, wrapped by circuit breaker
-func (e *Engine) callLLMInternal(ctx context.Context, prompt string, timeout time.Duration) (string, int, error) {
-
 // callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
 	// Check circuit breaker first
