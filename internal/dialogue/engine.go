@@ -385,10 +385,31 @@ if inMetaLoop {
 	newGoals := []Goal{}
 	if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 5 {
 		log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
+		
+		// Get recently abandoned goals (last 10)
+		recentlyAbandoned := []Goal{}
+		if len(state.CompletedGoals) > 0 {
+			startIdx := len(state.CompletedGoals) - 10
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			for i := startIdx; i < len(state.CompletedGoals); i++ {
+				if state.CompletedGoals[i].Status == GoalStatusAbandoned {
+					recentlyAbandoned = append(recentlyAbandoned, state.CompletedGoals[i])
+				}
+			}
+		}
+		
 		for _, proposal := range reasoning.GoalsToCreate.ToSlice() {
-			// Check for duplicates using semantic similarity
+			// Check for duplicates against active goals
 			if e.isGoalDuplicate(ctx, proposal.Description, state.ActiveGoals) {
-				log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(proposal.Description, 40))
+				log.Printf("[Dialogue] Skipping duplicate goal (matches active): %s", truncate(proposal.Description, 40))
+				continue
+			}
+			
+			// Check for duplicates against recently abandoned goals
+			if len(recentlyAbandoned) > 0 && e.isGoalDuplicate(ctx, proposal.Description, recentlyAbandoned) {
+				log.Printf("[Dialogue] Skipping duplicate goal (matches recently abandoned): %s", truncate(proposal.Description, 40))
 				continue
 			}
 			
@@ -714,6 +735,7 @@ if topGoal.Progress >= 1.0 {
 	completedCount := 0
 	abandonedCount := 0
 	activeGoals := []Goal{}
+	currentTime := time.Now()
 	
 	for _, goal := range state.ActiveGoals {
 		if goal.Status == GoalStatusCompleted {
@@ -728,25 +750,62 @@ if topGoal.Progress >= 1.0 {
 			goal.Outcome = "neutral"
 			state.CompletedGoals = append(state.CompletedGoals, goal)
 			abandonedCount++
-			log.Printf("[Dialogue] Auto-abandoned stale goal: %s", truncate(goal.Description, 60))
+			log.Printf("[Dialogue] Auto-abandoned stale goal (24h+ with no progress): %s", truncate(goal.Description, 60))
 		} else {
 			activeGoals = append(activeGoals, goal)
 		}
 	}
 	
 	// Limit active goals to top 5 by priority
+	// BUT: Don't prune goals created in the last 30 minutes (give them a chance)
 	if len(activeGoals) > 5 {
 		sortedGoals := sortGoalsByPriority(activeGoals)
-		activeGoals = sortedGoals[:5]
 		
-		// Abandon the rest
-		for i := 5; i < len(sortedGoals); i++ {
-			sortedGoals[i].Status = GoalStatusAbandoned
-			sortedGoals[i].Outcome = "neutral"
-			state.CompletedGoals = append(state.CompletedGoals, sortedGoals[i])
-			abandonedCount++
+		// Separate new vs old goals
+		newGoals := []Goal{}
+		oldGoals := []Goal{}
+		for _, goal := range sortedGoals {
+			if currentTime.Sub(goal.Created) < 30*time.Minute {
+				newGoals = append(newGoals, goal)
+			} else {
+				oldGoals = append(oldGoals, goal)
+			}
 		}
-		log.Printf("[Dialogue] Pruned active goals from %d to 5 (abandoned %d low-priority)", len(sortedGoals), len(sortedGoals)-5)
+		
+		log.Printf("[Dialogue] Goal counts: %d total (%d new, %d old)", len(sortedGoals), len(newGoals), len(oldGoals))
+		
+		// Keep all new goals + top old goals up to limit of 5
+		activeGoals = newGoals
+		remainingSlots := 5 - len(newGoals)
+		
+		if remainingSlots > 0 && len(oldGoals) > 0 {
+			// Keep top N old goals
+			if len(oldGoals) > remainingSlots {
+				activeGoals = append(activeGoals, oldGoals[:remainingSlots]...)
+				// Abandon the rest
+				for i := remainingSlots; i < len(oldGoals); i++ {
+					oldGoals[i].Status = GoalStatusAbandoned
+					oldGoals[i].Outcome = "neutral"
+					state.CompletedGoals = append(state.CompletedGoals, oldGoals[i])
+					abandonedCount++
+				}
+				log.Printf("[Dialogue] Pruned %d low-priority old goals (kept %d new + %d old)", 
+					len(oldGoals)-remainingSlots, len(newGoals), remainingSlots)
+			} else {
+				activeGoals = append(activeGoals, oldGoals...)
+			}
+		} else if remainingSlots <= 0 {
+			// All 5 slots taken by new goals, abandon all old goals
+			for i := range oldGoals {
+				oldGoals[i].Status = GoalStatusAbandoned
+				oldGoals[i].Outcome = "neutral"
+				state.CompletedGoals = append(state.CompletedGoals, oldGoals[i])
+				abandonedCount++
+			}
+			if len(oldGoals) > 0 {
+				log.Printf("[Dialogue] Abandoned %d old goals (all slots taken by new goals)", len(oldGoals))
+			}
+		}
 	}
 	
 	state.ActiveGoals = activeGoals
@@ -935,6 +994,20 @@ func (e *Engine) formGoals(state *InternalState) []Goal {
 	goals := []Goal{}
 	ctx := context.Background()
 	
+	// Get recently abandoned goals for duplicate checking
+	recentlyAbandoned := []Goal{}
+	if len(state.CompletedGoals) > 0 {
+		startIdx := len(state.CompletedGoals) - 10
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		for i := startIdx; i < len(state.CompletedGoals); i++ {
+			if state.CompletedGoals[i].Status == GoalStatusAbandoned {
+				recentlyAbandoned = append(recentlyAbandoned, state.CompletedGoals[i])
+			}
+		}
+	}
+	
 	// Create goals from knowledge gaps (user requests)
 	for _, gap := range state.KnowledgeGaps {
 		// Determine if this is a research goal or learning goal
@@ -952,9 +1025,15 @@ func (e *Engine) formGoals(state *InternalState) []Goal {
 			priority = 7
 		}
 		
-		// Check for duplicates using semantic similarity
+		// Check for duplicates against active goals
 		if e.isGoalDuplicate(ctx, description, state.ActiveGoals) {
-			log.Printf("[Dialogue] Skipping duplicate goal: %s", truncate(description, 40))
+			log.Printf("[Dialogue] Skipping duplicate goal (matches active): %s", truncate(description, 40))
+			continue
+		}
+		
+		// Check for duplicates against recently abandoned goals
+		if len(recentlyAbandoned) > 0 && e.isGoalDuplicate(ctx, description, recentlyAbandoned) {
+			log.Printf("[Dialogue] Skipping duplicate goal (matches recently abandoned): %s", truncate(description, 40))
 			continue
 		}
 		
@@ -1017,17 +1096,22 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 		
 		// Exact match
 		if proposalLower == existingLower {
+			log.Printf("[Dialogue] Duplicate detected (exact match): '%s'", truncate(proposalDesc, 50))
 			return true
 		}
 		
-		// Check if first 30 chars match (existing logic)
+		// Check if first 50 chars match (increased from 30 for better detection)
 		minLen := min(len(proposalLower), len(existingLower))
-		if minLen > 30 {
-			minLen = 30
+		if minLen > 50 {
+			minLen = 50
 		}
-		if strings.Contains(existingLower, proposalLower[:minLen]) ||
-		   strings.Contains(proposalLower, existingLower[:minLen]) {
-			return true
+		if minLen >= 20 { // Only check if we have enough characters
+			if strings.Contains(existingLower, proposalLower[:minLen]) ||
+			   strings.Contains(proposalLower, existingLower[:minLen]) {
+				log.Printf("[Dialogue] Duplicate detected (prefix match): '%s' ~= '%s'", 
+					truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
+				return true
+			}
 		}
 	}
 	
@@ -1883,8 +1967,31 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	goalsContext := fmt.Sprintf("\nCurrent active goals: %d\n", len(state.ActiveGoals))
 	if len(state.ActiveGoals) > 0 {
 		for i, goal := range state.ActiveGoals {
-			goalsContext += fmt.Sprintf("%d. %s (progress: %.0f%%, priority: %d)\n", 
-				i+1, truncate(goal.Description, 60), goal.Progress*100, goal.Priority)
+			goalsContext += fmt.Sprintf("%d. %s (progress: %.0f%%, priority: %d, age: %s)\n", 
+				i+1, truncate(goal.Description, 60), goal.Progress*100, goal.Priority,
+				time.Since(goal.Created).Round(time.Minute))
+		}
+	}
+	
+	// Add recently abandoned goals context (last 5)
+	recentlyAbandoned := []Goal{}
+	if len(state.CompletedGoals) > 0 {
+		startIdx := len(state.CompletedGoals) - 5
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		for i := startIdx; i < len(state.CompletedGoals); i++ {
+			if state.CompletedGoals[i].Status == GoalStatusAbandoned {
+				recentlyAbandoned = append(recentlyAbandoned, state.CompletedGoals[i])
+			}
+		}
+	}
+	
+	if len(recentlyAbandoned) > 0 {
+		goalsContext += "\nRecently abandoned goals (avoid recreating these):\n"
+		for i, goal := range recentlyAbandoned {
+			goalsContext += fmt.Sprintf("%d. %s (outcome: %s)\n", 
+				i+1, truncate(goal.Description, 60), goal.Outcome)
 		}
 	}
 	
