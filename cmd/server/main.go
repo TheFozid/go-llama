@@ -83,6 +83,16 @@ func main() {
 					embedder,
 				)
 
+				// Initialize async tagger queue with parallel workers
+				taggerQueue := memory.NewTaggerQueue(
+					tagger,
+					storage,
+					3,    // 3 parallel workers
+					1000, // Queue buffer size
+				)
+				defer taggerQueue.Stop()
+				log.Printf("[Main] ✓ Async tagger queue initialized (workers: 3, queue: 1000)")
+
 				tierRules := memory.TierRules{
 					RecentToMediumDays: cfg.GrowerAI.Compression.TierRules.RecentToMediumDays,
 					MediumToLongDays:   cfg.GrowerAI.Compression.TierRules.MediumToLongDays,
@@ -117,7 +127,7 @@ func main() {
 					storage,
 					compressor,
 					embedder,
-					tagger,
+					taggerQueue, // Use tagger queue instead of tagger
 					linker,
 					db.DB,
 					cfg.GrowerAI.Compression.Model.URL,
@@ -253,6 +263,13 @@ func main() {
 				embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
 				stateManager := dialogue.NewStateManager(db.DB)
 
+				// Initialize circuit breaker for LLM resilience
+				llmCircuitBreaker := tools.NewCircuitBreaker(
+					3,              // Open after 3 failures
+					5*time.Minute,  // Stay open for 5 minutes
+				)
+				log.Printf("[Main] ✓ LLM circuit breaker initialized (threshold: 3 failures, timeout: 5m)")
+
 				engine := dialogue.NewEngine(
 					storage,
 					embedder,
@@ -272,6 +289,7 @@ func main() {
 					cfg.GrowerAI.Dialogue.EnableStrategyTracking,
 					cfg.GrowerAI.Dialogue.StoreInsights,
 					cfg.GrowerAI.Dialogue.DynamicActionPlanning,
+					llmCircuitBreaker, // Add circuit breaker parameter
 				)
 
 				worker := dialogue.NewWorker(

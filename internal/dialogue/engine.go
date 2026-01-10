@@ -39,6 +39,7 @@ type Engine struct {
 	storeInsights             bool
 	dynamicActionPlanning     bool
 	adaptiveConfig            *AdaptiveConfig
+	circuitBreaker            *tools.CircuitBreaker
 }
 
 // NewEngine creates a new dialogue engine
@@ -61,6 +62,7 @@ func NewEngine(
 	enableStrategyTracking bool,
 	storeInsights bool,
 	dynamicActionPlanning bool,
+	circuitBreaker *tools.CircuitBreaker,
 ) *Engine {
 	return &Engine{
 		storage:                   storage,
@@ -82,6 +84,7 @@ func NewEngine(
 		storeInsights:             storeInsights,
 		dynamicActionPlanning:     dynamicActionPlanning,
 		adaptiveConfig:            NewAdaptiveConfig(0.30, 0.85, 60),
+		circuitBreaker:            circuitBreaker,
 	}
 }
 
@@ -1301,6 +1304,11 @@ func (e *Engine) detectPatterns(ctx context.Context) ([]string, error) {
 
 // callLLM makes a request to the reasoning model
 func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error) {
+	// Check circuit breaker first
+	if e.circuitBreaker != nil && e.circuitBreaker.IsOpen() {
+		return "", 0, fmt.Errorf("LLM circuit breaker is open, service unavailable")
+	}
+	
 	// Get adaptive timeout
 	timeout := time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second
 	if timeout < 60*time.Second {
@@ -1358,6 +1366,12 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	resp, err := client.Do(req)
 	if err != nil {
 		elapsed := time.Since(startTime)
+		
+		// Record failure in circuit breaker
+		if e.circuitBreaker != nil {
+			e.circuitBreaker.Call(func() error { return err })
+		}
+		
 		if timeoutCtx.Err() == context.DeadlineExceeded {
 			log.Printf("[Dialogue] LLM timeout after %s", elapsed)
 			return "", 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
@@ -1393,14 +1407,27 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 		return "", 0, fmt.Errorf("no choices returned from LLM")
 	}
 	
-	content := strings.TrimSpace(result.Choices[0].Message.Content)
+content := strings.TrimSpace(result.Choices[0].Message.Content)
 	tokens := result.Usage.TotalTokens
+	
+	// Record success in circuit breaker
+	if e.circuitBreaker != nil {
+		e.circuitBreaker.Call(func() error { return nil })
+	}
 	
 	return content, tokens, nil
 }
 
+// callLLMInternal is the actual implementation, wrapped by circuit breaker
+func (e *Engine) callLLMInternal(ctx context.Context, prompt string, timeout time.Duration) (string, int, error) {
+
 // callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
+	// Check circuit breaker first
+	if e.circuitBreaker != nil && e.circuitBreaker.IsOpen() {
+		return nil, 0, fmt.Errorf("LLM circuit breaker is open, service unavailable")
+	}
+	
 	// Get adaptive timeout (structured reasoning may take longer)
 	timeout := time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second
 	if timeout < 120*time.Second {
@@ -1490,6 +1517,12 @@ jsonData, err := json.Marshal(reqBody)
 	resp, err := client.Do(req)
 	if err != nil {
 		elapsed := time.Since(startTime)
+		
+		// Record failure in circuit breaker
+		if e.circuitBreaker != nil {
+			e.circuitBreaker.Call(func() error { return err })
+		}
+		
 		if timeoutCtx.Err() == context.DeadlineExceeded {
 			log.Printf("[Dialogue] Structured reasoning LLM timeout after %s", elapsed)
 			return nil, 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
@@ -1571,6 +1604,11 @@ jsonData, err := json.Marshal(reqBody)
 			}, tokens, nil
 		}
 		log.Printf("[Dialogue] ✓ Successfully parsed JSON after fixes")
+	}
+	
+	// Record success in circuit breaker
+	if e.circuitBreaker != nil {
+		e.circuitBreaker.Call(func() error { return nil })
 	}
 	
 	return &reasoning, tokens, nil

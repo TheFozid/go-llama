@@ -13,6 +13,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// TaggerQueueInterface defines the interface for async tagging
+type TaggerQueueInterface interface {
+	EnqueueBatch(memoryIDs []string)
+	GetStats() TaggerStats
+}
+
 // StorageLimits defines space-based compression configuration
 type StorageLimits struct {
 	MaxTotalMemories   int
@@ -41,7 +47,7 @@ type DecayWorker struct {
 	storage                *Storage
 	compressor             *Compressor
 	embedder               *Embedder
-	tagger                 *Tagger
+	taggerQueue            TaggerQueueInterface
 	linker                 *Linker
 	db                     *gorm.DB
 	llmURL                 string     // LLM URL for principle generation
@@ -84,7 +90,7 @@ func NewDecayWorker(
 	storage *Storage,
 	compressor *Compressor,
 	embedder *Embedder,
-	tagger *Tagger,
+	taggerQueue TaggerQueueInterface,
 	linker *Linker,
 	db *gorm.DB,
 	llmURL string,
@@ -104,7 +110,7 @@ func NewDecayWorker(
 		storage:                storage,
 		compressor:             compressor,
 		embedder:               embedder,
-		tagger:                 tagger,
+		taggerQueue:            taggerQueue,
 		linker:                 linker,
 		db:                     db,
 		llmURL:                 llmURL,
@@ -169,10 +175,30 @@ func (w *DecayWorker) runCompressionCycle() {
 		}
 	}
 	
-	// PHASE 1: Tag untagged memories
+	// PHASE 1: Enqueue untagged memories for async tagging
 	log.Println("[DecayWorker] PHASE 1: Tagging untagged memories...")
-	if err := w.tagger.TagMemories(ctx, w.storage); err != nil {
-		log.Printf("[DecayWorker] ERROR in tagging phase: %v", err)
+	
+	// Find untagged memories
+	untagged, err := w.storage.FindUntaggedMemories(ctx, 1000) // Get up to 1000
+	if err != nil {
+		log.Printf("[DecayWorker] WARNING: Failed to find untagged memories: %v", err)
+	} else if len(untagged) > 0 {
+		// Extract memory IDs
+		memoryIDs := make([]string, len(untagged))
+		for i, mem := range untagged {
+			memoryIDs[i] = mem.ID
+		}
+		
+		// Enqueue for async processing (non-blocking)
+		w.taggerQueue.EnqueueBatch(memoryIDs)
+		log.Printf("[DecayWorker] ✓ Enqueued %d memories for tagging", len(memoryIDs))
+		
+		// Log current queue stats
+		stats := w.taggerQueue.GetStats()
+		log.Printf("[DecayWorker] Tagger queue stats: pending=%d, processed=%d, failed=%d",
+			stats.CurrentQueue, stats.Processed, stats.Failed)
+	} else {
+		log.Println("[DecayWorker] No untagged memories found")
 	}
 	
 	// PHASE 2: Space-based compression
