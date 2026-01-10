@@ -2,7 +2,6 @@ package tools
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"sync"
 	"time"
