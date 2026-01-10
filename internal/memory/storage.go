@@ -237,23 +237,42 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 
 // Search performs semantic search for relevant memories
 func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbedding []float32) ([]RetrievalResult, error) {
-	log.Printf("[Storage] Search called - Limit: %d, MinScore: %.2f, IncludeCollective: %v", 
-		query.Limit, query.MinScore, query.IncludeCollective)
-	// Build filter
+	log.Printf("[Storage] Search called - Limit: %d, MinScore: %.2f, IncludePersonal: %v, IncludeCollective: %v", 
+		query.Limit, query.MinScore, query.IncludePersonal, query.IncludeCollective)
+	
+	// Build filter with OR logic for personal vs collective
 	var must []*qdrant.Condition
+	var should []*qdrant.Condition
 
-	if query.UserID != nil && query.IncludePersonal {
-		must = append(must, qdrant.NewMatch("user_id", *query.UserID))
-		log.Printf("[Storage] Added user_id filter: %s", *query.UserID)
+	// Personal vs Collective: Use OR logic (should) instead of AND (must)
+	if query.IncludePersonal && query.UserID != nil {
+		should = append(should, qdrant.NewMatch("user_id", *query.UserID))
+		log.Printf("[Storage] Added user_id to OR filter: %s", *query.UserID)
 	}
 
 	if query.IncludeCollective {
+		should = append(should, qdrant.NewMatch("is_collective", "true"))
+		log.Printf("[Storage] Added is_collective to OR filter")
+	}
+	
+	// If ONLY collective requested (no personal), use must instead of should
+	if query.IncludeCollective && !query.IncludePersonal {
 		must = append(must, qdrant.NewMatch("is_collective", "true"))
-		log.Printf("[Storage] Added is_collective filter")
+		should = nil // Clear should, use must for exclusive collective
+		log.Printf("[Storage] Using exclusive collective filter (must)")
+	}
+	
+	// If ONLY personal requested (no collective), use must instead of should
+	if query.IncludePersonal && !query.IncludeCollective && query.UserID != nil {
+		must = append(must, qdrant.NewMatch("user_id", *query.UserID))
+		should = nil // Clear should, use must for exclusive personal
+		log.Printf("[Storage] Using exclusive personal filter (must)")
 	}
 
+	// Other filters always use AND (must)
 	if query.Tier != nil {
 		must = append(must, qdrant.NewMatch("tier", string(*query.Tier)))
+		log.Printf("[Storage] Added tier filter: %s", *query.Tier)
 	}
 	
 	// Phase 4: Outcome filter
@@ -262,40 +281,44 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 		log.Printf("[Storage] Added outcome_tag filter: %s", *query.OutcomeFilter)
 	}
 	
-
-	log.Printf("[Storage] Total filter conditions: %d", len(must))
+	log.Printf("[Storage] Filter - Must conditions: %d, Should conditions: %d", len(must), len(should))
 
 	// Build filter based on conditions
 	var filter *qdrant.Filter
 	
-	// Phase 4: Concept tags filter (match ANY of the provided tags)
+	// Build final filter combining must and should conditions
 	if len(query.ConceptTags) > 0 {
-		// Build OR condition for concept tags (match any tag)
-		shouldConditions := make([]*qdrant.Condition, len(query.ConceptTags))
-		for i, tag := range query.ConceptTags {
-			shouldConditions[i] = qdrant.NewMatch("concept_tags", tag)
+		// Add concept tag conditions to should (match any tag)
+		for _, tag := range query.ConceptTags {
+			should = append(should, qdrant.NewMatch("concept_tags", tag))
 		}
-		
-		// If we already have must conditions, we need to combine them
-		if len(must) > 0 {
-			// Create a filter that requires: (existing must conditions) AND (any of the concept tags)
-			filter = &qdrant.Filter{
-				Must:   must,
-				Should: shouldConditions,
-			}
-		} else {
-			// Only concept tag filtering
-			filter = &qdrant.Filter{
-				Should: shouldConditions,
-			}
+		log.Printf("[Storage] Added concept tags to filter: %v (match ANY)", query.ConceptTags)
+	}
+	
+	// Create filter with proper logic
+	if len(must) > 0 && len(should) > 0 {
+		// Must conditions AND (at least one should condition)
+		filter = &qdrant.Filter{
+			Must:   must,
+			Should: should,
 		}
-		
-		log.Printf("[Storage] Added concept tags filter: %v (match ANY)", query.ConceptTags)
+		log.Printf("[Storage] Using combined filter: MUST(%d) AND SHOULD(%d)", len(must), len(should))
 	} else if len(must) > 0 {
-		// Only must conditions, no concept filtering
+		// Only must conditions
 		filter = &qdrant.Filter{
 			Must: must,
 		}
+		log.Printf("[Storage] Using must-only filter: %d conditions", len(must))
+	} else if len(should) > 0 {
+		// Only should conditions (match any)
+		filter = &qdrant.Filter{
+			Should: should,
+		}
+		log.Printf("[Storage] Using should-only filter: %d conditions", len(should))
+	} else {
+		// No filters - search everything
+		filter = nil
+		log.Printf("[Storage] No filters applied - searching all memories")
 	}
 
 	// Perform search

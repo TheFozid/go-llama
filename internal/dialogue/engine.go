@@ -213,10 +213,16 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	
 	// Store learnings as memories if enabled
 	if e.storeInsights && len(reasoning.Learnings.ToSlice()) > 0 {
-	for _, learning := range reasoning.Learnings.ToSlice() {
-			e.storeLearning(ctx, learning)
+		storedCount := 0
+		for _, learning := range reasoning.Learnings.ToSlice() {
+			err := e.storeLearning(ctx, learning)
+			if err != nil {
+				log.Printf("[Dialogue] ERROR: Failed to store learning: %v", err)
+			} else {
+				storedCount++
+			}
 		}
-		log.Printf("[Dialogue] Stored %d learnings in memory", len(reasoning.Learnings))
+		log.Printf("[Dialogue] Stored %d/%d learnings in memory (collective=true)", storedCount, len(reasoning.Learnings))
 	}
 	
 	// Check token budget
@@ -1836,15 +1842,27 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 		return nil, 0, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 	
+	searchThreshold := e.adaptiveConfig.GetSearchThreshold()
 	query := memory.RetrievalQuery{
-		Limit:    8,
-		MinScore: e.adaptiveConfig.GetSearchThreshold(),
+		Limit:             8,
+		MinScore:          searchThreshold,
 		IncludeCollective: true,
+		IncludePersonal:   false, // Explicitly exclude personal for collective-only search
 	}
+	
+	log.Printf("[Dialogue] Searching collective memories (threshold: %.2f, limit: %d)", searchThreshold, 8)
 	
 	results, err := e.storage.Search(ctx, query, embedding)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to search memories: %w", err)
+	}
+	
+	log.Printf("[Dialogue] Collective memory search returned %d results", len(results))
+	if len(results) > 0 {
+		for i, result := range results {
+			log.Printf("[Dialogue]   Result %d: score=%.2f, is_collective=%v, content=%s", 
+				i+1, result.Score, result.Memory.IsCollective, truncate(result.Memory.Content, 60))
+		}
 	}
 	
 	// Build context for reasoning
@@ -2095,13 +2113,15 @@ func (e *Engine) storeLearning(ctx context.Context, learning Learning) error {
 		Embedding:       embedding,
 	}
 	
+	log.Printf("[Dialogue] Storing learning as collective memory (is_collective=true): %s", truncate(learning.What, 60))
+	
 	err = e.storage.Store(ctx, mem)
 	if err != nil {
-		log.Printf("[Dialogue] WARNING: Failed to store learning: %v", err)
+		log.Printf("[Dialogue] ERROR: Failed to store learning in Qdrant: %v", err)
 		return err
 	}
 	
-	log.Printf("[Dialogue] Stored learning: %s", truncate(learning.What, 60))
+	log.Printf("[Dialogue] ✓ Learning stored successfully (ID: %s, is_collective: true)", mem.ID)
 	return nil
 }
 
