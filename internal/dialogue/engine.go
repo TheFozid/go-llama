@@ -2261,7 +2261,7 @@ func (e *Engine) storeLearning(ctx context.Context, learning Learning) (string, 
 	embedding, err := e.embedder.Embed(ctx, content)
 	if err != nil {
 		log.Printf("[Dialogue] WARNING: Failed to embed learning: %v", err)
-		return err
+		return "", err
 	}
 	
 	mem := &memory.Memory{
