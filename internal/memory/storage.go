@@ -116,6 +116,14 @@ func (s *Storage) Store(ctx context.Context, memory *Memory) error {
 		memory.ID = uuid.New().String()
 	}
 	
+	// Validate embedding
+	if len(memory.Embedding) == 0 {
+		return fmt.Errorf("cannot store memory without embedding")
+	}
+	if len(memory.Embedding) != 384 {
+		return fmt.Errorf("invalid embedding dimension: expected 384, got %d", len(memory.Embedding))
+	}
+	
 	// Sanitize UTF-8 to prevent gRPC marshaling errors
 	if !utf8.ValidString(memory.Content) {
 		memory.Content = strings.ToValidUTF8(memory.Content, "")
@@ -289,10 +297,12 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	// Build final filter combining must and should conditions
 	if len(query.ConceptTags) > 0 {
 		// Add concept tag conditions to should (match any tag)
+		conceptTagsAdded := 0
 		for _, tag := range query.ConceptTags {
 			should = append(should, qdrant.NewMatch("concept_tags", tag))
+			conceptTagsAdded++
 		}
-		log.Printf("[Storage] Added concept tags to filter: %v (match ANY)", query.ConceptTags)
+		log.Printf("[Storage] Added %d concept tag conditions to filter: %v (match ANY)", conceptTagsAdded, query.ConceptTags)
 	}
 	
 	// Create filter with proper logic

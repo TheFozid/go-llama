@@ -214,15 +214,33 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	// Store learnings as memories if enabled
 	if e.storeInsights && len(reasoning.Learnings.ToSlice()) > 0 {
 		storedCount := 0
+		storedIDs := []string{}
 		for _, learning := range reasoning.Learnings.ToSlice() {
-			err := e.storeLearning(ctx, learning)
+			memID, err := e.storeLearning(ctx, learning)
 			if err != nil {
 				log.Printf("[Dialogue] ERROR: Failed to store learning: %v", err)
 			} else {
 				storedCount++
+				storedIDs = append(storedIDs, memID)
 			}
 		}
 		log.Printf("[Dialogue] Stored %d/%d learnings in memory (collective=true)", storedCount, len(reasoning.Learnings))
+		
+		// Give Qdrant time to index the new embeddings
+		if storedCount > 0 {
+			log.Printf("[Dialogue] Waiting 2s for Qdrant to index %d new learnings...", storedCount)
+			time.Sleep(2 * time.Second)
+			
+			// Verify learnings are searchable
+			for _, memID := range storedIDs {
+				mem, err := e.storage.GetMemoryByID(ctx, memID)
+				if err != nil {
+					log.Printf("[Dialogue] WARNING: Stored learning %s not immediately retrievable: %v", memID, err)
+				} else {
+					log.Printf("[Dialogue] ✓ Verified learning %s is retrievable", truncate(mem.Content, 60))
+				}
+			}
+		}
 	}
 	
 	// Check token budget
@@ -1927,14 +1945,23 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	}
 	
 	searchThreshold := e.adaptiveConfig.GetSearchThreshold()
+	
+	// For collective memory search (learnings), use a lower threshold
+	// Recent learnings might not have perfect semantic match but should still be retrieved
+	collectiveThreshold := searchThreshold
+	if collectiveThreshold > 0.20 {
+		collectiveThreshold = 0.20 // Lower threshold for collective memories
+	}
+	
 	query := memory.RetrievalQuery{
-		Limit:             8,
-		MinScore:          searchThreshold,
+		Limit:             10, // Increased from 8 to get more learnings
+		MinScore:          collectiveThreshold,
 		IncludeCollective: true,
 		IncludePersonal:   false, // Explicitly exclude personal for collective-only search
 	}
 	
-	log.Printf("[Dialogue] Searching collective memories (threshold: %.2f, limit: %d)", searchThreshold, 8)
+	log.Printf("[Dialogue] Searching collective memories (threshold: %.2f [adaptive: %.2f], limit: %d)", 
+		collectiveThreshold, searchThreshold, 10)
 	
 	results, err := e.storage.Search(ctx, query, embedding)
 	if err != nil {
@@ -1946,6 +1973,38 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 		for i, result := range results {
 			log.Printf("[Dialogue]   Result %d: score=%.2f, is_collective=%v, content=%s", 
 				i+1, result.Score, result.Memory.IsCollective, truncate(result.Memory.Content, 60))
+		}
+	}
+	
+	// Additionally search specifically for learnings (by concept tag)
+	learningQuery := memory.RetrievalQuery{
+		Limit:             5,
+		MinScore:          0.15, // Very low threshold for tagged learnings
+		IncludeCollective: true,
+		IncludePersonal:   false,
+		ConceptTags:       []string{"learning"}, // Search for learning tag specifically
+	}
+	
+	// Create a simple embedding for "learning" query
+	learningEmbedding, err := e.embedder.Embed(ctx, "recent learnings insights knowledge")
+	if err == nil {
+		learningResults, err := e.storage.Search(ctx, learningQuery, learningEmbedding)
+		if err == nil && len(learningResults) > 0 {
+			log.Printf("[Dialogue] Found %d additional learnings by concept tag", len(learningResults))
+			
+			// Merge learning results with main results (avoid duplicates)
+			existingIDs := make(map[string]bool)
+			for _, r := range results {
+				existingIDs[r.Memory.ID] = true
+			}
+			
+			for _, lr := range learningResults {
+				if !existingIDs[lr.Memory.ID] {
+					results = append(results, lr)
+					log.Printf("[Dialogue]   Learning: score=%.2f, content=%s", 
+						lr.Score, truncate(lr.Memory.Content, 60))
+				}
+			}
 		}
 	}
 	
@@ -2194,8 +2253,8 @@ func (e *Engine) parseActionFromPlan(planStep string) Action {
 	}
 }
 
-// storeLearning stores a learning as a collective memory
-func (e *Engine) storeLearning(ctx context.Context, learning Learning) error {
+// storeLearning stores a learning as a collective memory and returns the memory ID
+func (e *Engine) storeLearning(ctx context.Context, learning Learning) (string, error) {
 	content := fmt.Sprintf("LEARNING [%s]: %s (Context: %s, Confidence: %.2f)",
 		learning.Category, learning.What, learning.Context, learning.Confidence)
 	
@@ -2225,11 +2284,11 @@ func (e *Engine) storeLearning(ctx context.Context, learning Learning) error {
 	err = e.storage.Store(ctx, mem)
 	if err != nil {
 		log.Printf("[Dialogue] ERROR: Failed to store learning in Qdrant: %v", err)
-		return err
+		return "", err
 	}
 	
 	log.Printf("[Dialogue] ✓ Learning stored successfully (ID: %s, is_collective: true)", mem.ID)
-	return nil
+	return mem.ID, nil
 }
 
 // generateJitter returns a random duration within the jitter window
