@@ -440,6 +440,30 @@ if inMetaLoop {
 				
 				// Execute tool
 				result, err := e.executeAction(ctx, action)
+				
+				// If this was a search, pass URLs to the next parse action
+				if err == nil && action.Tool == ActionToolSearch {
+					if action.Metadata != nil {
+						if urls, ok := action.Metadata["extracted_urls"].([]string); ok && len(urls) > 0 {
+							// Find next pending parse action and give it the URLs
+							for j := i + 1; j < len(topGoal.Actions); j++ {
+								nextAction := &topGoal.Actions[j]
+								if (nextAction.Tool == ActionToolWebParseGeneral || 
+								    nextAction.Tool == ActionToolWebParseContextual) &&
+								   nextAction.Status == ActionStatusPending {
+									if nextAction.Metadata == nil {
+										nextAction.Metadata = make(map[string]interface{})
+									}
+									nextAction.Metadata["previous_search_urls"] = urls
+									// Update description with actual URL
+									nextAction.Description = urls[0]
+									log.Printf("[Dialogue] Updated next parse action with URL: %s", truncate(urls[0], 60))
+									break
+								}
+							}
+						}
+					}
+				}
 				if err != nil {
 					log.Printf("[Dialogue] Action failed: %v", err)
 					action.Result = fmt.Sprintf("ERROR: %v", err)
@@ -482,9 +506,17 @@ if inMetaLoop {
 		
 		// If no actions were executed, check if we should create new actions
 		if !actionExecuted {
-			// Only create new actions if goal has NO actions at all
-			// If it has actions, they should be executed next cycle
-			if len(topGoal.Actions) == 0 {
+			// Check if all actions are completed (need to create more)
+			allActionsCompleted := len(topGoal.Actions) > 0
+			for _, action := range topGoal.Actions {
+				if action.Status == ActionStatusPending || action.Status == ActionStatusInProgress {
+					allActionsCompleted = false
+					break
+				}
+			}
+			
+			// Create new actions if: (1) no actions at all, OR (2) all actions completed
+			if len(topGoal.Actions) == 0 || allActionsCompleted {
 				goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
 				if err != nil {
 					log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
@@ -524,14 +556,46 @@ if inMetaLoop {
 					}
 					
 					// Create initial search action
-					newAction := Action{
+					searchAction := Action{
 						Description: searchQuery,
 						Tool:        ActionToolSearch,
 						Status:      ActionStatusPending,
 						Timestamp:   time.Now(),
 					}
-					topGoal.Actions = append(topGoal.Actions, newAction)
+					topGoal.Actions = append(topGoal.Actions, searchAction)
 					log.Printf("[Dialogue] Created search action: %s", truncate(searchQuery, 60))
+					
+					// Pre-plan parse action (will execute after search completes)
+					// Determine which parser to use based on goal type
+					goalLower := strings.ToLower(topGoal.Description)
+					var parseAction Action
+					
+					if strings.Contains(goalLower, "research") ||
+					   strings.Contains(goalLower, "analyze") ||
+					   strings.Contains(goalLower, "understand") ||
+					   strings.Contains(goalLower, "learn about") {
+						// Create contextual parse with specific purpose
+						purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
+						parseAction = Action{
+							Description: "URL from search results",
+							Tool:        ActionToolWebParseContextual,
+							Status:      ActionStatusPending,
+							Timestamp:   time.Now(),
+							Metadata:    map[string]interface{}{"purpose": purpose},
+						}
+						log.Printf("[Dialogue] Pre-planned contextual parse action")
+					} else {
+						// Use general parser for simpler goals
+						parseAction = Action{
+							Description: "URL from search results",
+							Tool:        ActionToolWebParseGeneral,
+							Status:      ActionStatusPending,
+							Timestamp:   time.Now(),
+						}
+						log.Printf("[Dialogue] Pre-planned general parse action")
+					}
+					
+					topGoal.Actions = append(topGoal.Actions, parseAction)
 				}
 			} else {
 				// Goal has pending actions - log and wait for next cycle
@@ -544,53 +608,6 @@ if inMetaLoop {
 				log.Printf("[Dialogue] Goal has %d pending actions, will execute next cycle", pendingCount)
 			}
 		}
-		
-		// After executing actions, check if we should create follow-up actions
-		// (e.g., parse action after search completes)
-		if len(topGoal.Actions) > 0 {
-			lastAction := topGoal.Actions[len(topGoal.Actions)-1]
-			
-			// Check if last action was a completed search
-			if lastAction.Tool == ActionToolSearch && lastAction.Status == ActionStatusCompleted {
-				// Extract URLs from the search result
-				urls := e.extractURLsFromSearchResults(lastAction.Result)
-				
-				if len(urls) > 0 {
-					// Determine which parser to use based on goal
-					goalLower := strings.ToLower(topGoal.Description)
-					var parseAction Action
-					
-					// Use contextual parser for research/analysis goals
-					if strings.Contains(goalLower, "research") ||
-					   strings.Contains(goalLower, "analyze") ||
-					   strings.Contains(goalLower, "understand") ||
-					   strings.Contains(goalLower, "learn about") {
-						// Create contextual parse with specific purpose
-						purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
-						parseAction = Action{
-							Description: urls[0],
-							Tool:        ActionToolWebParseContextual,
-							Status:      ActionStatusPending,
-							Timestamp:   time.Now(),
-							Metadata:    map[string]interface{}{"purpose": purpose},
-						}
-						log.Printf("[Dialogue] Created contextual parse action with purpose: %s", truncate(purpose, 60))
-					} else {
-						// Use general parser for simpler goals
-						parseAction = Action{
-							Description: urls[0],
-							Tool:        ActionToolWebParseGeneral,
-							Status:      ActionStatusPending,
-							Timestamp:   time.Now(),
-						}
-						log.Printf("[Dialogue] Created general parse action for: %s", truncate(urls[0], 60))
-					}
-					
-					topGoal.Actions = append(topGoal.Actions, parseAction)
-				}
-			}
-		}
-
 		
 // Update goal progress based on completed actions
 completedActions := 0
@@ -1627,7 +1644,6 @@ func (e *Engine) executeAction(ctx context.Context, action *Action) (string, err
 	switch action.Tool {
 case ActionToolSearch:
 	// Extract search query from action description
-	// For now, use the full description as the query
 	params := map[string]interface{}{
 		"query": action.Description,
 	}
@@ -1649,15 +1665,14 @@ case ActionToolSearch:
 	
 	log.Printf("[Dialogue] Search completed successfully in %s", elapsed)
 	
-	// NEW: Extract URLs from search results and create parse actions
-	// This connects search → web parsing automatically
+	// Store URLs in action metadata for the next parse action to use
 	urls := e.extractURLsFromSearchResults(result.Output)
 	if len(urls) > 0 {
-		log.Printf("[Dialogue] Extracted %d URLs from search results", len(urls))
-		
-		// Add parse action for the first URL (most relevant)
-		// Note: This happens in the calling code, so we'll just log for now
-		// The actual action creation happens in the goal pursuit phase
+		log.Printf("[Dialogue] Extracted %d URLs from search results, storing for parse action", len(urls))
+		if action.Metadata == nil {
+			action.Metadata = make(map[string]interface{})
+		}
+		action.Metadata["extracted_urls"] = urls
 	}
 	
 	return result.Output, nil
@@ -1668,26 +1683,44 @@ case ActionToolWebParse,
      ActionToolWebParseContextual,
      ActionToolWebParseChunked:
 	
-	// Extract URL from action description
-	// Formats handled: 
-	//   - "https://example.com"
-	//   - "Parse URL: https://example.com"
-	//   - "Search result: https://example.com - title"
-	url := strings.TrimSpace(action.Description)
+	var url string
 	
-	// Clean up common prefixes
-	if idx := strings.Index(url, "http"); idx != -1 {
-		url = url[idx:] // Start from http
+	// First, check if previous search action stored URLs in metadata
+	if action.Metadata != nil {
+		if urls, ok := action.Metadata["previous_search_urls"].([]string); ok && len(urls) > 0 {
+			url = urls[0]
+			log.Printf("[Dialogue] Using URL from previous search metadata: %s", truncate(url, 60))
+		}
 	}
 	
-	// Remove everything after first space (titles, descriptions)
-	if idx := strings.Index(url, " "); idx != -1 {
-		url = url[:idx]
-	}
-	
-	// Basic validation
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return "", fmt.Errorf("invalid URL in action description: %s", action.Description)
+	// Fallback: extract URL from action description
+	if url == "" {
+		// Formats handled: 
+		//   - "https://example.com"
+		//   - "Parse URL: https://example.com"
+		//   - "Search result: https://example.com - title"
+		//   - "URL from search results" (placeholder - will fail with clear error)
+		url = strings.TrimSpace(action.Description)
+		
+		// Handle placeholder case
+		if url == "URL from search results" {
+			return "", fmt.Errorf("parse action has placeholder URL - previous search may have failed or returned no URLs")
+		}
+		
+		// Clean up common prefixes
+		if idx := strings.Index(url, "http"); idx != -1 {
+			url = url[idx:] // Start from http
+		}
+		
+		// Remove everything after first space (titles, descriptions)
+		if idx := strings.Index(url, " "); idx != -1 {
+			url = url[:idx]
+		}
+		
+		// Basic validation
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			return "", fmt.Errorf("invalid URL in action description: %s", action.Description)
+		}
 	}
 	
 	params := map[string]interface{}{
