@@ -700,10 +700,6 @@ func createReflectionGoal(ctx context.Context, db *gorm.DB, description string, 
 		Progress:    0.0,
 		Status:      dialogue.GoalStatusActive,
 		Actions:     []dialogue.Action{},
-		Metadata: map[string]interface{}{
-			"from_reflection": true,
-			"user_id":         userID,
-		},
 	}
 	
 	state.ActiveGoals = append(state.ActiveGoals, goal)
