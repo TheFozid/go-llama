@@ -474,14 +474,14 @@ func (w *DecayWorker) compressMemoriesWithClusters(ctx context.Context, candidat
 func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
 	// Sub-phase A: Evolve system identity (slot 0)
 	log.Printf("[DecayWorker] Sub-phase A: Identity evolution...")
-	if err := EvolveIdentity(w.db, w.storage, w.llmURL, w.llmModel); err != nil {
+		if err := EvolveIdentity(w.db, w.storage, w.embedder, w.llmURL, w.llmModel); err != nil {
 		log.Printf("[DecayWorker] ERROR evolving identity: %v", err)
 		// Non-fatal, continue to principle evolution
 	}
 	
 	// Sub-phase B: Extract principle candidates from memory patterns
 	log.Printf("[DecayWorker] Sub-phase B: Principle extraction...")
-	candidates, err := ExtractPrinciples(w.db, w.storage, w.minRatingThreshold, w.extractionLimit, w.llmURL, w.llmModel)
+	candidates, err := ExtractPrinciples(w.db, w.storage, w.embedder, w.minRatingThreshold, w.extractionLimit, w.llmURL, w.llmModel)
 	if err != nil {
 		return err
 	}

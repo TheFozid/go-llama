@@ -716,13 +716,11 @@ for _, tag := range searchTags {
 			Must: []*qdrant.Condition{
 				qdrant.NewMatch("concept_tags", tag),
 				qdrant.NewMatch("outcome_tag", "good"),
-				qdrant.NewMatch("is_collective", "true"), // Internal learnings
 			},
 		},
-		Limit:       qdrant.PtrOf(uint32(5)), // Fewer than user interactions
+		Limit:       qdrant.PtrOf(uint32(10)),
 		WithPayload: qdrant.NewWithPayload(true),
 	})
-		scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
 			CollectionName: storage.CollectionName,
 			Filter: &qdrant.Filter{
 				Must: []*qdrant.Condition{

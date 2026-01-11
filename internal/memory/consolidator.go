@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"strings"
 )
 
 // Consolidator finds and merges semantically duplicate memories
