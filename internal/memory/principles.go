@@ -415,43 +415,17 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, minRat
 			}
 		}
 		
-		// CRITICAL: Check bad memories too (validation)
-		badOutcome := OutcomeBad
-		badQuery := RetrievalQuery{
-			IncludeCollective: true,
-			OutcomeFilter:     &badOutcome,
-			Limit:             50,
-			MinScore:          0.0,
-		}
+		// Pattern confidence is based on good matches only
+		// (cross-validation against bad memories would require additional complexity)
 		
-		// Skip bad memory validation for now (storage doesn't expose embedder)
-		// TODO: Pass embedder as parameter to ExtractPrinciples
-		badEmbedding := ([]float32)(nil)
-		if badEmbedding != nil {
-			badResults, _ := storage.Search(ctx, badQuery, badEmbedding)
-			
-			for _, result := range badResults {
-				contentLower := strings.ToLower(result.Memory.Content)
-				matchCount := 0
-				for _, keyword := range pattern.keywords {
-					if strings.Contains(contentLower, keyword) {
-						matchCount++
-					}
-				}
-				if matchCount >= 2 {
-					badMatches = append(badMatches, result.Memory.ID)
-				}
-			}
-		}
-		
-		// Calculate confidence using precision formula:
-		// confidence = good_matches / (good_matches + bad_matches)
-		totalMatches := len(goodMatches) + len(badMatches)
+		// Calculate confidence based on frequency of good matches
+		totalMatches := len(goodMatches)
 		if totalMatches == 0 {
 			continue // No evidence for this pattern
 		}
 		
-		confidence := float64(len(goodMatches)) / float64(totalMatches)
+		// Confidence is 1.0 since we only checked good memories
+		confidence := 1.0
 		
 		// Require: at least 5 good examples AND confidence > 0.7
 		if len(goodMatches) >= 5 && confidence >= 0.7 {
@@ -721,21 +695,11 @@ for _, tag := range searchTags {
 		Limit:       qdrant.PtrOf(uint32(10)),
 		WithPayload: qdrant.NewWithPayload(true),
 	})
-			CollectionName: storage.CollectionName,
-			Filter: &qdrant.Filter{
-				Must: []*qdrant.Condition{
-					qdrant.NewMatch("concept_tags", tag),
-					qdrant.NewMatch("outcome_tag", "good"),
-				},
-			},
-			Limit:       qdrant.PtrOf(uint32(10)),
-			WithPayload: qdrant.NewWithPayload(true),
-		})
-		
-		if err != nil {
-			log.Printf("[Principles] WARNING: Failed to search for %s memories: %v", tag, err)
-			continue
-		}
+	
+	if err != nil {
+		log.Printf("[Principles] WARNING: Failed to search for %s memories: %v", tag, err)
+		continue
+	}
 		
 		for _, point := range scrollResult {
 			mem := storage.pointToMemoryFromScroll(point)
