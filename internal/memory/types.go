@@ -104,8 +104,9 @@ type RetrievalQuery struct {
 	MinScore          float64
 	
 	// Phase 4 enhancements: filtering by outcome and concepts
-	OutcomeFilter *OutcomeTag  // Filter by good/bad/neutral
-	ConceptTags   []string     // Filter by semantic tags
+	OutcomeFilter    *OutcomeTag  // Filter by good/bad/neutral
+	ConceptTags      []string     // Filter by semantic tags
+	GoodBehaviorBias float64      // 0.0-1.0: Weight good memories higher (from config)
 }
 
 // RetrievalResult represents a retrieved memory with relevance score

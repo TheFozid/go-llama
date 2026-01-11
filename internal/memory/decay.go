@@ -218,6 +218,12 @@ func (w *DecayWorker) runCompressionCycle() {
 	if err := w.recalculateTrustScores(ctx); err != nil {
 		log.Printf("[DecayWorker] ERROR in trust recalculation phase: %v", err)
 	}
+	// PHASE 4.5: Semantic deduplication (consolidate duplicate memories)
+	log.Println("[DecayWorker] PHASE 4.5: Consolidating duplicate memories...")
+	if err := w.consolidateDuplicatesPhase(ctx); err != nil {
+		log.Printf("[DecayWorker] ERROR in consolidation phase: %v", err)
+	}
+
 	
 	// PHASE 5: Evolve principles (only if schedule interval has passed)
 	w.evolutionMutex.Lock()
@@ -865,6 +871,36 @@ func (w *DecayWorker) pruneWeakLinksPhase(ctx context.Context) error {
 			totalLinksRemoved, memoriesUpdated, totalMemoriesScanned)
 	} else {
 		log.Printf("[LinkPruning] No weak links found (scanned %d memories)", totalMemoriesScanned)
+	}
+	
+	return nil
+}
+
+// consolidateDuplicatesPhase finds and merges semantically duplicate memories
+func (w *DecayWorker) consolidateDuplicatesPhase(ctx context.Context) error {
+	consolidator := NewConsolidator(w.storage, w.embedder)
+	
+	// Run consolidation on each tier
+	tiers := []MemoryTier{TierRecent, TierMedium, TierLong}
+	totalConsolidated := 0
+	
+	for _, tier := range tiers {
+		count, err := consolidator.ConsolidateDuplicates(ctx, tier)
+		if err != nil {
+			log.Printf("[Consolidation] WARNING: Failed to consolidate tier %s: %v", tier, err)
+			continue
+		}
+		totalConsolidated += count
+		
+		if count > 0 {
+			log.Printf("[Consolidation] Tier %s: consolidated %d duplicate sets", tier, count)
+		}
+	}
+	
+	if totalConsolidated > 0 {
+		log.Printf("[Consolidation] ✓ Total: %d duplicate sets consolidated", totalConsolidated)
+	} else {
+		log.Printf("[Consolidation] No duplicates found")
 	}
 	
 	return nil

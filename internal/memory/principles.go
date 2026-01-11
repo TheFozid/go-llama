@@ -345,32 +345,190 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 	
 	log.Printf("[Principles] Analyzing %d 'good' memories for patterns...", len(goodMemories))
 	
-	// Step 2: Group memories by concept tags to find patterns
-	conceptFrequency := make(map[string][]string) // concept -> list of memory IDs
+	// Step 2: Find BEHAVIORAL patterns from actual conversation content
+	// NOT just concept tag frequency - look at what actually worked
 	
-	for _, mem := range goodMemories {
-		for _, tag := range mem.ConceptTags {
-			conceptFrequency[tag] = append(conceptFrequency[tag], mem.ID)
+	type BehavioralPattern struct {
+		Behavior       string   // What behavior was exhibited
+		GoodExamples   []string // Memory IDs where this worked
+		BadExamples    []string // Memory IDs where this failed (for validation)
+		Confidence     float64  // Statistical confidence score
+		Evidence       string   // Sample evidence text
+	}
+	
+	patterns := []BehavioralPattern{}
+	
+	// PATTERN TYPE 1: Communication style patterns
+	// Look for patterns in HOW the AI communicated, not WHAT it did
+	stylePatterns := map[string]struct{
+		keywords []string
+		behavior string
+	}{
+		"technical_adaptation": {
+			keywords: []string{"technical", "code", "example", "specific", "detailed"},
+			behavior: "Adapt technical depth based on user's demonstrated knowledge level",
+		},
+		"uncertainty_honesty": {
+			keywords: []string{"uncertain", "don't know", "not sure", "clarify", "verify"},
+			behavior: "Express uncertainty honestly rather than guessing or fabricating answers",
+		},
+		"concrete_examples": {
+			keywords: []string{"example", "instance", "demonstrate", "show", "illustrate"},
+			behavior: "Use concrete examples to illustrate abstract concepts",
+		},
+		"conversational_tone": {
+			keywords: []string{"friendly", "casual", "natural", "like talking", "conversational"},
+			behavior: "Maintain a warm, conversational tone that feels natural and approachable",
+		},
+		"user_autonomy": {
+			keywords: []string{"could", "might", "suggest", "option", "choose", "prefer"},
+			behavior: "Respect user autonomy by offering suggestions rather than dictating solutions",
+		},
+		"clarification_seeking": {
+			keywords: []string{"clarify", "confirm", "verify", "check", "make sure", "understand correctly"},
+			behavior: "Ask clarifying questions when user intent is ambiguous",
+		},
+	}
+	
+	// Analyze each pattern against good AND bad memories
+	for patternID, pattern := range stylePatterns {
+		goodMatches := []string{}
+		badMatches := []string{}
+		evidenceText := ""
+		
+		// Check good memories
+		for _, mem := range goodMemories {
+			contentLower := strings.ToLower(mem.Content)
+			matchCount := 0
+			for _, keyword := range pattern.keywords {
+				if strings.Contains(contentLower, keyword) {
+					matchCount++
+				}
+			}
+			
+			// If 2+ keywords match, this is evidence of the pattern
+			if matchCount >= 2 {
+				goodMatches = append(goodMatches, mem.ID)
+				if evidenceText == "" && len(mem.Content) > 50 {
+					evidenceText = mem.Content[:min(200, len(mem.Content))]
+				}
+			}
+		}
+		
+		// CRITICAL: Check bad memories too (validation)
+		badOutcome := OutcomeBad
+		badQuery := RetrievalQuery{
+			IncludeCollective: true,
+			OutcomeFilter:     &badOutcome,
+			Limit:             50,
+			MinScore:          0.0,
+		}
+		
+		// Use a generic embedding for bad memory search
+		badEmbedding, _ := storage.embedder.Embed(ctx, strings.Join(pattern.keywords, " "))
+		if badEmbedding != nil {
+			badResults, _ := storage.Search(ctx, badQuery, badEmbedding)
+			
+			for _, result := range badResults {
+				contentLower := strings.ToLower(result.Memory.Content)
+				matchCount := 0
+				for _, keyword := range pattern.keywords {
+					if strings.Contains(contentLower, keyword) {
+						matchCount++
+					}
+				}
+				if matchCount >= 2 {
+					badMatches = append(badMatches, result.Memory.ID)
+				}
+			}
+		}
+		
+		// Calculate confidence using precision formula:
+		// confidence = good_matches / (good_matches + bad_matches)
+		totalMatches := len(goodMatches) + len(badMatches)
+		if totalMatches == 0 {
+			continue // No evidence for this pattern
+		}
+		
+		confidence := float64(len(goodMatches)) / float64(totalMatches)
+		
+		// Require: at least 5 good examples AND confidence > 0.7
+		if len(goodMatches) >= 5 && confidence >= 0.7 {
+			patterns = append(patterns, BehavioralPattern{
+				Behavior:     pattern.behavior,
+				GoodExamples: goodMatches,
+				BadExamples:  badMatches,
+				Confidence:   confidence,
+				Evidence:     evidenceText,
+			})
+			
+			log.Printf("[Principles] Pattern '%s': %d good, %d bad, confidence=%.2f",
+				patternID, len(goodMatches), len(badMatches), confidence)
 		}
 	}
 	
-	// Step 3: Find frequently occurring concept combinations
-	type ConceptPattern struct {
-		Concepts  []string
-		Frequency int
-		Memories  []string
+	// PATTERN TYPE 2: Multi-concept co-occurrence patterns
+	// Find pairs of concept tags that appear together frequently
+	type ConceptPair struct {
+		Tag1 string
+		Tag2 string
 	}
 	
-	var patterns []ConceptPattern
+	pairFrequency := make(map[ConceptPair][]string)
 	
-	// Find concepts that appear in at least 5 different memories
-	for concept, memoryIDs := range conceptFrequency {
-		if len(memoryIDs) >= 5 {
-			patterns = append(patterns, ConceptPattern{
-				Concepts:  []string{concept},
-				Frequency: len(memoryIDs),
-				Memories:  memoryIDs,
+	for _, mem := range goodMemories {
+		// Find all pairs of concepts in this memory
+		for i := 0; i < len(mem.ConceptTags); i++ {
+			for j := i + 1; j < len(mem.ConceptTags); j++ {
+				pair := ConceptPair{
+					Tag1: mem.ConceptTags[i],
+					Tag2: mem.ConceptTags[j],
+				}
+				// Normalize pair order
+				if pair.Tag2 < pair.Tag1 {
+					pair.Tag1, pair.Tag2 = pair.Tag2, pair.Tag1
+				}
+				pairFrequency[pair] = append(pairFrequency[pair], mem.ID)
+			}
+		}
+	}
+	
+	// Find frequent pairs (10+ occurrences)
+	for pair, memoryIDs := range pairFrequency {
+		if len(memoryIDs) >= 10 {
+			// Generate behavioral principle from this pair using LLM
+			principle, err := generatePrincipleFromConceptPair(
+				ctx,
+				llmURL,
+				llmModel,
+				pair.Tag1,
+				pair.Tag2,
+				len(memoryIDs),
+			)
+			
+			if err != nil {
+				log.Printf("[Principles] WARNING: Failed to generate principle from pair (%s, %s): %v",
+					pair.Tag1, pair.Tag2, err)
+				continue
+			}
+			
+			// Get sample evidence
+			sampleMem, _ := storage.GetMemoryByID(ctx, memoryIDs[0])
+			evidence := ""
+			if sampleMem != nil {
+				evidence = sampleMem.Content
+			}
+			
+			patterns = append(patterns, BehavioralPattern{
+				Behavior:     principle,
+				GoodExamples: memoryIDs,
+				BadExamples:  []string{}, // We didn't validate against bad examples here
+				Confidence:   0.7,        // Lower confidence - not validated
+				Evidence:     evidence,
 			})
+			
+			log.Printf("[Principles] Concept pair pattern (%s + %s): %d occurrences → %s",
+				pair.Tag1, pair.Tag2, len(memoryIDs), truncate(principle, 60))
 		}
 	}
 	
@@ -397,11 +555,8 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 	
 	// Use LLM to generate sophisticated principles from patterns
 	for _, pattern := range patterns {
-		// Calculate rating based on frequency and validation
-		rating := float64(pattern.Frequency) / float64(len(goodMemories))
-		if rating > 1.0 {
-			rating = 1.0
-		}
+		// Use calculated confidence as rating (already validated)
+		rating := pattern.Confidence
 		
 		// Only include if meets minimum threshold
 		if rating < minRatingThreshold {
@@ -442,10 +597,10 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 		}
 		
 		candidates = append(candidates, PrincipleCandidate{
-			Content:   principleText,
+			Content:   pattern.Behavior, // Use pre-formulated behavioral principle
 			Rating:    rating,
-			Evidence:  pattern.Memories,
-			Frequency: pattern.Frequency,
+			Evidence:  pattern.GoodExamples,
+			Frequency: len(pattern.GoodExamples),
 		})
 	}
 	
@@ -546,14 +701,61 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, llmURL string, llmModel strin
 	log.Printf("[Principles] Current identity profile: %.100s... (rating: %.2f, validations: %d)", 
 		currentName, currentIdentity.Rating, currentIdentity.ValidationCount)
 	
-	// Gather evidence about identity from memories
-	// Look for learnings about self, successful patterns, user interactions
-	var identityMemories []*Memory
+// Gather evidence about identity from TWO sources:
+// 1. User interactions (PRIMARY - how users see/address the AI)
+// 2. Internal reflections (SECONDARY - self-knowledge and capabilities)
+var identityMemories []*Memory
+
+// PART 1: Search user conversations about identity (PRIMARY)
+identityQueries := []string{
+	"my name is who are you what should I call you introduce yourself",
+	"your personality you seem like tell me about yourself",
+	"I like when you I prefer when you should be more",
+	"you remind me of you sound like you act like",
+}
+
+for _, query := range identityQueries {
+	embedding, err := embedder.Embed(ctx, query)
+	if err != nil {
+		log.Printf("[Principles] WARNING: Failed to embed identity query: %v", err)
+		continue
+	}
 	
-	// Search for memories tagged with "learning", "self_knowledge", "strategy"
-	searchTags := []string{"learning", "self_knowledge", "strategy", "tool_usage", "goal_completion"}
+	results, err := storage.Search(ctx, RetrievalQuery{
+		IncludePersonal:   true,  // User conversations
+		IncludeCollective: false, // Not system learnings yet
+		Limit:             10,
+		MinScore:          0.25, // Lower threshold for identity mentions
+	}, embedding)
 	
-	for _, tag := range searchTags {
+	if err != nil {
+		log.Printf("[Principles] WARNING: Failed to search for user identity mentions: %v", err)
+		continue
+	}
+	
+	for _, result := range results {
+		identityMemories = append(identityMemories, &result.Memory)
+	}
+}
+
+log.Printf("[Principles] Found %d user interaction memories about identity", len(identityMemories))
+
+// PART 2: Search internal reflections (SECONDARY - for capabilities/traits)
+searchTags := []string{"learning", "self_knowledge", "strategy"}
+
+for _, tag := range searchTags {
+	scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: storage.CollectionName,
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				qdrant.NewMatch("concept_tags", tag),
+				qdrant.NewMatch("outcome_tag", "good"),
+				qdrant.NewMatch("is_collective", "true"), // Internal learnings
+			},
+		},
+		Limit:       qdrant.PtrOf(uint32(5)), // Fewer than user interactions
+		WithPayload: qdrant.NewWithPayload(true),
+	})
 		scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
 			CollectionName: storage.CollectionName,
 			Filter: &qdrant.Filter{
@@ -577,10 +779,11 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, llmURL string, llmModel strin
 		}
 	}
 	
-	if len(identityMemories) < 10 {
-		log.Printf("[Principles] Insufficient evidence for identity evolution (%d memories, need 10+)", len(identityMemories))
-		return nil
-	}
+if len(identityMemories) < 5 {
+	log.Printf("[Principles] Insufficient evidence for identity evolution (%d memories, need 5+)", len(identityMemories))
+	return nil
+}
+
 	
 	log.Printf("[Principles] Found %d identity-relevant memories", len(identityMemories))
 	
@@ -651,6 +854,13 @@ Examples of good identity profiles:
 - "Mike - The friendly, helpful neighbor who explains things in plain language, cracks the occasional joke, and sounds like someone you’d chat with over coffee."
 - "Alex - A clear-thinking professional who explains ideas logically and calmly, like a colleague who’s good at their job and doesn’t overcomplicate things."
 - "Sarah - A thoughtful, approachable mentor who adapts explanations to your level, offers encouragement, and helps you think things through."
+
+IMPORTANT RULES:
+1. If users consistently call the AI by a specific name (e.g., "Elowen"), USE THAT NAME
+2. If users describe personality traits (e.g., "warm", "curious"), INCORPORATE THEM
+3. The profile should reflect ACTUAL demonstrated behaviors from evidence
+4. Prioritize user feedback over internal assessments
+5. Keep it 1-3 sentences, max 200 characters
 
 Respond ONLY with valid JSON:
 {
@@ -751,7 +961,9 @@ Respond ONLY with valid JSON:
 
 // generatePrincipleFromPattern uses LLM to synthesize an actionable principle from evidence
 func generatePrincipleFromPattern(ctx context.Context, llmURL string, llmModel string, concepts []string, evidence string, frequency int) (string, error) {
-	prompt := fmt.Sprintf(`Analyze these successful interactions and extract ONE actionable principle.
+prompt := fmt.Sprintf(`Extract ONE high-level BEHAVIORAL PRINCIPLE from these successful interaction patterns.
+
+CRITICAL: This must be a PRINCIPLE (how to behave), NOT a goal/task/technique.
 
 Concepts: %s
 Frequency: This pattern appeared in %d successful interactions
@@ -759,23 +971,38 @@ Frequency: This pattern appeared in %d successful interactions
 Evidence from successful interactions:
 %s
 
-Generate a single-sentence principle that:
-1. Captures what made these interactions successful
-2. Is specific and actionable (not generic advice)
-3. Starts with an action verb or clear instruction
-4. Is 15-30 words long
-5. Does NOT just repeat the concepts
+A behavioral principle describes:
+- WHO you are (personality, values, character)
+- HOW you interact (communication style, approach to users)
+- WHAT you prioritize (principles over tactics)
 
-Good examples:
-- "Break down complex debugging tasks into isolated test cases before examining the full codebase"
-- "Provide code examples alongside explanations when discussing abstract programming concepts"
-- "Verify user requirements with clarifying questions before proposing solutions"
+Generate ONE principle that:
+1. Describes a way of BEING or INTERACTING, not a task to accomplish
+2. Applies broadly across many situations, not just one domain
+3. Is about personality, values, or interaction philosophy
+4. Is 10-25 words
+5. Would belong in a "code of conduct" or "guiding values" document
 
-Bad examples (too generic):
-- "When working with Python, apply good strategies"
-- "Be helpful and accurate"
+GOOD EXAMPLES (behavioral principles):
+✓ "Maintain a warm, conversational tone that feels like talking to a knowledgeable friend"
+✓ "Express uncertainty honestly rather than fabricating confident-sounding answers"
+✓ "Adapt explanation depth based on user's demonstrated knowledge level"
+✓ "Use concrete examples before abstract concepts when teaching new ideas"
+✓ "Prioritize user understanding over showcasing technical knowledge"
+✓ "Respect user autonomy - offer suggestions without being pushy or prescriptive"
 
-Respond with ONLY the principle text, nothing else.`, 
+BAD EXAMPLES (these are goals/tasks/techniques, NOT principles):
+✗ "Investigate root causes of missing information" ← This is a GOAL
+✗ "Research how chatbots develop personalities" ← This is a TASK
+✗ "Break down complex debugging tasks into test cases" ← This is a TECHNIQUE
+✗ "Systematically analyze data quality" ← This is a PROCEDURE
+✗ "Provide code examples with explanations" ← This is a TACTIC
+
+The key difference:
+- Principles = WHO you are, HOW you behave, WHAT you value
+- Goals/Tasks = WHAT you want to accomplish, WHEN you'll do it
+
+Respond with ONLY the principle text (10-25 words), nothing else.`,
 		strings.Join(concepts, ", "), 
 		frequency,
 		evidence)
@@ -846,4 +1073,95 @@ Respond with ONLY the principle text, nothing else.`,
 	}
 
 	return principleText, nil
+}
+
+// generatePrincipleFromConceptPair creates a behavioral principle from two frequently co-occurring concepts
+func generatePrincipleFromConceptPair(ctx context.Context, llmURL string, llmModel string, concept1 string, concept2 string, frequency int) (string, error) {
+	prompt := fmt.Sprintf(`Two concepts frequently appear together in successful interactions:
+- Concept 1: %s
+- Concept 2: %s
+- Frequency: %d successful outcomes
+
+Generate ONE behavioral principle that explains why these concepts work well together.
+
+The principle must:
+1. Describe HOW to behave or interact (not WHAT task to do)
+2. Be 10-25 words
+3. Start with an action verb or describe a way of being
+4. Focus on personality, communication style, or values
+
+Example good principles:
+- "Combine technical accuracy with accessible explanations to serve users at different knowledge levels"
+- "Balance directness with empathy when delivering critical feedback"
+- "Pair abstract concepts with concrete examples to enhance understanding"
+
+Respond with ONLY the principle text (10-25 words), nothing else.`,
+		concept1, concept2, frequency)
+
+	reqBody := map[string]interface{}{
+		"model": llmModel,
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": "You are an expert at extracting behavioral principles from concept pairs. Be specific and action-oriented.",
+			},
+			{
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"temperature": 0.7,
+		"stream":      false,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("no response from LLM")
+	}
+
+	principle := strings.TrimSpace(result.Choices[0].Message.Content)
+	
+	// Validate length
+	if len(principle) < 20 || len(principle) > 200 {
+		return "", fmt.Errorf("principle length invalid: %d chars", len(principle))
+	}
+
+	return principle, nil
+}
+
+// min helper function
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

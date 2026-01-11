@@ -535,124 +535,182 @@ if inMetaLoop {
 						topGoal.Outcome = "bad"
 						actionExecuted = true
 					} else {
-						action.Result = result
-						action.Status = ActionStatusCompleted
-						actionCount++
-						actionExecuted = true
-						log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
-					}
+					action.Result = result
+					action.Status = ActionStatusCompleted
+					actionCount++
+					actionExecuted = true
+					log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
 				}
 				action.Timestamp = time.Now()
+				
+				// Update research plan if this was part of a plan
+				if topGoal.ResearchPlan != nil && action.Metadata != nil {
+					if questionID, ok := action.Metadata["research_question_id"].(string); ok {
+						if err := e.updateResearchProgress(ctx, &topGoal, questionID, result); err != nil {
+							log.Printf("[Dialogue] WARNING: Failed to update research progress: %v", err)
+						}
+					}
+				}
 				
 				// Only execute one action per cycle
 				break
 			}
 		}
 		
-		// If no actions were executed, check if we should create new actions
-		if !actionExecuted {
-			// Check if all actions are completed (need to create more)
-			allActionsCompleted := len(topGoal.Actions) > 0
-			for _, action := range topGoal.Actions {
-				if action.Status == ActionStatusPending || action.Status == ActionStatusInProgress {
-					allActionsCompleted = false
-					break
-				}
-			}
-			
-			// Create new actions if: (1) no actions at all, OR (2) all actions completed
-			if len(topGoal.Actions) == 0 || allActionsCompleted {
-				goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
-				if err != nil {
-					log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
-				} else {
-					thoughtCount++
-					totalTokens += tokens
-					
-					e.stateManager.SaveThought(ctx, &ThoughtRecord{
-						CycleID:     state.CycleCount,
-						ThoughtNum:  thoughtCount,
-						Content:     goalThought,
-						TokensUsed:  tokens,
-						ActionTaken: false,
-						Timestamp:   time.Now(),
-					})
-					
-					log.Printf("[Dialogue] Goal thought: %s", truncate(goalThought, 80))
-					
-					// Create initial search action based on goal type
-					var searchQuery string
-					
-					// Extract key terms from goal description for search
-					desc := strings.ToLower(topGoal.Description)
-					
-					if strings.Contains(desc, "research") {
-						// Extract what to research
-						searchQuery = strings.TrimPrefix(desc, "research ")
-						searchQuery = strings.TrimPrefix(searchQuery, "other ")
-						searchQuery = strings.TrimPrefix(searchQuery, "human like ")
-					} else if strings.Contains(desc, "learn about:") {
-						searchQuery = strings.TrimPrefix(desc, "learn about: ")
-					} else if strings.Contains(desc, "choose") || strings.Contains(desc, "select") {
-						// For choice/selection goals, extract the subject
-						searchQuery = desc
-					} else {
-						searchQuery = topGoal.Description
-					}
-					
-					// Create initial search action
-					searchAction := Action{
-						Description: searchQuery,
-						Tool:        ActionToolSearch,
-						Status:      ActionStatusPending,
-						Timestamp:   time.Now(),
-					}
-					topGoal.Actions = append(topGoal.Actions, searchAction)
-					log.Printf("[Dialogue] Created search action: %s", truncate(searchQuery, 60))
-					
-					// Pre-plan parse action (will execute after search completes)
-					// Determine which parser to use based on goal type
-					goalLower := strings.ToLower(topGoal.Description)
-					var parseAction Action
-					
-					if strings.Contains(goalLower, "research") ||
-					   strings.Contains(goalLower, "analyze") ||
-					   strings.Contains(goalLower, "understand") ||
-					   strings.Contains(goalLower, "learn about") {
-						// Create contextual parse with specific purpose
-						purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
-						parseAction = Action{
-							Description: "URL from search results",
-							Tool:        ActionToolWebParseContextual,
-							Status:      ActionStatusPending,
-							Timestamp:   time.Now(),
-							Metadata:    map[string]interface{}{"purpose": purpose},
-						}
-						log.Printf("[Dialogue] Pre-planned contextual parse action")
-					} else {
-						// Use general parser for simpler goals
-						parseAction = Action{
-							Description: "URL from search results",
-							Tool:        ActionToolWebParseGeneral,
-							Status:      ActionStatusPending,
-							Timestamp:   time.Now(),
-						}
-						log.Printf("[Dialogue] Pre-planned general parse action")
-					}
-					
-					topGoal.Actions = append(topGoal.Actions, parseAction)
-				}
-			} else {
-				// Goal has pending actions - log and wait for next cycle
-				pendingCount := 0
+// If no actions were executed, check if we should create new actions
+			if !actionExecuted {
+				// Check if all actions are completed (need to create more)
+				allActionsCompleted := len(topGoal.Actions) > 0
 				for _, action := range topGoal.Actions {
-					if action.Status == ActionStatusPending {
-						pendingCount++
+					if action.Status == ActionStatusPending || action.Status == ActionStatusInProgress {
+						allActionsCompleted = false
+						break
 					}
 				}
-				log.Printf("[Dialogue] Goal has %d pending actions, will execute next cycle", pendingCount)
+				
+				// Create new actions if: (1) no actions at all, OR (2) all actions completed
+				if len(topGoal.Actions) == 0 || allActionsCompleted {
+					goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
+					if err != nil {
+						log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
+					} else {
+						thoughtCount++
+						totalTokens += tokens
+						
+						e.stateManager.SaveThought(ctx, &ThoughtRecord{
+							CycleID:     state.CycleCount,
+							ThoughtNum:  thoughtCount,
+							Content:     goalThought,
+							TokensUsed:  tokens,
+							ActionTaken: false,
+							Timestamp:   time.Now(),
+						})
+						
+						log.Printf("[Dialogue] Goal thought: %s", truncate(goalThought, 80))
+						
+						// Determine if this goal needs a research plan
+						desc := strings.ToLower(topGoal.Description)
+						needsResearchPlan := strings.Contains(desc, "research") ||
+											 strings.Contains(desc, "investigate") ||
+											 strings.Contains(desc, "explore") ||
+											 strings.Contains(desc, "analyze") ||
+											 strings.Contains(desc, "understand")
+						
+						if needsResearchPlan && topGoal.ResearchPlan == nil {
+							// Generate multi-step research plan
+							log.Printf("[Dialogue] Goal requires research plan, generating...")
+							
+							plan, planTokens, err := e.generateResearchPlan(ctx, &topGoal)
+							if err != nil {
+								log.Printf("[Dialogue] WARNING: Failed to generate research plan: %v", err)
+								// Fallback to simple action
+								searchQuery := topGoal.Description
+								searchAction := Action{
+									Description: searchQuery,
+									Tool:        ActionToolSearch,
+									Status:      ActionStatusPending,
+									Timestamp:   time.Now(),
+								}
+								topGoal.Actions = append(topGoal.Actions, searchAction)
+							} else {
+								topGoal.ResearchPlan = plan
+								thoughtCount++
+								totalTokens += planTokens
+								
+								log.Printf("[Dialogue] ✓ Research plan created: '%s' with %d questions",
+									plan.RootQuestion, len(plan.SubQuestions))
+								for i, q := range plan.SubQuestions {
+									log.Printf("[Dialogue]   Q%d [%s]: %s (deps: %v)",
+										i+1, q.ID, truncate(q.Question, 60), q.Dependencies)
+								}
+							}
+						} else if topGoal.ResearchPlan != nil {
+							// Execute next step of existing research plan
+							log.Printf("[Dialogue] Executing research plan step %d/%d",
+								topGoal.ResearchPlan.CurrentStep+1, len(topGoal.ResearchPlan.SubQuestions))
+							
+							nextAction := e.getNextResearchAction(ctx, &topGoal)
+							if nextAction != nil {
+								topGoal.Actions = append(topGoal.Actions, *nextAction)
+								log.Printf("[Dialogue] ✓ Created action: %s", nextAction.Description)
+							} else {
+								// All questions complete, create synthesis action
+								topGoal.ResearchPlan.SynthesisNeeded = true
+								synthesisAction := Action{
+									Description: "Synthesize research findings",
+									Tool:        ActionToolSynthesis,
+									Status:      ActionStatusPending,
+									Timestamp:   time.Now(),
+								}
+								topGoal.Actions = append(topGoal.Actions, synthesisAction)
+								log.Printf("[Dialogue] ✓ Research complete, synthesis action created")
+							}
+						} else {
+							// Simple goal without research plan
+							var searchQuery string
+							
+							if strings.Contains(desc, "research") {
+								searchQuery = strings.TrimPrefix(desc, "research ")
+								searchQuery = strings.TrimPrefix(searchQuery, "other ")
+								searchQuery = strings.TrimPrefix(searchQuery, "human like ")
+							} else if strings.Contains(desc, "learn about:") {
+								searchQuery = strings.TrimPrefix(desc, "learn about: ")
+							} else if strings.Contains(desc, "choose") || strings.Contains(desc, "select") {
+								searchQuery = desc
+							} else {
+								searchQuery = topGoal.Description
+							}
+							
+							searchAction := Action{
+								Description: searchQuery,
+								Tool:        ActionToolSearch,
+								Status:      ActionStatusPending,
+								Timestamp:   time.Now(),
+							}
+							topGoal.Actions = append(topGoal.Actions, searchAction)
+							log.Printf("[Dialogue] Created simple search action: %s", truncate(searchQuery, 60))
+							
+							// Pre-plan parse action
+							goalLower := strings.ToLower(topGoal.Description)
+							var parseAction Action
+							
+							if strings.Contains(goalLower, "research") ||
+							   strings.Contains(goalLower, "analyze") ||
+							   strings.Contains(goalLower, "understand") ||
+							   strings.Contains(goalLower, "learn about") {
+								purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
+								parseAction = Action{
+									Description: "URL from search results",
+									Tool:        ActionToolWebParseContextual,
+									Status:      ActionStatusPending,
+									Timestamp:   time.Now(),
+									Metadata:    map[string]interface{}{"purpose": purpose},
+								}
+								log.Printf("[Dialogue] Pre-planned contextual parse action")
+							} else {
+								parseAction = Action{
+									Description: "URL from search results",
+									Tool:        ActionToolWebParseGeneral,
+									Status:      ActionStatusPending,
+									Timestamp:   time.Now(),
+								}
+								log.Printf("[Dialogue] Pre-planned general parse action")
+							}
+							
+							topGoal.Actions = append(topGoal.Actions, parseAction)
+						}
+					}
+				} else {
+					// Goal has pending actions - log and wait for next cycle
+					pendingCount := 0
+					for _, action := range topGoal.Actions {
+						if action.Status == ActionStatusPending {
+							pendingCount++
+						}
+					}
+					log.Printf("[Dialogue] Goal has %d pending actions, will execute next cycle", pendingCount)
+				}
 			}
-		}
 		
 // Update goal progress based on completed actions
 completedActions := 0
@@ -707,6 +765,26 @@ if topGoal.Progress >= 1.0 {
 	
 	// Mark goal based on outcome quality
 	if hasUsefulOutcome {
+		// Synthesize research findings if this goal had a research plan
+		if topGoal.ResearchPlan != nil && topGoal.ResearchPlan.SynthesisNeeded {
+			log.Printf("[Dialogue] Synthesizing research findings...")
+			
+			synthesis, synthesisTokens, err := e.synthesizeResearchFindings(ctx, &topGoal)
+			totalTokens += synthesisTokens
+			
+			if err != nil {
+				log.Printf("[Dialogue] WARNING: Synthesis failed: %v", err)
+			} else {
+				// Store synthesis as collective memory
+				if err := e.storeResearchSynthesis(ctx, &topGoal, synthesis); err != nil {
+					log.Printf("[Dialogue] WARNING: Failed to store synthesis: %v", err)
+				} else {
+					log.Printf("[Dialogue] ✓ Synthesis stored (%d chars): %s",
+						len(synthesis), truncate(synthesis, 100))
+				}
+			}
+		}
+		
 		topGoal.Status = GoalStatusCompleted
 		topGoal.Outcome = "good"
 		log.Printf("[Dialogue] ✓ Goal completed successfully: %s", topGoal.Description)
@@ -1737,6 +1815,290 @@ jsonData, err := json.Marshal(reqBody)
 }
 
 
+// generateResearchPlan creates a structured multi-step investigation plan
+func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
+	prompt := fmt.Sprintf(`Create a thorough research plan to investigate this goal.
+
+Goal: %s
+
+Break this into 3-7 logical sub-questions that:
+1. Start with foundational understanding
+2. Build progressively to specific details
+3. Include verification/cross-checking
+4. Can each be answered via web search
+
+Respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "root_question": "Main question being answered",
+  "sub_questions": [
+    {
+      "id": "q1",
+      "question": "First foundational question",
+      "search_query": "suggested search terms",
+      "priority": 10,
+      "dependencies": []
+    },
+    {
+      "id": "q2",
+      "question": "Follow-up building on q1",
+      "search_query": "more specific search terms",
+      "priority": 9,
+      "dependencies": ["q1"]
+    }
+  ]
+}
+
+Keep plan achievable (3-7 questions max). Each question = 1-2 actions (search + parse).`, 
+		goal.Description)
+
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	if err != nil {
+		return nil, tokens, fmt.Errorf("LLM call failed: %w", err)
+	}
+	
+	// Parse response
+	type PlanJSON struct {
+		RootQuestion string `json:"root_question"`
+		SubQuestions []struct {
+			ID           string   `json:"id"`
+			Question     string   `json:"question"`
+			SearchQuery  string   `json:"search_query"`
+			Priority     int      `json:"priority"`
+			Dependencies []string `json:"dependencies"`
+		} `json:"sub_questions"`
+	}
+	
+	content := response.Reflection
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	var planJSON PlanJSON
+	if err := json.Unmarshal([]byte(content), &planJSON); err != nil {
+		return nil, tokens, fmt.Errorf("failed to parse plan JSON: %w", err)
+	}
+	
+	if len(planJSON.SubQuestions) == 0 {
+		return nil, tokens, fmt.Errorf("plan has no questions")
+	}
+	if len(planJSON.SubQuestions) > 10 {
+		planJSON.SubQuestions = planJSON.SubQuestions[:10]
+	}
+	
+	// Convert to ResearchPlan
+	plan := &ResearchPlan{
+		RootQuestion:    planJSON.RootQuestion,
+		SubQuestions:    make([]ResearchQuestion, len(planJSON.SubQuestions)),
+		CurrentStep:     0,
+		SynthesisNeeded: false,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	
+	for i, sq := range planJSON.SubQuestions {
+		plan.SubQuestions[i] = ResearchQuestion{
+			ID:              sq.ID,
+			Question:        sq.Question,
+			SearchQuery:     sq.SearchQuery,
+			Priority:        sq.Priority,
+			Dependencies:    sq.Dependencies,
+			Status:          ResearchStatusPending,
+			SourcesFound:    []string{},
+			KeyFindings:     "",
+			ConfidenceLevel: 0.0,
+		}
+	}
+	
+	return plan, tokens, nil
+}
+
+// getNextResearchAction determines next action from research plan
+func (e *Engine) getNextResearchAction(ctx context.Context, goal *Goal) *Action {
+	plan := goal.ResearchPlan
+	if plan == nil {
+		return nil
+	}
+	
+	// Find next pending question (respecting dependencies)
+	var nextQuestion *ResearchQuestion
+	
+	for i := range plan.SubQuestions {
+		q := &plan.SubQuestions[i]
+		
+		if q.Status != ResearchStatusPending {
+			continue
+		}
+		
+		// Check dependencies
+		dependenciesMet := true
+		for _, depID := range q.Dependencies {
+			for _, dq := range plan.SubQuestions {
+				if dq.ID == depID && dq.Status != ResearchStatusCompleted {
+					dependenciesMet = false
+					break
+				}
+			}
+			if !dependenciesMet {
+				break
+			}
+		}
+		
+		if dependenciesMet {
+			nextQuestion = q
+			break
+		}
+	}
+	
+	if nextQuestion == nil {
+		return nil // No questions available
+	}
+	
+	// Mark as in progress
+	nextQuestion.Status = ResearchStatusInProgress
+	plan.CurrentStep++
+	plan.UpdatedAt = time.Now()
+	
+	// Create search action
+	return &Action{
+		Description: nextQuestion.SearchQuery,
+		Tool:        ActionToolSearch,
+		Status:      ActionStatusPending,
+		Timestamp:   time.Now(),
+		Metadata: map[string]interface{}{
+			"research_question_id": nextQuestion.ID,
+			"question_text":        nextQuestion.Question,
+		},
+	}
+}
+
+// updateResearchProgress records findings from completed action
+func (e *Engine) updateResearchProgress(ctx context.Context, goal *Goal, questionID string, actionResult string) error {
+	plan := goal.ResearchPlan
+	if plan == nil {
+		return fmt.Errorf("no research plan")
+	}
+	
+	// Find question
+	var question *ResearchQuestion
+	for i := range plan.SubQuestions {
+		if plan.SubQuestions[i].ID == questionID {
+			question = &plan.SubQuestions[i]
+			break
+		}
+	}
+	
+	if question == nil {
+		return fmt.Errorf("question %s not found", questionID)
+	}
+	
+	// Extract findings using simple heuristics (lightweight, no LLM)
+	// Take first 200 chars as key finding
+	findings := actionResult
+	if len(findings) > 200 {
+		findings = findings[:200] + "..."
+	}
+	
+	question.KeyFindings = findings
+	question.ConfidenceLevel = 0.7 // Default confidence
+	question.Status = ResearchStatusCompleted
+	plan.UpdatedAt = time.Now()
+	
+	log.Printf("[Dialogue] ✓ Question '%s' complete: %s", questionID, truncate(findings, 80))
+	
+	return nil
+}
+
+// synthesizeResearchFindings combines all findings into coherent knowledge
+func (e *Engine) synthesizeResearchFindings(ctx context.Context, goal *Goal) (string, int, error) {
+	plan := goal.ResearchPlan
+	if plan == nil {
+		return "", 0, fmt.Errorf("no research plan")
+	}
+	
+	// Build context from completed questions
+	var findingsBuilder strings.Builder
+	findingsBuilder.WriteString(fmt.Sprintf("Research: %s\n\n", plan.RootQuestion))
+	
+	completedCount := 0
+	for i, q := range plan.SubQuestions {
+		if q.Status == ResearchStatusCompleted && q.KeyFindings != "" {
+			completedCount++
+			findingsBuilder.WriteString(fmt.Sprintf("Q%d: %s\n", i+1, q.Question))
+			findingsBuilder.WriteString(fmt.Sprintf("A%d: %s\n\n", i+1, q.KeyFindings))
+		}
+	}
+	
+	if completedCount == 0 {
+		return "", 0, fmt.Errorf("no completed questions to synthesize")
+	}
+	
+	prompt := fmt.Sprintf(`Synthesize these research findings into a coherent summary.
+
+%s
+
+Create a comprehensive synthesis (3-5 paragraphs) that:
+1. Directly answers the root question
+2. Integrates all findings logically
+3. Notes any gaps or uncertainties
+4. Provides actionable insights
+
+Write synthesis as plain text (no JSON, no markdown):`, findingsBuilder.String())
+
+	synthesis, tokens, err := e.callLLM(ctx, prompt)
+	if err != nil {
+		return "", tokens, fmt.Errorf("synthesis failed: %w", err)
+	}
+	
+	return synthesis, tokens, nil
+}
+
+// storeResearchSynthesis saves synthesis as high-value collective memory
+func (e *Engine) storeResearchSynthesis(ctx context.Context, goal *Goal, synthesis string) error {
+	content := fmt.Sprintf("Research: %s\n\nFindings:\n%s",
+		goal.ResearchPlan.RootQuestion, synthesis)
+	
+	embedding, err := e.embedder.Embed(ctx, content)
+	if err != nil {
+		return fmt.Errorf("failed to embed: %w", err)
+	}
+	
+	// Extract concept tags from questions
+	conceptTags := []string{"research", "synthesis"}
+	for _, q := range goal.ResearchPlan.SubQuestions {
+		words := strings.Fields(q.Question)
+		if len(words) > 0 {
+			tag := strings.ToLower(strings.Trim(words[0], "?,.!"))
+			if len(tag) > 3 && len(tag) < 20 {
+				conceptTags = append(conceptTags, tag)
+			}
+		}
+	}
+	if len(conceptTags) > 5 {
+		conceptTags = conceptTags[:5]
+	}
+	
+	mem := &memory.Memory{
+		Content:         content,
+		Tier:            memory.TierRecent,
+		IsCollective:    true,
+		CreatedAt:       time.Now(),
+		LastAccessedAt:  time.Now(),
+		ImportanceScore: 0.9,
+		Embedding:       embedding,
+		OutcomeTag:      "good",
+		TrustScore:      0.8,
+		ValidationCount: len(goal.ResearchPlan.SubQuestions),
+		ConceptTags:     conceptTags,
+		Metadata: map[string]interface{}{
+			"goal_id":       goal.ID,
+			"research_type": "synthesis",
+		},
+	}
+	
+	return e.storage.Store(ctx, mem)
+}
+
 // executeAction executes a tool-based action
 func (e *Engine) executeAction(ctx context.Context, action *Action) (string, error) {
 	log.Printf("[Dialogue] Executing action with tool '%s' (description: %s)", 
@@ -1903,6 +2265,12 @@ case ActionToolWebParse,
 		elapsed := time.Since(startTime)
 		log.Printf("[Dialogue] Memory consolidation completed in %s", elapsed)
 		return "Memory consolidation completed", nil
+	
+	case ActionToolSynthesis:
+		// Synthesis happens in goal completion phase, not here
+		elapsed := time.Since(startTime)
+		log.Printf("[Dialogue] Synthesis action marked (will execute on goal completion)")
+		return "Synthesis ready", nil
 		
 	default:
 		return "", fmt.Errorf("unknown tool: %s", action.Tool)

@@ -358,7 +358,70 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 		})
 	}
 
+	// Apply trust-weighted reranking if bias is configured
+	if len(results) > 0 && query.GoodBehaviorBias > 0 {
+		results = applyTrustWeighting(results, query.GoodBehaviorBias)
+	}
+
 	return results, nil
+}
+
+// applyTrustWeighting adjusts retrieval scores based on trust, outcome, and validation
+// This implements Point 1: Making good/bad outcomes influence future behavior
+func applyTrustWeighting(results []RetrievalResult, goodBias float64) []RetrievalResult {
+	for i := range results {
+		baseScore := results[i].Score
+		mem := &results[i].Memory
+		
+		// Component 1: Trust score adjustment (±0.15)
+		// High trust (0.9) → +0.12, Low trust (0.1) → -0.12
+		trustAdj := (mem.TrustScore - 0.5) * 0.3
+		
+		// Component 2: Outcome tag adjustment (scaled by good_behavior_bias)
+		// At 60% bias: good gets +0.15, bad gets -0.10
+		outcomeAdj := 0.0
+		if mem.OutcomeTag == "good" {
+			outcomeAdj = goodBias * 0.25 // Max +0.15 at 60% bias
+		} else if mem.OutcomeTag == "bad" {
+			outcomeAdj = -(1.0 - goodBias) * 0.25 // Max -0.10 at 60% bias
+		}
+		// neutral gets 0.0
+		
+		// Component 3: Validation bonus (frequently validated = more reliable)
+		// Caps at +0.10 for 100+ validations
+		validationAdj := 0.0
+		if mem.ValidationCount > 0 {
+			validationAdj = minFloat64(0.1, float64(mem.ValidationCount)/100.0)
+		}
+		
+		// Apply all adjustments
+		newScore := baseScore + trustAdj + outcomeAdj + validationAdj
+		
+		// Clamp to valid range [0.0, 1.0]
+		if newScore < 0.0 {
+			newScore = 0.0
+		}
+		if newScore > 1.0 {
+			newScore = 1.0
+		}
+		
+		results[i].Score = newScore
+	}
+	
+	// Re-sort by adjusted scores (highest first)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+	
+	return results
+}
+
+// minFloat64 returns the minimum of two float64 values
+func minFloat64(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // pointToMemoryFromRetrieved converts a RetrievedPoint to a Memory struct

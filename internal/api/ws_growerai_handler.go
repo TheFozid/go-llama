@@ -84,6 +84,7 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 		IncludeCollective: false,
 		Limit:             cfg.GrowerAI.Retrieval.MaxMemories,
 		MinScore:          cfg.GrowerAI.Retrieval.MinScore,
+		GoodBehaviorBias:  cfg.GrowerAI.Personality.GoodBehaviorBias, // Use config bias
 	}
 
 	log.Printf("[GrowerAI-WS] Searching memory (user=%s, limit=%d, min_score=%.2f)...", 
@@ -406,7 +407,7 @@ if len(allLinkedIDs) > 0 {
 		log.Printf("[GrowerAI-WS] Skipping memory storage (message too short)")
 	}
 
-	// Save bot message to database
+// Save bot message to database
 	botResponseWithStats := botResponse + "\n\n_Tokens/sec: " + fmt.Sprintf("%.2f", toksPerSec) + "_"
 	botMsg := chat.Message{
 		ChatID:    chatInst.ID,
@@ -418,5 +419,286 @@ if len(allLinkedIDs) > 0 {
 		log.Printf("[GrowerAI-WS] WARNING: Failed to save bot message: %v", err)
 	}
 
+	// INTEGRATION: Post-conversation reflection (async - don't block response)
+	if cfg.GrowerAI.Dialogue.Enabled {
+		go func() {
+			reflectionCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			
+			if err := performPostConversationReflection(
+				reflectionCtx,
+				content,           // User's message
+				botResponse,       // Bot's response
+				userID,
+				cfg,
+				storage,
+				embedder,
+			); err != nil {
+				log.Printf("[GrowerAI-WS] WARNING: Post-conversation reflection failed: %v", err)
+			}
+		}()
+	}
+
 	log.Printf("[GrowerAI-WS] ✓ Message processing complete")
+}
+
+// performPostConversationReflection uses LLM to analyze the conversation and decide actions
+// This is the natural integration point - no hardcoded triggers, just reflection
+func performPostConversationReflection(
+	ctx context.Context,
+	userMessage string,
+	botResponse string,
+	userID uint,
+	cfg *config.Config,
+	storage *memory.Storage,
+	embedder *memory.Embedder,
+) error {
+	log.Printf("[Reflection] Analyzing conversation for actions...")
+	
+	// Build reflection prompt
+	prompt := fmt.Sprintf(`You just had this conversation with a user:
+
+User: %s
+
+Your response: %s
+
+Analyze this interaction and determine what actions to take. Respond ONLY with valid JSON:
+
+{
+  "outcome_quality": "good|bad|neutral",
+  "reasoning": "brief explanation of outcome quality",
+  "mistake_made": false,
+  "mistake_description": "what was incorrect (if mistake_made=true)",
+  "user_requested_goal": false,
+  "goal_description": "what user wants researched/done (if user_requested_goal=true)",
+  "user_gave_feedback": false,
+  "feedback_type": "correction|personality|preference|other",
+  "feedback_summary": "what feedback was given (if user_gave_feedback=true)",
+  "important_learning": false,
+  "learning_content": "what was learned (if important_learning=true)"
+}
+
+Guidelines:
+- outcome_quality: "bad" if you made a factual error, gave unhelpful advice, or misunderstood
+- outcome_quality: "good" if conversation was helpful and accurate
+- mistake_made: true if user corrected you or you realize you were wrong
+- user_requested_goal: true if user asked you to research, learn about, investigate, or find something
+- user_gave_feedback: true if user commented on your personality, style, helpfulness, or behavior
+- important_learning: true if you gained insight worth remembering long-term
+
+Be honest about mistakes. Don't create goals for simple questions that were already answered.`, 
+		userMessage, botResponse)
+
+	// Call LLM for reflection
+	reqBody := map[string]interface{}{
+		"model": cfg.GrowerAI.ReasoningModel.Name,
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": "You are a self-reflective AI analyzing your own conversations. Be honest about mistakes and identify actionable follow-ups.",
+			},
+			{
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"temperature": 0.3,
+		"stream":      false,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.URL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return fmt.Errorf("no choices returned from LLM")
+	}
+
+	content := strings.TrimSpace(result.Choices[0].Message.Content)
+	
+	// Clean JSON
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	// Parse reflection
+	var reflection struct {
+		OutcomeQuality      string `json:"outcome_quality"`
+		Reasoning           string `json:"reasoning"`
+		MistakeMade         bool   `json:"mistake_made"`
+		MistakeDescription  string `json:"mistake_description"`
+		UserRequestedGoal   bool   `json:"user_requested_goal"`
+		GoalDescription     string `json:"goal_description"`
+		UserGaveFeedback    bool   `json:"user_gave_feedback"`
+		FeedbackType        string `json:"feedback_type"`
+		FeedbackSummary     string `json:"feedback_summary"`
+		ImportantLearning   bool   `json:"important_learning"`
+		LearningContent     string `json:"learning_content"`
+	}
+
+	if err := json.Unmarshal([]byte(content), &reflection); err != nil {
+		log.Printf("[Reflection] WARNING: Failed to parse reflection JSON: %v", err)
+		return nil // Non-fatal
+	}
+
+	log.Printf("[Reflection] Analysis: outcome=%s, mistake=%v, goal_request=%v, feedback=%v, learning=%v",
+		reflection.OutcomeQuality, reflection.MistakeMade, reflection.UserRequestedGoal,
+		reflection.UserGaveFeedback, reflection.ImportantLearning)
+
+	// ACT ON REFLECTION
+	
+	// 1. If mistake made → create verification goal
+	if reflection.MistakeMade && reflection.MistakeDescription != "" {
+		if err := createReflectionGoal(
+			ctx,
+			db.DB,
+			fmt.Sprintf("Verify and correct: %s", reflection.MistakeDescription),
+			dialogue.GoalSourceUserFailure,
+			9, // High priority
+			userID,
+		); err != nil {
+			log.Printf("[Reflection] WARNING: Failed to create verification goal: %v", err)
+		} else {
+			log.Printf("[Reflection] ✓ Created verification goal for mistake")
+		}
+	}
+
+	// 2. If user requested goal → create it
+	if reflection.UserRequestedGoal && reflection.GoalDescription != "" {
+		if err := createReflectionGoal(
+			ctx,
+			db.DB,
+			reflection.GoalDescription,
+			dialogue.GoalSourceKnowledgeGap,
+			10, // Highest priority
+			userID,
+		); err != nil {
+			log.Printf("[Reflection] WARNING: Failed to create user-requested goal: %v", err)
+		} else {
+			log.Printf("[Reflection] ✓ Created user-requested goal: %s", truncate(reflection.GoalDescription, 60))
+		}
+	}
+
+	// 3. If user gave personality feedback → store for identity evolution
+	if reflection.UserGaveFeedback && reflection.FeedbackSummary != "" {
+		feedbackMemory := fmt.Sprintf("User feedback (%s): %s", reflection.FeedbackType, reflection.FeedbackSummary)
+		
+		embedding, err := embedder.Embed(ctx, feedbackMemory)
+		if err == nil {
+			userIDStr := fmt.Sprintf("%d", userID)
+			mem := &memory.Memory{
+				Content:         feedbackMemory,
+				Tier:            memory.TierRecent,
+				UserID:          &userIDStr,
+				IsCollective:    false,
+				CreatedAt:       time.Now(),
+				LastAccessedAt:  time.Now(),
+				ImportanceScore: 0.8, // Important for identity
+				Embedding:       embedding,
+				OutcomeTag:      "good", // Feedback is valuable
+				TrustScore:      0.8,
+				ConceptTags:     []string{"user_feedback", "personality", reflection.FeedbackType},
+			}
+			
+			if err := storage.Store(ctx, mem); err != nil {
+				log.Printf("[Reflection] WARNING: Failed to store feedback: %v", err)
+			} else {
+				log.Printf("[Reflection] ✓ Stored personality feedback")
+			}
+		}
+	}
+
+	// 4. If important learning → store as collective memory
+	if reflection.ImportantLearning && reflection.LearningContent != "" {
+		embedding, err := embedder.Embed(ctx, reflection.LearningContent)
+		if err == nil {
+			mem := &memory.Memory{
+				Content:         reflection.LearningContent,
+				Tier:            memory.TierRecent,
+				IsCollective:    true, // Collective learning
+				CreatedAt:       time.Now(),
+				LastAccessedAt:  time.Now(),
+				ImportanceScore: 0.7,
+				Embedding:       embedding,
+				OutcomeTag:      reflection.OutcomeQuality,
+				TrustScore:      0.7,
+				ValidationCount: 1,
+				ConceptTags:     []string{"learning", "reflection"},
+			}
+			
+			if err := storage.Store(ctx, mem); err != nil {
+				log.Printf("[Reflection] WARNING: Failed to store learning: %v", err)
+			} else {
+				log.Printf("[Reflection] ✓ Stored learning as collective memory")
+			}
+		}
+	}
+
+	return nil
+}
+
+// createReflectionGoal creates a dialogue goal from reflection analysis
+func createReflectionGoal(ctx context.Context, db *gorm.DB, description string, source string, priority int, userID uint) error {
+	stateManager := dialogue.NewStateManager(db)
+	state, err := stateManager.LoadState(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load dialogue state: %w", err)
+	}
+	
+	// Check for duplicates
+	for _, goal := range state.ActiveGoals {
+		if strings.Contains(strings.ToLower(goal.Description), strings.ToLower(description)) {
+			return nil // Skip duplicate
+		}
+	}
+	
+	goal := dialogue.Goal{
+		ID:          fmt.Sprintf("goal_reflection_%d", time.Now().UnixNano()),
+		Description: description,
+		Source:      source,
+		Priority:    priority,
+		Created:     time.Now(),
+		Progress:    0.0,
+		Status:      dialogue.GoalStatusActive,
+		Actions:     []dialogue.Action{},
+		Metadata: map[string]interface{}{
+			"from_reflection": true,
+			"user_id":         userID,
+		},
+	}
+	
+	state.ActiveGoals = append(state.ActiveGoals, goal)
+	return stateManager.SaveState(ctx, state)
 }

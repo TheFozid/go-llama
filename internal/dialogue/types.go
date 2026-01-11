@@ -9,15 +9,16 @@ import (
 
 // Goal represents a self-directed learning objective
 type Goal struct {
-	ID          string    `json:"id"`
-	Description string    `json:"description"`
-	Source      string    `json:"source"` // "user_failure", "knowledge_gap", "curiosity", "principle"
-	Priority    int       `json:"priority"` // 1-10
-	Created     time.Time `json:"created"`
-	Progress    float64   `json:"progress"` // 0.0 to 1.0
-	Actions     []Action  `json:"actions"`
-	Status      string    `json:"status"` // "active", "completed", "abandoned"
-	Outcome     string    `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
+	ID           string         `json:"id"`
+	Description  string         `json:"description"`
+	Source       string         `json:"source"` // "user_failure", "knowledge_gap", "curiosity", "principle"
+	Priority     int            `json:"priority"` // 1-10
+	Created      time.Time      `json:"created"`
+	Progress     float64        `json:"progress"` // 0.0 to 1.0
+	Actions      []Action       `json:"actions"`
+	Status       string         `json:"status"` // "active", "completed", "abandoned"
+	Outcome      string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
+	ResearchPlan *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
 }
 
 // Action represents a step taken toward completing a goal
@@ -99,6 +100,7 @@ const (
 	ActionToolWebParseChunked     = "web_parse_chunked"     // Phase 3.4: Chunk access
 	ActionToolSandbox             = "sandbox"
 	ActionToolMemoryConsolidation = "memory_consolidation"
+	ActionToolSynthesis           = "synthesis"              // Phase 4: Research synthesis
 )
 
 // StopReason constants
@@ -275,3 +277,35 @@ type ActionPlanStep struct {
 	Query       string `json:"query,omitempty"`
 	ExpectedOutcome string `json:"expected_outcome"`
 }
+
+// ResearchPlan represents a structured multi-step investigation
+type ResearchPlan struct {
+	RootQuestion    string             `json:"root_question"`     // Main question being investigated
+	SubQuestions    []ResearchQuestion `json:"sub_questions"`     // Ordered list of investigation steps
+	CurrentStep     int                `json:"current_step"`      // Which sub-question (0-indexed)
+	SynthesisNeeded bool               `json:"synthesis_needed"`  // All questions answered, ready to synthesize
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+}
+
+// ResearchQuestion represents one investigation step in the research plan
+type ResearchQuestion struct {
+	ID              string   `json:"id"`                 // e.g., "q1", "q2"
+	Question        string   `json:"question"`           // What to investigate
+	SearchQuery     string   `json:"search_query"`       // Suggested search terms
+	ParentID        string   `json:"parent_id"`          // For nested questions (future use)
+	Status          string   `json:"status"`             // "pending", "in_progress", "completed", "skipped"
+	Priority        int      `json:"priority"`           // 1-10 importance
+	Dependencies    []string `json:"dependencies"`       // Question IDs that must complete first
+	SourcesFound    []string `json:"sources_found"`      // URLs discovered
+	KeyFindings     string   `json:"key_findings"`       // Summary of findings
+	ConfidenceLevel float64  `json:"confidence_level"`   // 0.0-1.0 confidence in answer
+}
+
+// ResearchQuestion status constants
+const (
+	ResearchStatusPending    = "pending"
+	ResearchStatusInProgress = "in_progress"
+	ResearchStatusCompleted  = "completed"
+	ResearchStatusSkipped    = "skipped"
+)
