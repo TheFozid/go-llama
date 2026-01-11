@@ -535,13 +535,14 @@ if inMetaLoop {
 						topGoal.Outcome = "bad"
 						actionExecuted = true
 					} else {
-					action.Result = result
-					action.Status = ActionStatusCompleted
-					actionCount++
-					actionExecuted = true
-					log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
+						action.Result = result
+						action.Status = ActionStatusCompleted
+						actionCount++
+						actionExecuted = true
+						log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
+					}
+					action.Timestamp = time.Now()
 				}
-				action.Timestamp = time.Now()
 				
 				// Update research plan if this was part of a plan
 				if topGoal.ResearchPlan != nil && action.Metadata != nil {
