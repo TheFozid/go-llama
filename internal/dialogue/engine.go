@@ -2263,13 +2263,11 @@ case ActionToolWebParse,
 		
 	case ActionToolMemoryConsolidation:
 		// This is internal, not a real tool
-		elapsed := time.Since(startTime)
-		log.Printf("[Dialogue] Memory consolidation completed in %s", elapsed)
+		log.Printf("[Dialogue] Memory consolidation completed in %s", time.Since(startTime))
 		return "Memory consolidation completed", nil
 	
 	case ActionToolSynthesis:
 		// Synthesis happens in goal completion phase, not here
-		elapsed := time.Since(startTime)
 		log.Printf("[Dialogue] Synthesis action marked (will execute on goal completion)")
 		return "Synthesis ready", nil
 		
