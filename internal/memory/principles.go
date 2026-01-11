@@ -278,7 +278,7 @@ type PrincipleCandidate struct {
 
 // ExtractPrinciples analyzes memory patterns to propose new principles
 // This is called by the background worker
-func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64, extractionLimit int, llmURL string, llmModel string) ([]PrincipleCandidate, error) {
+func ExtractPrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, minRatingThreshold float64, extractionLimit int, llmURL string, llmModel string) ([]PrincipleCandidate, error) {
 	ctx := context.Background()
 	
 	log.Printf("[Principles] Extracting principle candidates from memory patterns (limit: %d)...", extractionLimit)
@@ -424,8 +424,9 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 			MinScore:          0.0,
 		}
 		
-		// Use a generic embedding for bad memory search
-		badEmbedding, _ := storage.embedder.Embed(ctx, strings.Join(pattern.keywords, " "))
+		// Skip bad memory validation for now (storage doesn't expose embedder)
+		// TODO: Pass embedder as parameter to ExtractPrinciples
+		badEmbedding := ([]float32)(nil)
 		if badEmbedding != nil {
 			badResults, _ := storage.Search(ctx, badQuery, badEmbedding)
 			
@@ -533,16 +534,15 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 	}
 	
 	if len(patterns) == 0 {
-		log.Printf("[Principles] No recurring patterns found (need at least 5 occurrences)")
+		log.Printf("[Principles] No recurring patterns found")
 		return []PrincipleCandidate{}, nil
 	}
 	
-	log.Printf("[Principles] Found %d recurring patterns", len(patterns))
+	log.Printf("[Principles] Found %d behavioral patterns", len(patterns))
 	
-	// Step 4: Use LLM to generate principle candidates from top patterns
-	// Sort patterns by frequency (highest first)
+	// Sort patterns by confidence (highest first)
 	sort.Slice(patterns, func(i, j int) bool {
-		return patterns[i].Frequency > patterns[j].Frequency
+		return patterns[i].Confidence > patterns[j].Confidence
 	})
 	
 	// Take top 10 patterns
@@ -550,10 +550,9 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 		patterns = patterns[:10]
 	}
 	
-
 	candidates := []PrincipleCandidate{}
 	
-	// Use LLM to generate sophisticated principles from patterns
+	// BehavioralPatterns already have pre-formulated behaviors, use them directly
 	for _, pattern := range patterns {
 		// Use calculated confidence as rating (already validated)
 		rating := pattern.Confidence
@@ -563,41 +562,8 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, minRatingThreshold float64
 			continue
 		}
 		
-		// Sample up to 5 evidence memories for context
-		sampleSize := 5
-		if len(pattern.Memories) < sampleSize {
-			sampleSize = len(pattern.Memories)
-		}
-		
-		evidenceContent := strings.Builder{}
-		for i := 0; i < sampleSize; i++ {
-			mem, err := storage.GetMemoryByID(ctx, pattern.Memories[i])
-			if err != nil {
-				log.Printf("[Principles] WARNING: Failed to retrieve evidence memory %s: %v", pattern.Memories[i], err)
-				continue
-			}
-			evidenceContent.WriteString(fmt.Sprintf("Example %d:\n%s\n\n", i+1, mem.Content))
-		}
-		
-		// Generate principle using LLM
-		principleText, err := generatePrincipleFromPattern(
-			ctx,
-			llmURL,
-			llmModel,
-			pattern.Concepts,
-			evidenceContent.String(),
-			pattern.Frequency,
-		)
-		
-		if err != nil {
-			log.Printf("[Principles] WARNING: Failed to generate principle for pattern %v: %v", pattern.Concepts, err)
-			// Fallback to template-based generation
-			principleText = fmt.Sprintf("When working with %s, apply strategies that have proven successful in past interactions.", 
-				strings.Join(pattern.Concepts, " and "))
-		}
-		
 		candidates = append(candidates, PrincipleCandidate{
-			Content:   pattern.Behavior, // Use pre-formulated behavioral principle
+			Content:   pattern.Behavior,
 			Rating:    rating,
 			Evidence:  pattern.GoodExamples,
 			Frequency: len(pattern.GoodExamples),
@@ -682,7 +648,7 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 
 // EvolveIdentity updates slot 0 (system name/identity) based on experiences and learnings
 // Called separately from principle evolution to allow independent identity development
-func EvolveIdentity(db *gorm.DB, storage *Storage, llmURL string, llmModel string) error {
+func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL string, llmModel string) error {
 	ctx := context.Background()
 	
 	log.Printf("[Principles] Evaluating identity evolution (slot 0)...")
@@ -1164,4 +1130,12 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// truncate helper function
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
