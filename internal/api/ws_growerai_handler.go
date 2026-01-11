@@ -429,7 +429,7 @@ if len(allLinkedIDs) > 0 {
 	// INTEGRATION: Post-conversation reflection (async - don't block response)
 	if cfg.GrowerAI.Dialogue.Enabled {
 		go func() {
-			reflectionCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			reflectionCtx, cancel := context.WithTimeout(context.Background(), 1200*time.Second)
 			defer cancel()
 			
 			if err := performPostConversationReflection(
