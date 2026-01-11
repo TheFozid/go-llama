@@ -2,16 +2,23 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
 	"go-llama/internal/chat"
 	"go-llama/internal/config"
 	"go-llama/internal/db"
+	"go-llama/internal/dialogue"
 	"go-llama/internal/memory"
+	
+	"gorm.io/gorm"
 )
 
 // handleGrowerAIWebSocket processes GrowerAI messages via WebSocket with streaming
