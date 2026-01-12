@@ -25,6 +25,7 @@ type Engine struct {
 	toolRegistry              *tools.ContextualRegistry
 	llmURL                    string
 	llmModel                  string
+	llmClient                 interface{} // Will be *llm.Client but avoid import cycle
     contextSize               int
 	maxTokensPerCycle         int
 	maxDurationMinutes        int
@@ -51,6 +52,7 @@ func NewEngine(
 	llmURL string,
 	llmModel string,
 	contextSize int,
+	llmClient interface{}, // Accept queue client
 	maxTokensPerCycle int,
 	maxDurationMinutes int,
 	maxThoughtsPerCycle int,
@@ -71,6 +73,7 @@ func NewEngine(
 		toolRegistry:              toolRegistry,
 		llmURL:                    llmURL,
 		llmModel:                  llmModel,
+		llmClient:                 llmClient, // Store client
 		contextSize:               contextSize,
 		maxTokensPerCycle:         maxTokensPerCycle,
 		maxDurationMinutes:        maxDurationMinutes,
@@ -1506,8 +1509,75 @@ func (e *Engine) detectPatterns(ctx context.Context) ([]string, error) {
 	return []string{}, nil
 }
 
+
 // callLLM makes a request to the reasoning model
 func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error) {
+	// If queue client is available, use it
+	if e.llmClient != nil {
+		// Type assertion (safe because we control initialization)
+		type LLMCaller interface {
+			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+		}
+		
+		if client, ok := e.llmClient.(LLMCaller); ok {
+			reqBody := map[string]interface{}{
+				"model": e.llmModel,
+				"max_tokens": e.contextSize,
+				"messages": []map[string]string{
+					{
+						"role":    "system",
+						"content": "You are GrowerAI's internal dialogue system. Think briefly and clearly.",
+					},
+					{
+						"role":    "user",
+						"content": prompt,
+					},
+				},
+				"temperature": 0.3,
+				"stream":      false,
+			}
+			
+			log.Printf("[Dialogue] LLM call via queue (prompt length: %d chars)", len(prompt))
+			startTime := time.Now()
+			
+			body, err := client.Call(ctx, e.llmURL, reqBody)
+			if err != nil {
+				log.Printf("[Dialogue] LLM queue call failed after %s: %v", time.Since(startTime), err)
+				return "", 0, fmt.Errorf("LLM call failed: %w", err)
+			}
+			
+			log.Printf("[Dialogue] LLM queue response received in %s", time.Since(startTime))
+			
+			// Parse response
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+				Usage struct {
+					TotalTokens int `json:"total_tokens"`
+				} `json:"usage"`
+			}
+			
+			if err := json.Unmarshal(body, &result); err != nil {
+				return "", 0, fmt.Errorf("failed to decode response: %w", err)
+			}
+			
+			if len(result.Choices) == 0 {
+				return "", 0, fmt.Errorf("no choices returned from LLM")
+			}
+			
+			content := strings.TrimSpace(result.Choices[0].Message.Content)
+			tokens := result.Usage.TotalTokens
+			
+			return content, tokens, nil
+		}
+	}
+	
+	// Fallback to old direct HTTP (for backwards compatibility during migration)
+	log.Printf("[Dialogue] WARNING: Using legacy direct HTTP call (queue not available)")
+	
 	// Check circuit breaker first
 	if e.circuitBreaker != nil && e.circuitBreaker.IsOpen() {
 		return "", 0, fmt.Errorf("LLM circuit breaker is open, service unavailable")
@@ -1516,10 +1586,9 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	// Get adaptive timeout
 	timeout := time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second
 	if timeout < 60*time.Second {
-		timeout = 60 * time.Second // Minimum 60s
+		timeout = 60 * time.Second
 	}
 	
-	// Create timeout context
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	
@@ -1551,9 +1620,8 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	// Configure transport with response header timeout
 	transport := &http.Transport{
-		ResponseHeaderTimeout: 90 * time.Second, // Fail fast if LLM doesn't start
+		ResponseHeaderTimeout: 90 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConns:          10,
 		DisableKeepAlives:     false,
@@ -1564,28 +1632,15 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 		Transport: transport,
 	}
 	
-	log.Printf("[Dialogue] LLM call started (timeout: %s, prompt length: %d chars)", timeout, len(prompt))
 	startTime := time.Now()
-	
 	resp, err := client.Do(req)
 	if err != nil {
-		elapsed := time.Since(startTime)
-		
-		// Record failure in circuit breaker
 		if e.circuitBreaker != nil {
 			e.circuitBreaker.Call(func() error { return err })
 		}
-		
-		if timeoutCtx.Err() == context.DeadlineExceeded {
-			log.Printf("[Dialogue] LLM timeout after %s", elapsed)
-			return "", 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
-		}
-		log.Printf("[Dialogue] LLM request failed after %s: %v", elapsed, err)
 		return "", 0, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	
-	log.Printf("[Dialogue] LLM response received in %s", time.Since(startTime))
 	
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -1611,35 +1666,21 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 		return "", 0, fmt.Errorf("no choices returned from LLM")
 	}
 	
-content := strings.TrimSpace(result.Choices[0].Message.Content)
+	content := strings.TrimSpace(result.Choices[0].Message.Content)
 	tokens := result.Usage.TotalTokens
 	
-	// Record success in circuit breaker
 	if e.circuitBreaker != nil {
 		e.circuitBreaker.Call(func() error { return nil })
 	}
 	
+	log.Printf("[Dialogue] Legacy call completed in %s", time.Since(startTime))
 	return content, tokens, nil
 }
 
+
 // callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
-	// Check circuit breaker first
-	if e.circuitBreaker != nil && e.circuitBreaker.IsOpen() {
-		return nil, 0, fmt.Errorf("LLM circuit breaker is open, service unavailable")
-	}
-	
-	// Get adaptive timeout (structured reasoning may take longer)
-	timeout := time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second
-	if timeout < 120*time.Second {
-		timeout = 120 * time.Second // Minimum 2 minutes for structured reasoning
-	}
-	
-	// Create timeout context
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	
-systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY valid JSON.
+	systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY valid JSON.
 
 CRITICAL: Check each array has BOTH [ and ] brackets.
 
@@ -1687,7 +1728,107 @@ OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 		"stream":      false,
 	}
 	
-jsonData, err := json.Marshal(reqBody)
+	// Use queue if available
+	if e.llmClient != nil {
+		type LLMCaller interface {
+			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+		}
+		
+		if client, ok := e.llmClient.(LLMCaller); ok {
+			log.Printf("[Dialogue] Structured reasoning LLM call via queue (prompt length: %d chars)", len(prompt))
+			startTime := time.Now()
+			
+			body, err := client.Call(ctx, e.llmURL, reqBody)
+			if err != nil {
+				log.Printf("[Dialogue] Structured reasoning queue call failed after %s: %v", time.Since(startTime), err)
+				return nil, 0, fmt.Errorf("LLM call failed: %w", err)
+			}
+			
+			log.Printf("[Dialogue] Structured reasoning response received in %s", time.Since(startTime))
+			
+			// Parse LLM response wrapper
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+				Usage struct {
+					TotalTokens int `json:"total_tokens"`
+				} `json:"usage"`
+			}
+			
+			if err := json.Unmarshal(body, &result); err != nil {
+				return nil, 0, fmt.Errorf("failed to decode response: %w", err)
+			}
+			
+			if len(result.Choices) == 0 {
+				return nil, 0, fmt.Errorf("no choices returned from LLM")
+			}
+			
+			content := strings.TrimSpace(result.Choices[0].Message.Content)
+			tokens := result.Usage.TotalTokens
+			
+			// Parse structured reasoning
+			content = strings.TrimPrefix(content, "```json")
+			content = strings.TrimPrefix(content, "```")
+			content = strings.TrimSuffix(content, "```")
+			content = strings.TrimSpace(content)
+			
+			var reasoning ReasoningResponse
+			if err := json.Unmarshal([]byte(content), &reasoning); err != nil {
+				log.Printf("[Dialogue] WARNING: Failed to parse JSON reasoning: %v", err)
+				log.Printf("[Dialogue] Raw response (first 500 chars): %s", truncateResponse(content, 500))
+				
+				fixedContent := fixCommonJSONErrors(content)
+				
+				if fixedContent != content {
+					log.Printf("[Dialogue] Applied JSON fixes (first 500 chars): %s", truncateResponse(fixedContent, 500))
+				}
+				
+				if err := json.Unmarshal([]byte(fixedContent), &reasoning); err != nil {
+					log.Printf("[Dialogue] WARNING: Failed to parse even after JSON fixes: %v", err)
+					
+					var partialParse map[string]interface{}
+					if err := json.Unmarshal([]byte(fixedContent), &partialParse); err == nil {
+						if refl, ok := partialParse["reflection"].(string); ok {
+							log.Printf("[Dialogue] Extracted reflection field only, using degraded mode")
+							return &ReasoningResponse{
+								Reflection: refl,
+								Insights:   []string{},
+							}, tokens, nil
+						}
+					}
+					
+					log.Printf("[Dialogue] Complete JSON parse failure, using fallback mode")
+					return &ReasoningResponse{
+						Reflection: "Failed to parse structured reasoning. Using fallback mode.",
+						Insights:   []string{},
+					}, tokens, nil
+				}
+				log.Printf("[Dialogue] ✓ Successfully parsed JSON after fixes")
+			}
+			
+			return &reasoning, tokens, nil
+		}
+	}
+	
+	// Fallback to legacy direct HTTP
+	log.Printf("[Dialogue] WARNING: Using legacy structured reasoning call")
+	
+	if e.circuitBreaker != nil && e.circuitBreaker.IsOpen() {
+		return nil, 0, fmt.Errorf("LLM circuit breaker is open, service unavailable")
+	}
+	
+	timeout := time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second
+	if timeout < 120*time.Second {
+		timeout = 120 * time.Second
+	}
+	
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -1698,7 +1839,6 @@ jsonData, err := json.Marshal(reqBody)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	// Configure transport with response header timeout
 	transport := &http.Transport{
 		ResponseHeaderTimeout: 90 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
@@ -1711,24 +1851,12 @@ jsonData, err := json.Marshal(reqBody)
 		Transport: transport,
 	}
 	
-	log.Printf("[Dialogue] Structured reasoning LLM call started (timeout: %s, prompt length: %d chars)", 
-		timeout, len(prompt))
 	startTime := time.Now()
-	
 	resp, err := client.Do(req)
 	if err != nil {
-		elapsed := time.Since(startTime)
-		
-		// Record failure in circuit breaker
 		if e.circuitBreaker != nil {
 			e.circuitBreaker.Call(func() error { return err })
 		}
-		
-		if timeoutCtx.Err() == context.DeadlineExceeded {
-			log.Printf("[Dialogue] Structured reasoning LLM timeout after %s", elapsed)
-			return nil, 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
-		}
-		log.Printf("[Dialogue] Structured reasoning LLM request failed after %s: %v", elapsed, err)
 		return nil, 0, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -1762,8 +1890,7 @@ jsonData, err := json.Marshal(reqBody)
 	content := strings.TrimSpace(result.Choices[0].Message.Content)
 	tokens := result.Usage.TotalTokens
 	
-	// Parse JSON response
-	// Remove markdown code fences if present
+	// Parse JSON
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")
 	content = strings.TrimSuffix(content, "```")
@@ -1774,10 +1901,8 @@ jsonData, err := json.Marshal(reqBody)
 		log.Printf("[Dialogue] WARNING: Failed to parse JSON reasoning: %v", err)
 		log.Printf("[Dialogue] Raw response (first 500 chars): %s", truncateResponse(content, 500))
 		
-		// Try to fix common JSON errors
 		fixedContent := fixCommonJSONErrors(content)
 		
-		// Log what we fixed (first 500 chars)
 		if fixedContent != content {
 			log.Printf("[Dialogue] Applied JSON fixes (first 500 chars): %s", truncateResponse(fixedContent, 500))
 		}
@@ -1785,7 +1910,6 @@ jsonData, err := json.Marshal(reqBody)
 		if err := json.Unmarshal([]byte(fixedContent), &reasoning); err != nil {
 			log.Printf("[Dialogue] WARNING: Failed to parse even after JSON fixes: %v", err)
 			
-			// Last attempt: try to extract just the reflection field
 			var partialParse map[string]interface{}
 			if err := json.Unmarshal([]byte(fixedContent), &partialParse); err == nil {
 				if refl, ok := partialParse["reflection"].(string); ok {
@@ -1797,7 +1921,6 @@ jsonData, err := json.Marshal(reqBody)
 				}
 			}
 			
-			// Complete fallback
 			log.Printf("[Dialogue] Complete JSON parse failure, using fallback mode")
 			return &ReasoningResponse{
 				Reflection: "Failed to parse structured reasoning. Using fallback mode.",
@@ -1807,14 +1930,12 @@ jsonData, err := json.Marshal(reqBody)
 		log.Printf("[Dialogue] ✓ Successfully parsed JSON after fixes")
 	}
 	
-	// Record success in circuit breaker
 	if e.circuitBreaker != nil {
 		e.circuitBreaker.Call(func() error { return nil })
 	}
 	
 	return &reasoning, tokens, nil
 }
-
 
 // generateResearchPlan creates a structured multi-step investigation plan
 func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {

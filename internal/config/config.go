@@ -15,7 +15,17 @@ type LLMConfig struct {
 }
 
 type GrowerAIConfig struct {
-	Enabled bool `json:"enabled"` 
+	Enabled bool `json:"enabled"`
+	
+	// LLM Queue Configuration
+	LLMQueue struct {
+		Enabled                 bool `json:"enabled"`
+		MaxConcurrent           int  `json:"max_concurrent"`
+		CriticalQueueSize       int  `json:"critical_queue_size"`
+		BackgroundQueueSize     int  `json:"background_queue_size"`
+		CriticalTimeoutSeconds  int  `json:"critical_timeout_seconds"`
+		BackgroundTimeoutSeconds int  `json:"background_timeout_seconds"`
+	} `json:"llm_queue"`
 	ReasoningModel struct {
 		Name        string `json:"name"`
 		URL         string `json:"url"`
@@ -211,6 +221,27 @@ func LoadConfig(path string) (*Config, error) {
 	})
 	return cfg, cfgErr
 }
+
+	// LLM Queue defaults
+	if gai.LLMQueue.MaxConcurrent == 0 {
+		gai.LLMQueue.MaxConcurrent = 2
+	}
+	if gai.LLMQueue.CriticalQueueSize == 0 {
+		gai.LLMQueue.CriticalQueueSize = 20
+	}
+	if gai.LLMQueue.BackgroundQueueSize == 0 {
+		gai.LLMQueue.BackgroundQueueSize = 100
+	}
+	if gai.LLMQueue.CriticalTimeoutSeconds == 0 {
+		gai.LLMQueue.CriticalTimeoutSeconds = 60
+	}
+	if gai.LLMQueue.BackgroundTimeoutSeconds == 0 {
+		gai.LLMQueue.BackgroundTimeoutSeconds = 180
+	}
+	// Enable queue by default
+	if !gai.LLMQueue.Enabled {
+		gai.LLMQueue.Enabled = true
+	}
 
 // applyGrowerAIDefaults sets sensible defaults for Phase 4 configuration
 func applyGrowerAIDefaults(gai *GrowerAIConfig) {

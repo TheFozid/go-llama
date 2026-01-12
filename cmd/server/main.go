@@ -10,6 +10,7 @@ import (
 	"go-llama/internal/config"
 	"go-llama/internal/db"
 	"go-llama/internal/dialogue"
+	"go-llama/internal/llm"
 	"go-llama/internal/memory"
 	"go-llama/internal/tools"
 	redisdb "go-llama/internal/redis"
@@ -32,6 +33,30 @@ func main() {
 	// Check if GrowerAI is enabled globally
 	if cfg.GrowerAI.Enabled {
 		log.Printf("[Main] GrowerAI enabled - initializing components...")
+
+
+		// Initialize LLM Queue Manager (if enabled)
+		var llmManager *llm.Manager
+		if cfg.GrowerAI.LLMQueue.Enabled {
+			log.Printf("[Main] Initializing LLM queue manager...")
+			
+			llmConfig := &llm.Config{
+				MaxConcurrent:            cfg.GrowerAI.LLMQueue.MaxConcurrent,
+				CriticalQueueSize:        cfg.GrowerAI.LLMQueue.CriticalQueueSize,
+				BackgroundQueueSize:      cfg.GrowerAI.LLMQueue.BackgroundQueueSize,
+				CriticalTimeout:          time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds) * time.Second,
+				BackgroundTimeout:        time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds) * time.Second,
+			}
+			
+			// Circuit breaker will be created later, pass nil for now
+			llmManager = llm.NewManager(llmConfig, nil)
+			defer llmManager.Stop()
+			
+			log.Printf("[Main] ✓ LLM queue manager initialized (concurrent: %d, critical queue: %d, background queue: %d)",
+				llmConfig.MaxConcurrent, llmConfig.CriticalQueueSize, llmConfig.BackgroundQueueSize)
+		} else {
+			log.Printf("[Main] LLM queue disabled in config")
+		}
 
 		// Initialize GrowerAI principles (10 Commandments)
 		log.Printf("[Main] Initializing GrowerAI principles...")
@@ -270,6 +295,20 @@ func main() {
 				)
 				log.Printf("[Main] ✓ LLM circuit breaker initialized (threshold: 3 failures, timeout: 5m)")
 
+				// Create LLM client for dialogue (background priority)
+				var llmClient interface{}
+				if llmManager != nil {
+					llmClient = llm.NewClient(
+						llmManager,
+						llm.PriorityBackground,
+						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+					)
+					log.Printf("[Main] ✓ Dialogue using LLM queue (priority: background, timeout: %ds)",
+						cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)
+				} else {
+					log.Printf("[Main] Dialogue using legacy direct HTTP calls")
+				}
+
 				engine := dialogue.NewEngine(
 					storage,
 					embedder,
@@ -278,6 +317,7 @@ func main() {
 					cfg.GrowerAI.ReasoningModel.URL,
 					cfg.GrowerAI.ReasoningModel.Name,
 					cfg.GrowerAI.ReasoningModel.ContextSize,
+					llmClient, // NEW PARAMETER - insert here
 					cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
 					cfg.GrowerAI.Dialogue.MaxDurationMinutes,
 					cfg.GrowerAI.Dialogue.MaxThoughtsPerCycle,

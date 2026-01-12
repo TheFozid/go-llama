@@ -37,6 +37,14 @@
   ],
   "growerai": {
   "enabled": true,
+    "llm_queue": {
+      "enabled": true,
+      "max_concurrent": 2,
+      "critical_queue_size": 20,
+      "background_queue_size": 100,
+      "critical_timeout_seconds": 60,
+      "background_timeout_seconds": 180
+    },
     "reasoning_model": {
       "name": "qwen2.5:3b",
       "url": "http://192.168.1.4:11434/v1/chat/completions",
