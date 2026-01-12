@@ -222,6 +222,8 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, cfgErr
 }
 
+// applyGrowerAIDefaults sets sensible defaults for Phase 4 configuration
+func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	// LLM Queue defaults
 	if gai.LLMQueue.MaxConcurrent == 0 {
 		gai.LLMQueue.MaxConcurrent = 2
@@ -242,9 +244,6 @@ func LoadConfig(path string) (*Config, error) {
 	if !gai.LLMQueue.Enabled {
 		gai.LLMQueue.Enabled = true
 	}
-
-// applyGrowerAIDefaults sets sensible defaults for Phase 4 configuration
-func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	// Compression merge windows (temporal clustering for compression)
 	if gai.Compression.MergeWindowRecent == 0 {
 		gai.Compression.MergeWindowRecent = 3 // 3 days
