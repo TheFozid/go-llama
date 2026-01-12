@@ -206,7 +206,10 @@ func (m *Manager) executeHTTPRequest(ctx context.Context, req *Request) (*Respon
 	client := &http.Client{
 		Timeout: req.Timeout,
 		Transport: &http.Transport{
-			ResponseHeaderTimeout: 30 * time.Second,
+			ResponseHeaderTimeout: req.Timeout, // Use request timeout, not fixed 30s
+			IdleConnTimeout:       req.Timeout,
+			MaxIdleConns:          10,
+			DisableKeepAlives:     false,
 		},
 	}
 
