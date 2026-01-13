@@ -31,15 +31,17 @@ type Tagger struct {
 	llmModel  string
 	batchSize int
 	embedder  *Embedder
+	llmClient interface{} // Queue client (optional)
 }
 
 // NewTagger creates a new tagger instance
-func NewTagger(llmURL, llmModel string, batchSize int, embedder *Embedder) *Tagger {
+func NewTagger(llmURL, llmModel string, batchSize int, embedder *Embedder, llmClient interface{}) *Tagger {
 	return &Tagger{
 		llmURL:    llmURL,
 		llmModel:  llmModel,
 		batchSize: batchSize,
 		embedder:  embedder,
+		llmClient: llmClient,
 	}
 }
 
@@ -207,9 +209,70 @@ Respond with JSON only (no markdown, no explanation):
 		MaxIdleConns:          10,
 	}
 	
+	// Use queue if available
+	if t.llmClient != nil {
+		type LLMCaller interface {
+			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+		}
+		
+		if queueClient, ok := t.llmClient.(LLMCaller); ok {
+			log.Printf("[Tagger] Calling LLM via queue for outcome analysis")
+			startTime := time.Now()
+			
+			body, err := queueClient.Call(ctx, t.llmURL, payload)
+			if err != nil {
+				elapsed := time.Since(startTime)
+				if ctx.Err() == context.DeadlineExceeded {
+					return nil, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+				}
+				return nil, fmt.Errorf("LLM request failed after %s: %w", elapsed, err)
+			}
+			
+			log.Printf("[Tagger] LLM response received in %s", time.Since(startTime))
+			
+			var llmResp struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			
+			if err := json.Unmarshal(body, &llmResp); err != nil {
+				return nil, err
+			}
+			
+			if len(llmResp.Choices) == 0 {
+				return nil, fmt.Errorf("no response from LLM")
+			}
+			
+			content := llmResp.Choices[0].Message.Content
+			content = strings.TrimSpace(content)
+			content = strings.TrimPrefix(content, "```json")
+			content = strings.TrimPrefix(content, "```")
+			content = strings.TrimSuffix(content, "```")
+			content = strings.TrimSpace(content)
+			
+			var analysis OutcomeAnalysis
+			if err := json.Unmarshal([]byte(content), &analysis); err != nil {
+				return nil, fmt.Errorf("failed to parse outcome JSON: %w (content: %s)", err, content)
+			}
+			
+			if err := ValidateOutcomeTag(analysis.Outcome); err != nil {
+				log.Printf("[Tagger] WARNING: LLM returned invalid outcome '%s', defaulting to neutral", analysis.Outcome)
+				analysis.Outcome = "neutral"
+				analysis.Confidence = 0.0
+			}
+			
+			return &analysis, nil
+		}
+	}
+	
+	// Fallback to legacy direct HTTP
+	log.Printf("[Tagger] Using legacy direct HTTP call")
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   taggerBaseTimeout, // Use our configured timeout
+		Timeout:   taggerBaseTimeout,
 	}
 	
 	log.Printf("[Tagger] Calling LLM for outcome analysis (timeout: %s)", taggerBaseTimeout)
@@ -399,6 +462,80 @@ Respond with JSON array only (no markdown, no explanation).`, content)
 		MaxIdleConns:          10,
 	}
 	
+	// Use queue if available
+	if t.llmClient != nil {
+		type LLMCaller interface {
+			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+		}
+		
+		if queueClient, ok := t.llmClient.(LLMCaller); ok {
+			log.Printf("[Tagger] Calling LLM via queue for concept extraction")
+			startTime := time.Now()
+			
+			body, err := queueClient.Call(ctx, t.llmURL, payload)
+			if err != nil {
+				elapsed := time.Since(startTime)
+				if ctx.Err() == context.DeadlineExceeded {
+					return nil, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+				}
+				return nil, fmt.Errorf("LLM request failed after %s: %w", elapsed, err)
+			}
+			
+			log.Printf("[Tagger] Concept extraction response received in %s", time.Since(startTime))
+			
+			var llmResp struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			
+			if err := json.Unmarshal(body, &llmResp); err != nil {
+				return nil, err
+			}
+			
+			if len(llmResp.Choices) == 0 {
+				return nil, fmt.Errorf("no response from LLM")
+			}
+			
+			content := llmResp.Choices[0].Message.Content
+			content = strings.TrimSpace(content)
+			content = strings.TrimPrefix(content, "```json")
+			content = strings.TrimPrefix(content, "```")
+			content = strings.TrimSuffix(content, "```")
+			content = strings.TrimSpace(content)
+			
+			var concepts []string
+			if err := json.Unmarshal([]byte(content), &concepts); err != nil {
+				log.Printf("[Tagger] JSON parse failed, trying fallback: %v", err)
+				content = strings.TrimPrefix(content, "[")
+				content = strings.TrimSuffix(content, "]")
+				rawConcepts := strings.Split(content, ",")
+				concepts = make([]string, 0, len(rawConcepts))
+				for _, raw := range rawConcepts {
+					cleaned := strings.TrimSpace(raw)
+					cleaned = strings.Trim(cleaned, `"'`)
+					cleaned = strings.ToLower(cleaned)
+					if cleaned != "" && len(cleaned) < 50 {
+						concepts = append(concepts, cleaned)
+					}
+				}
+				if len(concepts) == 0 {
+					return nil, fmt.Errorf("failed to extract concepts from: %s", content)
+				}
+			}
+			
+			if len(concepts) > 5 {
+				concepts = concepts[:5]
+			}
+			
+			return concepts, nil
+		}
+	}
+	
+	// Fallback to legacy direct HTTP
+	log.Printf("[Tagger] Using legacy direct HTTP for concept extraction")
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   taggerBaseTimeout,

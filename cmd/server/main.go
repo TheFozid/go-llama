@@ -102,11 +102,23 @@ func main() {
 					linker,
 				)
 
+				// Create LLM client for tagger (background priority)
+				var taggerLLMClient interface{}
+				if llmManager != nil {
+					taggerLLMClient = llm.NewClient(
+						llmManager,
+						llm.PriorityBackground,
+						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+					)
+					log.Printf("[Main] ✓ Tagger using LLM queue (priority: background)")
+				}
+
 				tagger := memory.NewTagger(
 					cfg.GrowerAI.Compression.Model.URL,
 					cfg.GrowerAI.Compression.Model.Name,
 					cfg.GrowerAI.Tagging.BatchSize,
 					embedder,
+					taggerLLMClient,
 				)
 
 				// Initialize async tagger queue with parallel workers
