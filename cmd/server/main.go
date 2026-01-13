@@ -30,13 +30,14 @@ func main() {
 
 	rdb := redisdb.NewClient(cfg)
 
+	// Declare llmManager outside the block so it's accessible later
+	var llmManager *llm.Manager
+
 	// Check if GrowerAI is enabled globally
 	if cfg.GrowerAI.Enabled {
 		log.Printf("[Main] GrowerAI enabled - initializing components...")
 
-
 		// Initialize LLM Queue Manager (if enabled)
-		var llmManager *llm.Manager
 		if cfg.GrowerAI.LLMQueue.Enabled {
 			log.Printf("[Main] Initializing LLM queue manager...")
 			
