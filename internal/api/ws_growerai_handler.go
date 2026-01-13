@@ -320,7 +320,6 @@ if len(allLinkedIDs) > 0 {
 
 	var botResponse string
 	var toksPerSec float64
-	var err error
 	
 	// Use queue if available (critical priority for user messages)
 	if llmManager != nil {
