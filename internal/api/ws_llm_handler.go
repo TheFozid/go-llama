@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,7 +18,7 @@ import (
 )
 
 // handleStandardLLMWebSocket processes standard LLM messages via WebSocket with streaming
-func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, req WSChatPrompt, userID uint) {
+func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, req WSChatPrompt, userID uint, llmManager interface{}) {
 	// Save user message
 	userMsg := chat.Message{
 		ChatID:    chatInst.ID,
@@ -185,7 +186,42 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
 	// Stream LLM response
 	var botResponse string
 	var toksPerSec float64
-	err := streamLLMResponseWS(conn, conn.conn, modelConfig.URL, payload, &botResponse, &toksPerSec)
+	var err error
+	
+	// Use queue if available (critical priority for user messages)
+	if llmManager != nil {
+		if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
+			llmClient := llm.NewClient(
+				mgr,
+				llm.PriorityCritical,
+				time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
+			)
+			
+			log.Printf("[LLM-WS] Using LLM queue (priority: CRITICAL, timeout: %ds)", 
+				cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)
+			
+			// Create context for this request
+			ctx := context.Background()
+			
+			// Get streaming HTTP response from queue
+			httpResp, queueErr := llmClient.CallStreaming(ctx, modelConfig.URL, payload)
+			if queueErr != nil {
+				conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": queueErr.Error()})
+				return
+			}
+			
+			// Use the streamLLMResponseFromHTTP helper from ws_growerai_handler.go
+			// Note: This requires the helper function to be accessible or duplicated
+			err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
+		} else {
+			log.Printf("[LLM-WS] Using legacy direct LLM call")
+			err = streamLLMResponseWS(conn, conn.conn, modelConfig.URL, payload, &botResponse, &toksPerSec)
+		}
+	} else {
+		log.Printf("[LLM-WS] Using legacy direct LLM call (no queue manager)")
+		err = streamLLMResponseWS(conn, conn.conn, modelConfig.URL, payload, &botResponse, &toksPerSec)
+	}
+	
 	if err != nil {
 		conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": err.Error()})
 		return

@@ -17,12 +17,14 @@ import (
 	"go-llama/internal/db"
 	"go-llama/internal/dialogue"
 	"go-llama/internal/memory"
-	
+	"go-llama/internal/llm"
+
+	"github.com/gorilla/websocket"
 	"gorm.io/gorm"
 )
 
 // handleGrowerAIWebSocket processes GrowerAI messages via WebSocket with streaming
-func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, content string, userID uint) {
+func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, content string, userID uint, llmManager interface{}) {
 	// Check if GrowerAI is globally enabled
 	if !cfg.GrowerAI.Enabled {
 		log.Printf("[GrowerAI-WS] GrowerAI disabled in config")
@@ -318,7 +320,39 @@ if len(allLinkedIDs) > 0 {
 
 	var botResponse string
 	var toksPerSec float64
-	err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
+	var err error
+	
+	// Use queue if available (critical priority for user messages)
+	if llmManager != nil {
+		if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
+			llmClient := llm.NewClient(
+				mgr,
+				llm.PriorityCritical,
+				time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
+			)
+			
+			log.Printf("[GrowerAI-WS] Using LLM queue (priority: CRITICAL, timeout: %ds)", 
+				cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)
+			
+			// Get streaming HTTP response from queue
+			httpResp, queueErr := llmClient.CallStreaming(ctx, cfg.GrowerAI.ReasoningModel.URL, payload)
+			if queueErr != nil {
+				log.Printf("[GrowerAI-WS] ERROR: LLM queue streaming failed: %v", queueErr)
+				conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
+				return
+			}
+			
+			// Use helper to stream from HTTP response
+			err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
+		} else {
+			log.Printf("[GrowerAI-WS] Using legacy direct LLM call")
+			err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
+		}
+	} else {
+		log.Printf("[GrowerAI-WS] Using legacy direct LLM call (no queue manager)")
+		err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
+	}
+	
 	if err != nil {
 		log.Printf("[GrowerAI-WS] ERROR: LLM streaming failed: %v", err)
 		conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
@@ -440,6 +474,7 @@ if len(allLinkedIDs) > 0 {
 				cfg,
 				storage,
 				embedder,
+				llmManager,        // ADD THIS
 			); err != nil {
 				log.Printf("[GrowerAI-WS] WARNING: Post-conversation reflection failed: %v", err)
 			}
@@ -459,6 +494,7 @@ func performPostConversationReflection(
 	cfg *config.Config,
 	storage *memory.Storage,
 	embedder *memory.Embedder,
+	llmManager interface{},
 ) error {
 	log.Printf("[Reflection] Analyzing conversation for actions...")
 	
@@ -513,46 +549,129 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 		"stream":      false,
 	}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
+	var content string
+	
+	// Use queue if available (critical priority - user-triggered reflection)
+	if llmManager != nil {
+		if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
+			llmClient := llm.NewClient(
+				mgr,
+				llm.PriorityCritical,
+				time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
+			)
+			
+			log.Printf("[Reflection] Using LLM queue (priority: CRITICAL)")
+			
+			body, err := llmClient.Call(ctx, cfg.GrowerAI.ReasoningModel.URL, reqBody)
+			if err != nil {
+				return fmt.Errorf("LLM call failed: %w", err)
+			}
+			
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			
+			if err := json.Unmarshal(body, &result); err != nil {
+				return fmt.Errorf("failed to decode response: %w", err)
+			}
+			
+			if len(result.Choices) == 0 {
+				return fmt.Errorf("no choices returned from LLM")
+			}
+			
+			content = strings.TrimSpace(result.Choices[0].Message.Content)
+		} else {
+			// Fallback to legacy
+			log.Printf("[Reflection] Using legacy direct HTTP call")
+			jsonData, err := json.Marshal(reqBody)
+			if err != nil {
+				return fmt.Errorf("failed to marshal request: %w", err)
+			}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.URL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+			req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.URL, bytes.NewBuffer(jsonData))
+			if err != nil {
+				return fmt.Errorf("failed to create request: %w", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
+			client := &http.Client{Timeout: 90 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("failed to send request: %w", err)
+			}
+			defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-	}
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
+			}
 
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
-	}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return fmt.Errorf("failed to decode response: %w", err)
+			}
 
-	if len(result.Choices) == 0 {
-		return fmt.Errorf("no choices returned from LLM")
-	}
+			if len(result.Choices) == 0 {
+				return fmt.Errorf("no choices returned from LLM")
+			}
 
-	content := strings.TrimSpace(result.Choices[0].Message.Content)
+			content = strings.TrimSpace(result.Choices[0].Message.Content)
+		}
+	} else {
+		// No queue manager available - legacy path
+		log.Printf("[Reflection] Using legacy direct HTTP call (no queue manager)")
+		jsonData, err := json.Marshal(reqBody)
+		if err != nil {
+			return fmt.Errorf("failed to marshal request: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.URL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 90 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to send request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		var result struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		if len(result.Choices) == 0 {
+			return fmt.Errorf("no choices returned from LLM")
+		}
+
+		content = strings.TrimSpace(result.Choices[0].Message.Content)
+	}
 	
 	// Clean JSON
 	content = strings.TrimPrefix(content, "```json")
@@ -704,4 +823,57 @@ func createReflectionGoal(ctx context.Context, db *gorm.DB, description string, 
 	
 	state.ActiveGoals = append(state.ActiveGoals, goal)
 	return stateManager.SaveState(ctx, state)
+}
+
+// streamLLMResponseFromHTTP handles streaming from an existing HTTP response
+func streamLLMResponseFromHTTP(conn *safeWSConn, wsConn *websocket.Conn, httpResp *http.Response, fullResponse *string, toksPerSec *float64) error {
+	defer httpResp.Body.Close()
+	
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		return fmt.Errorf("LLM returned status %d: %s", httpResp.StatusCode, string(body))
+	}
+	
+	decoder := json.NewDecoder(httpResp.Body)
+	var sb strings.Builder
+	startTime := time.Now()
+	tokenCount := 0
+	
+	for {
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		
+		if err := decoder.Decode(&chunk); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to decode chunk: %w", err)
+		}
+		
+		if len(chunk.Choices) > 0 {
+			content := chunk.Choices[0].Delta.Content
+			if content != "" {
+				sb.WriteString(content)
+				tokenCount++
+				
+				// Send chunk to WebSocket
+				if err := conn.WriteJSON(map[string]string{"chunk": content}); err != nil {
+					return fmt.Errorf("failed to send chunk: %w", err)
+				}
+			}
+		}
+	}
+	
+	elapsed := time.Since(startTime).Seconds()
+	if elapsed > 0 && tokenCount > 0 {
+		*toksPerSec = float64(tokenCount) / elapsed
+	}
+	
+	*fullResponse = sb.String()
+	return nil
 }
