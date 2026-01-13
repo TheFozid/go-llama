@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,8 +16,6 @@ import (
 	"go-llama/internal/config"
 	"go-llama/internal/db"
 	"go-llama/internal/llm"
-
-	"github.com/gorilla/websocket"
 )
 
 // handleStandardLLMWebSocket processes standard LLM messages via WebSocket with streaming
