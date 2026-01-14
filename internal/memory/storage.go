@@ -105,10 +105,9 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 			Wait:           boolPtr(true),
 		})
 		if err != nil {
-			// Log warning but don't fail - index might already exist
-			log.Printf("[Storage] Warning: Failed to create index for %s (may already exist): %v", idx.field, err)
-			// Continue to next index instead of returning error
-			continue
+			// Log error with full details
+			log.Printf("[Storage] ERROR creating index for %s: %v", idx.field, err)
+			return fmt.Errorf("failed to create index for %s: %w", idx.field, err)
 		}
 	}
 
