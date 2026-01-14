@@ -20,16 +20,18 @@ type Compressor struct {
 	client    *http.Client
 	embedder  *Embedder
 	linker    *Linker
+	llmClient interface{} // Queue client
 }
 
 // NewCompressor creates a new compressor instance
-func NewCompressor(modelURL, modelName string, embedder *Embedder, linker *Linker) *Compressor {
+func NewCompressor(modelURL, modelName string, embedder *Embedder, linker *Linker, llmClient interface{}) *Compressor {
 	return &Compressor{
 		modelURL:  modelURL,
 		modelName: modelName,
 		client:    &http.Client{Timeout: 60 * time.Second},
 		embedder:  embedder,
 		linker:    linker,
+		llmClient: llmClient,
 	}
 }
 
@@ -264,8 +266,61 @@ func (c *Compressor) aggregateOutcomeTags(cluster []Memory) string {
 	return result
 }
 
-// callLLM sends a request to the compression LLM
+// callLLM sends a request to the compression LLM via queue
 func (c *Compressor) callLLM(ctx context.Context, prompt string) (string, error) {
+	// Use queue if available, otherwise fall back to direct HTTP
+	if c.llmClient != nil {
+		type LLMCaller interface {
+			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+		}
+		
+		if client, ok := c.llmClient.(LLMCaller); ok {
+			reqBody := map[string]interface{}{
+				"model": c.modelName,
+				"messages": []map[string]string{
+					{
+						"role":    "system",
+						"content": "You are a memory compression assistant. Follow instructions exactly.",
+					},
+					{
+						"role":    "user",
+						"content": prompt,
+					},
+				},
+				"stream":      false,
+				"temperature": 0.3,
+			}
+			
+			log.Printf("[Compressor] Calling LLM via queue (prompt length: %d)", len(prompt))
+			
+			body, err := client.Call(ctx, c.modelURL, reqBody)
+			if err != nil {
+				return "", fmt.Errorf("LLM queue call failed: %w", err)
+			}
+			
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			
+			if err := json.Unmarshal(body, &result); err != nil {
+				return "", fmt.Errorf("failed to decode response: %w", err)
+			}
+			
+			if len(result.Choices) == 0 {
+				return "", fmt.Errorf("no choices returned from LLM")
+			}
+			
+			return result.Choices[0].Message.Content, nil
+		}
+	}
+	
+	// Fallback to direct HTTP (legacy compatibility)
+	log.Printf("[Compressor] WARNING: Using legacy direct HTTP call")
+	
 	reqBody := map[string]interface{}{
 		"model": c.modelName,
 		"messages": []map[string]string{
@@ -279,7 +334,7 @@ func (c *Compressor) callLLM(ctx context.Context, prompt string) (string, error)
 			},
 		},
 		"stream":      false,
-		"temperature": 0.3, // Low temperature for consistent compression
+		"temperature": 0.3,
 	}
 
 	jsonData, err := json.Marshal(reqBody)

@@ -95,11 +95,23 @@ func main() {
 					cfg.GrowerAI.Linking.MaxLinksPerMemory,
 				)
 
+				// Create LLM client for compressor (background priority)
+				var compressorLLMClient interface{}
+				if llmManager != nil {
+					compressorLLMClient = llm.NewClient(
+						llmManager,
+						llm.PriorityBackground,
+						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+					)
+					log.Printf("[Main] ✓ Compressor using LLM queue (priority: background)")
+				}
+
 				compressor := memory.NewCompressor(
 					cfg.GrowerAI.Compression.Model.URL,
 					cfg.GrowerAI.Compression.Model.Name,
 					embedder,
 					linker,
+					compressorLLMClient,
 				)
 
 				// Create LLM client for tagger (background priority)
