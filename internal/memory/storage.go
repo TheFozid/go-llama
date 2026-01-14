@@ -55,6 +55,7 @@ func NewStorage(qdrantURL string, collectionName string, apiKey string) (*Storag
 	return s, nil
 }
 
+
 // ensureCollection creates the collection if it doesn't exist
 func (s *Storage) ensureCollection(ctx context.Context) error {
 	// Check if collection exists
@@ -63,23 +64,23 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		return fmt.Errorf("failed to check collection existence: %w", err)
 	}
 
-	if exists {
-		return nil
-	}
-
-	// Create collection with 384 dimensions (all-MiniLM-L6-v2)
-	err = s.Client.CreateCollection(ctx, &qdrant.CreateCollection{
-		CollectionName: s.CollectionName,
-		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
-			Size:     384,
-			Distance: qdrant.Distance_Cosine,
-		}),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create collection: %w", err)
+	if !exists {
+		// Create collection with 384 dimensions (all-MiniLM-L6-v2)
+		err = s.Client.CreateCollection(ctx, &qdrant.CreateCollection{
+			CollectionName: s.CollectionName,
+			VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
+				Size:     384,
+				Distance: qdrant.Distance_Cosine,
+			}),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create collection: %w", err)
+		}
 	}
 
 	// Create payload indexes for efficient filtering
+	// NOTE: This now runs EVERY time, not just on collection creation
+	// This ensures missing indexes are recreated if needed
 	indexes := []struct {
 		field string
 		typ   qdrant.PayloadSchemaType
@@ -104,7 +105,10 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 			Wait:           boolPtr(true),
 		})
 		if err != nil {
-			return fmt.Errorf("failed to create index for %s: %w", idx.field, err)
+			// Log warning but don't fail - index might already exist
+			log.Printf("[Storage] Warning: Failed to create index for %s (may already exist): %v", idx.field, err)
+			// Continue to next index instead of returning error
+			continue
 		}
 	}
 
