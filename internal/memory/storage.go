@@ -184,6 +184,42 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 	return nil
 }
 
+// WaitForCollection blocks until the collection is ready and queryable
+func (s *Storage) WaitForCollection(ctx context.Context, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for collection to be ready")
+		case <-ticker.C:
+			// Try a simple query to verify collection is queryable
+			_, err := s.Client.Query(ctx, &qdrant.QueryPoints{
+				CollectionName: s.CollectionName,
+				Query:          qdrant.NewQuery(make([]float32, 384)...), // Dummy vector
+				Limit:          uint64Ptr(1),
+			})
+			
+			if err == nil {
+				return nil // Collection is ready
+			}
+			
+			// Check if it's just empty (which is fine) vs actually missing
+			if strings.Contains(err.Error(), "doesn't exist") {
+				continue // Still waiting
+			}
+			
+			// Other errors are fine (like "no points"), means collection exists
+			return nil
+		}
+	}
+}
+
+
 // getQdrantDataType maps PayloadSchemaType to the actual Qdrant data type enum
 func getQdrantDataType(typ qdrant.PayloadSchemaType) qdrant.PayloadSchemaType {
 	// This mapping converts from our enum to what Qdrant actually returns

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -87,6 +88,13 @@ func main() {
 			if err != nil {
 				log.Printf("[Main] WARNING: Failed to initialize storage for compression: %v", err)
 			} else {
+				// Wait for collection to be ready before starting workers
+				log.Printf("[Main] Ensuring memory collection is ready...")
+				if err := storage.WaitForCollection(context.Background(), 30*time.Second); err != nil {
+					log.Fatalf("[Main] Failed to initialize memory collection: %v", err)
+				}
+				log.Printf("[Main] ✓ Memory collection ready")
+
 				embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
 
 				linker := memory.NewLinker(
@@ -310,6 +318,14 @@ func main() {
 			if err != nil {
 				log.Printf("[Main] WARNING: Failed to initialize storage for dialogue: %v", err)
 			} else {
+				// Wait for collection to be ready
+				log.Printf("[Main] Verifying memory collection for dialogue...")
+				if err := storage.WaitForCollection(context.Background(), 10*time.Second); err != nil {
+					log.Printf("[Main] WARNING: Memory collection not ready for dialogue: %v", err)
+				} else {
+					log.Printf("[Main] ✓ Memory collection verified for dialogue")
+				}
+
 				embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
 				stateManager := dialogue.NewStateManager(db.DB)
 
