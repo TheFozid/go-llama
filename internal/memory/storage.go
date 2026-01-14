@@ -138,14 +138,29 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 			}
 		}
 		
-		// Create index (either it doesn't exist, or we just deleted the wrong one)
-		fieldType := qdrant.FieldType(idx.typ)
-		_, err = s.Client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
-			CollectionName: s.CollectionName,
-			FieldName:      idx.field,
-			FieldType:      &fieldType,
-			Wait:           boolPtr(true),
-		})
+// Create index (either it doesn't exist, or we just deleted the wrong one)
+var fieldType *qdrant.FieldType
+switch idx.typ {
+case qdrant.PayloadSchemaType_Keyword:
+	ft := qdrant.FieldType_FieldTypeKeyword
+	fieldType = &ft
+case qdrant.PayloadSchemaType_Integer:
+	ft := qdrant.FieldType_FieldTypeInteger
+	fieldType = &ft
+case qdrant.PayloadSchemaType_Float:
+	ft := qdrant.FieldType_FieldTypeFloat
+	fieldType = &ft
+case qdrant.PayloadSchemaType_Bool:
+	ft := qdrant.FieldType_FieldTypeBool
+	fieldType = &ft
+}
+
+_, err = s.Client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
+	CollectionName: s.CollectionName,
+	FieldName:      idx.field,
+	FieldType:      fieldType,
+	Wait:           boolPtr(true),
+})
 		if err != nil {
 			log.Printf("[Storage] ERROR creating index for %s: %v", idx.field, err)
 			return fmt.Errorf("failed to create index for %s: %w", idx.field, err)
