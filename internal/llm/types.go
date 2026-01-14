@@ -38,6 +38,7 @@ type Response struct {
 	StatusCode int
 	Body       []byte
 	HTTPResp   *http.Response // For streaming
+	CancelFunc context.CancelFunc // For streaming: allows caller to clean up context
 }
 
 // Metrics tracks queue performance

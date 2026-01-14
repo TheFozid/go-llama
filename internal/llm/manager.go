@@ -159,15 +159,27 @@ func (m *Manager) processRequest(req *Request) {
 
 	// Apply timeout
 	ctx, cancel := context.WithTimeout(req.Context, req.Timeout)
-	defer cancel()
+	
+	// CRITICAL FIX: For streaming, don't cancel context until after response is sent
+	if !req.IsStreaming {
+		defer cancel()
+	}
 
 	// Execute request
 	resp, err := m.executeHTTPRequest(ctx, req)
 	if err != nil {
+		if req.IsStreaming {
+			cancel() // Clean up on error
+		}
 		log.Printf("[LLM Queue] Request %s failed after %s: %v",
 			req.ID, time.Since(startTime), err)
 		req.ErrorCh <- err
 		return
+	}
+
+	// For streaming: attach cancel function to response so caller can clean up
+	if req.IsStreaming {
+		resp.CancelFunc = cancel
 	}
 
 	// Send response
@@ -176,6 +188,9 @@ func (m *Manager) processRequest(req *Request) {
 		log.Printf("[LLM Queue] Request %s completed in %s",
 			req.ID, time.Since(startTime))
 	case <-ctx.Done():
+		if req.IsStreaming {
+			cancel()
+		}
 		log.Printf("[LLM Queue] Request %s timeout after %s",
 			req.ID, time.Since(startTime))
 		req.ErrorCh <- ctx.Err()
@@ -206,7 +221,7 @@ func (m *Manager) executeHTTPRequest(ctx context.Context, req *Request) (*Respon
 	client := &http.Client{
 		Timeout: req.Timeout,
 		Transport: &http.Transport{
-			ResponseHeaderTimeout: req.Timeout, // Use request timeout, not fixed 30s
+			ResponseHeaderTimeout: req.Timeout,
 			IdleConnTimeout:       req.Timeout,
 			MaxIdleConns:          10,
 			DisableKeepAlives:     false,
@@ -228,6 +243,7 @@ func (m *Manager) executeHTTPRequest(ctx context.Context, req *Request) (*Respon
 	}
 
 	// For streaming, return response immediately
+	// Context lifecycle will be managed by caller via CancelFunc
 	if req.IsStreaming {
 		return &Response{
 			StatusCode: httpResp.StatusCode,

@@ -334,15 +334,16 @@ if len(allLinkedIDs) > 0 {
 				cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)
 			
 			// Get streaming HTTP response from queue
-			httpResp, queueErr := llmClient.CallStreaming(ctx, cfg.GrowerAI.ReasoningModel.URL, payload)
-			if queueErr != nil {
-				log.Printf("[GrowerAI-WS] ERROR: LLM queue streaming failed: %v", queueErr)
-				conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
-				return
-			}
-			
-			// Use helper to stream from HTTP response
-			err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
+httpResp, queueErr := llmClient.CallStreaming(ctx, cfg.GrowerAI.ReasoningModel.URL, payload)
+if queueErr != nil {
+	log.Printf("[GrowerAI-WS] ERROR: LLM queue streaming failed: %v", queueErr)
+	conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
+	return
+}
+
+// Use helper to stream from HTTP response
+err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
+// Context cleanup happens automatically via httpResp.Body.Close()
 		} else {
 			log.Printf("[GrowerAI-WS] Using legacy direct LLM call")
 			err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
