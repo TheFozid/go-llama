@@ -895,5 +895,12 @@ func streamLLMResponseFromHTTP(conn *safeWSConn, wsConn *websocket.Conn, httpRes
 	}
 	
 	*fullResponse = sb.String()
+	
+	// Send end event (MISSING - THIS IS THE BUG)
+	conn.WriteJSON(map[string]interface{}{
+		"event":          "end",
+		"tokens_per_sec": *toksPerSec,
+	})
+	
 	return nil
 }
