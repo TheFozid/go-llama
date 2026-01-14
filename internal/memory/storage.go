@@ -116,7 +116,11 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 					needsRecreation = true
 					
 					// Delete the incorrect index
-					_, err := s.Client.DeleteFieldIndex(ctx, s.CollectionName, idx.field)
+					_, err := s.Client.DeleteFieldIndex(ctx, &qdrant.DeleteFieldIndexCollection{
+						CollectionName: s.CollectionName,
+						FieldName:      idx.field,
+						Wait:           boolPtr(true),
+					})
 					if err != nil {
 						log.Printf("[Storage] Warning: Failed to delete incorrect index '%s': %v", idx.field, err)
 					}
