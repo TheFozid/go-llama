@@ -55,8 +55,7 @@ func NewStorage(qdrantURL string, collectionName string, apiKey string) (*Storag
 	return s, nil
 }
 
-
-// ensureCollection creates the collection if it doesn't exist
+// ensureCollection creates the collection if it doesn't exist and ensures indexes are correct
 func (s *Storage) ensureCollection(ctx context.Context) error {
 	// Check if collection exists
 	exists, err := s.Client.CollectionExists(ctx, s.CollectionName)
@@ -76,11 +75,10 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create collection: %w", err)
 		}
+		log.Printf("[Storage] ✓ Created collection: %s", s.CollectionName)
 	}
 
-	// Create payload indexes for efficient filtering
-	// NOTE: This now runs EVERY time, not just on collection creation
-	// This ensures missing indexes are recreated if needed
+	// Define required indexes with their correct types
 	indexes := []struct {
 		field string
 		typ   qdrant.PayloadSchemaType
@@ -90,13 +88,46 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		{"is_collective", qdrant.PayloadSchemaType_Bool},
 		{"created_at", qdrant.PayloadSchemaType_Integer},
 		{"importance_score", qdrant.PayloadSchemaType_Float},
-		// Phase 4: New indexes
 		{"outcome_tag", qdrant.PayloadSchemaType_Keyword},
 		{"trust_score", qdrant.PayloadSchemaType_Float},
-		{"concept_tags", qdrant.PayloadSchemaType_Keyword}, // Phase 4D: Index for concept filtering
+		{"concept_tags", qdrant.PayloadSchemaType_Keyword},
 	}
 
+	// Get current collection info to check existing indexes
+	collectionInfo, err := s.Client.GetCollectionInfo(ctx, s.CollectionName)
+	if err != nil {
+		log.Printf("[Storage] Warning: Could not get collection info: %v", err)
+		// Continue anyway - we'll try to create indexes
+	}
+
+	// For each required index, check if it exists with correct type
 	for _, idx := range indexes {
+		needsRecreation := false
+		
+		// Check if index exists and has correct type
+		if collectionInfo != nil && collectionInfo.PayloadSchema != nil {
+			if existingField, ok := collectionInfo.PayloadSchema[idx.field]; ok {
+				expectedType := getQdrantDataType(idx.typ)
+				actualType := existingField.DataType
+				
+				if actualType != expectedType {
+					log.Printf("[Storage] Index '%s' has wrong type (expected: %v, actual: %v) - recreating", 
+						idx.field, expectedType, actualType)
+					needsRecreation = true
+					
+					// Delete the incorrect index
+					_, err := s.Client.DeleteFieldIndex(ctx, s.CollectionName, idx.field)
+					if err != nil {
+						log.Printf("[Storage] Warning: Failed to delete incorrect index '%s': %v", idx.field, err)
+					}
+				} else {
+					// Index exists with correct type, skip
+					continue
+				}
+			}
+		}
+		
+		// Create index (either it doesn't exist, or we just deleted the wrong one)
 		fieldType := qdrant.FieldType(idx.typ)
 		_, err = s.Client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 			CollectionName: s.CollectionName,
@@ -105,13 +136,33 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 			Wait:           boolPtr(true),
 		})
 		if err != nil {
-			// Log error with full details
 			log.Printf("[Storage] ERROR creating index for %s: %v", idx.field, err)
 			return fmt.Errorf("failed to create index for %s: %w", idx.field, err)
+		}
+		
+		if needsRecreation {
+			log.Printf("[Storage] ✓ Recreated index '%s' with correct type", idx.field)
 		}
 	}
 
 	return nil
+}
+
+// getQdrantDataType maps PayloadSchemaType to the actual Qdrant data type enum
+func getQdrantDataType(typ qdrant.PayloadSchemaType) qdrant.PayloadSchemaType {
+	// This mapping converts from our enum to what Qdrant actually returns
+	switch typ {
+	case qdrant.PayloadSchemaType_Keyword:
+		return qdrant.PayloadSchemaType_Keyword
+	case qdrant.PayloadSchemaType_Integer:
+		return qdrant.PayloadSchemaType_Integer
+	case qdrant.PayloadSchemaType_Float:
+		return qdrant.PayloadSchemaType_Float
+	case qdrant.PayloadSchemaType_Bool:
+		return qdrant.PayloadSchemaType_Bool
+	default:
+		return typ
+	}
 }
 
 // Store saves a memory to the vector database
