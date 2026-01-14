@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -834,25 +835,41 @@ func streamLLMResponseFromHTTP(conn *safeWSConn, wsConn *websocket.Conn, httpRes
 		return fmt.Errorf("LLM returned status %d: %s", httpResp.StatusCode, string(body))
 	}
 	
-	decoder := json.NewDecoder(httpResp.Body)
+	reader := bufio.NewReader(httpResp.Body)
 	var sb strings.Builder
 	startTime := time.Now()
 	tokenCount := 0
 	
 	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to read line: %w", err)
+		}
+		
+		line = strings.TrimSpace(line)
+		if len(line) == 0 || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+		
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
 					Content string `json:"content"`
 				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 		}
 		
-		if err := decoder.Decode(&chunk); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return fmt.Errorf("failed to decode chunk: %w", err)
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
 		}
 		
 		if len(chunk.Choices) > 0 {
@@ -861,10 +878,13 @@ func streamLLMResponseFromHTTP(conn *safeWSConn, wsConn *websocket.Conn, httpRes
 				sb.WriteString(content)
 				tokenCount++
 				
-				// Send chunk to WebSocket
 				if err := conn.WriteJSON(map[string]string{"chunk": content}); err != nil {
 					return fmt.Errorf("failed to send chunk: %w", err)
 				}
+			}
+			
+			if chunk.Choices[0].FinishReason != "" {
+				break
 			}
 		}
 	}
