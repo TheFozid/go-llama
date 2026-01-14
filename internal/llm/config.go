@@ -22,7 +22,7 @@ func DefaultConfig() *Config {
 		MaxConcurrent:       2,                  // Start conservative
 		CriticalQueueSize:   20,                 // Small buffer
 		BackgroundQueueSize: 100,                // Large buffer
-		CriticalTimeout:     60 * time.Second,   // 1 minute
-		BackgroundTimeout:   180 * time.Second,  // 3 minutes
+		CriticalTimeout:     360 * time.Second,
+		BackgroundTimeout:   360 * time.Second,
 	}
 }

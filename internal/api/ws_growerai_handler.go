@@ -24,6 +24,22 @@ import (
 	"gorm.io/gorm"
 )
 
+// FlexibleBool can unmarshal both string and boolean values
+type FlexibleBool bool
+
+func (b *FlexibleBool) UnmarshalJSON(data []byte) error {
+    asString := string(data)
+    switch asString {
+    case `"true"`, `true`:
+        *b = true
+    case `"false"`, `false`:
+        *b = false
+    default:
+        return fmt.Errorf("cannot unmarshal %s into a FlexibleBool", asString)
+    }
+    return nil
+}
+
 // handleGrowerAIWebSocket processes GrowerAI messages via WebSocket with streaming
 func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, content string, userID uint, llmManager interface{}) {
 	// Check if GrowerAI is globally enabled
@@ -681,19 +697,19 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 	content = strings.TrimSpace(content)
 
 	// Parse reflection
-	var reflection struct {
-		OutcomeQuality      string `json:"outcome_quality"`
-		Reasoning           string `json:"reasoning"`
-		MistakeMade         bool   `json:"mistake_made"`
-		MistakeDescription  string `json:"mistake_description"`
-		UserRequestedGoal   bool   `json:"user_requested_goal"`
-		GoalDescription     string `json:"goal_description"`
-		UserGaveFeedback    bool   `json:"user_gave_feedback"`
-		FeedbackType        string `json:"feedback_type"`
-		FeedbackSummary     string `json:"feedback_summary"`
-		ImportantLearning   bool   `json:"important_learning"`
-		LearningContent     string `json:"learning_content"`
-	}
+var reflection struct {
+    OutcomeQuality      string       `json:"outcome_quality"`
+    Reasoning           string       `json:"reasoning"`
+    MistakeMade         FlexibleBool `json:"mistake_made"`
+    MistakeDescription  string       `json:"mistake_description"`
+    UserRequestedGoal   FlexibleBool `json:"user_requested_goal"`
+    GoalDescription     string       `json:"goal_description"`
+    UserGaveFeedback    FlexibleBool `json:"user_gave_feedback"`
+    FeedbackType        string       `json:"feedback_type"`
+    FeedbackSummary     string       `json:"feedback_summary"`
+    ImportantLearning   FlexibleBool `json:"important_learning"`  // Now using FlexibleBool
+    LearningContent     string       `json:"learning_content"`
+}
 
 	if err := json.Unmarshal([]byte(content), &reflection); err != nil {
 		log.Printf("[Reflection] WARNING: Failed to parse reflection JSON: %v", err)
@@ -706,42 +722,41 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 
 	// ACT ON REFLECTION
 	
-	// 1. If mistake made → create verification goal
-	if reflection.MistakeMade && reflection.MistakeDescription != "" {
-		if err := createReflectionGoal(
-			ctx,
-			db.DB,
-			fmt.Sprintf("Verify and correct: %s", reflection.MistakeDescription),
-			dialogue.GoalSourceUserFailure,
-			9, // High priority
-			userID,
-		); err != nil {
-			log.Printf("[Reflection] WARNING: Failed to create verification goal: %v", err)
-		} else {
-			log.Printf("[Reflection] ✓ Created verification goal for mistake")
-		}
-	}
+// 1. If mistake made → create verification goal
+if bool(reflection.MistakeMade) && reflection.MistakeDescription != "" {
+    if err := createReflectionGoal(
+        ctx,
+        db.DB,
+        fmt.Sprintf("Verify and correct: %s", reflection.MistakeDescription),
+        dialogue.GoalSourceUserFailure,
+        9, // High priority
+        userID,
+    ); err != nil {
+        log.Printf("[Reflection] WARNING: Failed to create verification goal: %v", err)
+    } else {
+        log.Printf("[Reflection] ✓ Created verification goal for mistake")
+    }
+}
 
-	// 2. If user requested goal → create it
-	if reflection.UserRequestedGoal && reflection.GoalDescription != "" {
-		if err := createReflectionGoal(
-			ctx,
-			db.DB,
-			reflection.GoalDescription,
-			dialogue.GoalSourceKnowledgeGap,
-			10, // Highest priority
-			userID,
-		); err != nil {
-			log.Printf("[Reflection] WARNING: Failed to create user-requested goal: %v", err)
-		} else {
-			log.Printf("[Reflection] ✓ Created user-requested goal: %s", truncate(reflection.GoalDescription, 60))
-		}
-	}
+// 2. If user requested goal → create it
+if bool(reflection.UserRequestedGoal) && reflection.GoalDescription != "" {
+    if err := createReflectionGoal(
+        ctx,
+        db.DB,
+        reflection.GoalDescription,
+        dialogue.GoalSourceKnowledgeGap,
+        10, // Highest priority
+        userID,
+    ); err != nil {
+        log.Printf("[Reflection] WARNING: Failed to create user-requested goal: %v", err)
+    } else {
+        log.Printf("[Reflection] ✓ Created user-requested goal: %s", truncate(reflection.GoalDescription, 60))
+    }
+}
 
-	// 3. If user gave personality feedback → store for identity evolution
-	if reflection.UserGaveFeedback && reflection.FeedbackSummary != "" {
-		feedbackMemory := fmt.Sprintf("User feedback (%s): %s", reflection.FeedbackType, reflection.FeedbackSummary)
-		
+// 3. If user gave personality feedback → store for identity evolution
+if bool(reflection.UserGaveFeedback) && reflection.FeedbackSummary != "" {
+    feedbackMemory := fmt.Sprintf("User feedback (%s): %s", reflection.FeedbackType, reflection.FeedbackSummary)
 		embedding, err := embedder.Embed(ctx, feedbackMemory)
 		if err == nil {
 			userIDStr := fmt.Sprintf("%d", userID)
@@ -767,9 +782,9 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 		}
 	}
 
-	// 4. If important learning → store as collective memory
-	if reflection.ImportantLearning && reflection.LearningContent != "" {
-		embedding, err := embedder.Embed(ctx, reflection.LearningContent)
+// 4. If important learning → store as collective memory
+if bool(reflection.ImportantLearning) && reflection.LearningContent != "" {
+    embedding, err := embedder.Embed(ctx, reflection.LearningContent)
 		if err == nil {
 			mem := &memory.Memory{
 				Content:         reflection.LearningContent,
