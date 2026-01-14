@@ -69,31 +69,6 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		return fmt.Errorf("failed to check collection existence: %w", err)
 	}
 
-	// Check if collection needs recreation due to wrong index types
-	needsRecreation := false
-	if exists {
-		collectionInfo, err := s.Client.GetCollectionInfo(ctx, s.CollectionName)
-		if err == nil && collectionInfo.PayloadSchema != nil {
-			// Check critical index: is_collective
-			if field, ok := collectionInfo.PayloadSchema["is_collective"]; ok {
-				if field.DataType != qdrant.PayloadSchemaType_Bool {
-					log.Printf("[Storage] CRITICAL: is_collective has wrong type (%v), recreating collection", field.DataType)
-					needsRecreation = true
-				}
-			}
-		}
-	}
-	
-	// Delete and recreate if needed
-	if needsRecreation {
-		log.Printf("[Storage] Deleting collection due to index corruption...")
-		err = s.Client.DeleteCollection(ctx, s.CollectionName)
-		if err != nil {
-			return fmt.Errorf("failed to delete corrupted collection: %w", err)
-		}
-		exists = false
-		log.Printf("[Storage] ✓ Deleted corrupted collection")
-	}
 	
 	if !exists {
 		// Create collection with 384 dimensions (all-MiniLM-L6-v2)
