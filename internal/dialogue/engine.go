@@ -2,14 +2,11 @@
 package dialogue
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
-	"net/http"
 	"strings"
 	"time"
 
