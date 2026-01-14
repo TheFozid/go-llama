@@ -76,26 +76,38 @@ func main() {
 			log.Printf("[Main] ✓ GrowerAI dialogue state initialized")
 		}
 
-		// Start GrowerAI compression worker if enabled
-		if cfg.GrowerAI.Compression.Enabled {
-			log.Printf("[Main] Initializing GrowerAI compression worker...")
-
-			storage, err := memory.NewStorage(
+		// Initialize shared storage for GrowerAI (used by compression and dialogue)
+		var storage *memory.Storage
+		if cfg.GrowerAI.Compression.Enabled || cfg.GrowerAI.Dialogue.Enabled {
+			log.Printf("[Main] Initializing GrowerAI storage...")
+			
+			var err error
+			storage, err = memory.NewStorage(
 				cfg.GrowerAI.Qdrant.URL,
 				cfg.GrowerAI.Qdrant.Collection,
 				cfg.GrowerAI.Qdrant.APIKey,
 			)
 			if err != nil {
-				log.Printf("[Main] WARNING: Failed to initialize storage for compression: %v", err)
-			} else {
-				// Wait for collection to be ready before starting workers
-				log.Printf("[Main] Ensuring memory collection is ready...")
-				if err := storage.WaitForCollection(context.Background(), 30*time.Second); err != nil {
-					log.Fatalf("[Main] Failed to initialize memory collection: %v", err)
-				}
-				log.Printf("[Main] ✓ Memory collection ready")
+				log.Fatalf("[Main] Failed to initialize GrowerAI storage: %v", err)
+			}
+			
+			// Wait for collection to be ready before starting workers
+			log.Printf("[Main] Ensuring memory collection is ready...")
+			if err := storage.WaitForCollection(context.Background(), 30*time.Second); err != nil {
+				log.Fatalf("[Main] Failed to initialize memory collection: %v", err)
+			}
+			log.Printf("[Main] ✓ Memory collection ready")
+		}
 
-				embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+		// Start GrowerAI compression worker if enabled
+		if cfg.GrowerAI.Compression.Enabled {
+			log.Printf("[Main] Initializing GrowerAI compression worker...")
+
+			if storage == nil {
+				log.Fatalf("[Main] Storage not initialized for compression worker")
+			}
+			
+			embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
 
 				linker := memory.NewLinker(
 					storage,
@@ -310,22 +322,9 @@ func main() {
 		if cfg.GrowerAI.Dialogue.Enabled {
 			log.Printf("[Main] Initializing GrowerAI dialogue worker...")
 
-			storage, err := memory.NewStorage(
-				cfg.GrowerAI.Qdrant.URL,
-				cfg.GrowerAI.Qdrant.Collection,
-				cfg.GrowerAI.Qdrant.APIKey,
-			)
-			if err != nil {
-				log.Printf("[Main] WARNING: Failed to initialize storage for dialogue: %v", err)
+			if storage == nil {
+				log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
 			} else {
-				// Wait for collection to be ready
-				log.Printf("[Main] Verifying memory collection for dialogue...")
-				if err := storage.WaitForCollection(context.Background(), 10*time.Second); err != nil {
-					log.Printf("[Main] WARNING: Memory collection not ready for dialogue: %v", err)
-				} else {
-					log.Printf("[Main] ✓ Memory collection verified for dialogue")
-				}
-
 				embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
 				stateManager := dialogue.NewStateManager(db.DB)
 
