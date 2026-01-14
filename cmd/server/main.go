@@ -238,9 +238,6 @@ func main() {
 					storageLimits.TierAllocation.Medium*100,
 					storageLimits.TierAllocation.Long*100,
 					storageLimits.TierAllocation.Ancient*100)
-			}
-		} else {
-			log.Printf("[Main] GrowerAI compression disabled in config")
 		}
 
 		// Initialize GrowerAI tool registry
