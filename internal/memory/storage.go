@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"strings"
 	"time"
 	"log"
@@ -18,6 +19,7 @@ import (
 type Storage struct {
 	Client         *qdrant.Client // Public for principle extraction
 	CollectionName string         // Public for principle extraction
+	initMutex      sync.Mutex     // Prevents concurrent index initialization
 }
 
 // NewStorage creates a new storage instance
@@ -57,6 +59,10 @@ func NewStorage(qdrantURL string, collectionName string, apiKey string) (*Storag
 
 // ensureCollection creates the collection if it doesn't exist and ensures indexes are correct
 func (s *Storage) ensureCollection(ctx context.Context) error {
+	// Lock to prevent concurrent initialization
+	s.initMutex.Lock()
+	defer s.initMutex.Unlock()
+	
 	// Check if collection exists
 	exists, err := s.Client.CollectionExists(ctx, s.CollectionName)
 	if err != nil {
