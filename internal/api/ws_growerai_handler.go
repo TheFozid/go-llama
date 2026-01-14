@@ -878,9 +878,9 @@ func streamLLMResponseFromHTTP(conn *safeWSConn, wsConn *websocket.Conn, httpRes
 				sb.WriteString(content)
 				tokenCount++
 				
-				if err := conn.WriteJSON(map[string]string{"chunk": content}); err != nil {
-					return fmt.Errorf("failed to send chunk: %w", err)
-				}
+if err := conn.WriteJSON(WSChatToken{Token: content, Index: tokenCount - 1}); err != nil {
+    return fmt.Errorf("failed to send chunk: %w", err)
+}
 			}
 			
 			if chunk.Choices[0].FinishReason != "" {
