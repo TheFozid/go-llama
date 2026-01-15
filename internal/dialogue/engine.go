@@ -1344,6 +1344,108 @@ func (e *Engine) detectMetaLoop(state *InternalState) (bool, string) {
 	return false, ""
 }
 
+// generateResearchPlan creates a structured multi-step investigation plan
+func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
+    prompt := fmt.Sprintf(`Create a thorough research plan to investigate this goal.
+
+Goal: %s
+
+Break this into 3-7 logical sub-questions that:
+1. Start with foundational understanding
+2. Build progressively to specific details
+3. Include verification/cross-checking
+4. Can each be answered via web search
+
+Respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "root_question": "Main question being answered",
+  "sub_questions": [
+    {
+      "id": "q1",
+      "question": "What defines authentic character arcs in everyday life?",
+      "search_query": "defining authentic character arcs in everyday life",
+      "priority": 10,
+      "dependencies": []
+    },
+    {
+      "id": "q2",
+      "question": "Follow-up building on q1",
+      "search_query": "character development techniques",
+      "priority": 9,
+      "dependencies": ["q1"]
+    }
+  ]
+}`, goal.Description)
+
+    // Call LLM with JSON format prompt
+    reqBody := map[string]interface{}{
+        "model": e.llmModel,
+        "max_tokens": e.contextSize,
+        "messages": []map[string]string{
+            {
+                "role":    "system",
+                "content": "You are GrowerAI's internal reasoning system. Output ONLY valid JSON (no markdown, no explanation).",
+            },
+            {
+                "role":    "user",
+                "content": prompt,
+            },
+        },
+        "temperature": 0.7,
+        "stream":      false,
+    }
+    
+    log.Printf("[Dialogue] Research plan LLM call via queue (prompt length: %d chars)", len(prompt))
+    startTime := time.Now()
+    
+    // Use queue if available
+    if e.llmClient != nil {
+        type LLMCaller interface {
+            Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+        }
+        
+        if client, ok := e.llmClient.(LLMCaller); ok {
+            body, err := client.Call(ctx, e.llmURL, reqBody)
+            if err != nil {
+                return nil, 0, fmt.Errorf("LLM call failed: %w", err)
+            }
+            
+            log.Printf("[Dialogue] Research plan response received in %s", time.Since(startTime))
+            
+            // Parse LLM response wrapper
+            var result struct {
+                Choices []struct {
+                    Message struct {
+                        Content string `json:"content"`
+                    } `json:"message"`
+                } `json:"choices"`
+                Usage struct {
+                    TotalTokens int `json:"total_tokens"`
+                } `json:"usage"`
+            }
+            
+            if err := json.Unmarshal(body, &result); err != nil {
+                return nil, 0, fmt.Errorf("failed to decode response: %w", err)
+            }
+            
+            if len(result.Choices) == 0 {
+                return nil, 0, fmt.Errorf("no choices returned from LLM")
+            }
+            
+            content := strings.TrimSpace(result.Choices[0].Message.Content)
+            tokens := result.Usage.TotalTokens
+            
+            // Try to parse as JSON
+            return e.parseResearchPlanFromJSON(content, tokens)
+        }
+    }
+    
+    // Queue client is REQUIRED
+    log.Printf("[Dialogue] ERROR: LLM queue client not available for research plan")
+    return nil, 0, fmt.Errorf("LLM queue client required for research plan")
+}
+
+
 // generateExploratoryGoal creates a curiosity-driven goal based on context
 func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []string, avoidTopic string, recentGoalDescriptions []string) Goal {
 	var description string
@@ -1719,182 +1821,6 @@ Bad: (insights First insight) - missing quotes`
 	return nil, 0, fmt.Errorf("LLM queue client required for structured reasoning")
 }
 
-// generateResearchPlan creates a structured multi-step investigation plan
-func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
-    prompt := fmt.Sprintf(`Create a thorough research plan to investigate this goal.
-
-Goal: %s
-
-Break this into 3-7 logical sub-questions that:
-1. Start with foundational understanding
-2. Build progressively to specific details
-3. Include verification/cross-checking
-4. Can each be answered via web search
-
-Respond with ONLY S-expressions (no markdown, no explanation):
-(research_plan
-  (root_question "Main question being answered")
-  (sub_questions
-    (sub_question
-      (id "q1")
-      (question "What defines authentic character arcs rooted in everyday life?")
-      (search_query "defining authentic character arcs in everyday life")
-      (priority 10)
-      (dependencies []string)
-    (sub_question
-      (id "q2")
-      (question "Follow-up building on q1")
-      (search_query "character development techniques")
-      (priority 9)
-      (dependencies ["q1"])
-    (sub_question
-      (id "q3")
-      (question "What defines authentic character arcs rooted in everyday life?")
-      (search_query "character development techniques")
-      (priority 8)
-      (dependencies: ["q1"])
-    (sub_question
-      (id "q4")
-      (question "How do character arcs develop over time?)
-      (search_query "character evolution over time")
-      (priority 7)
-      (dependencies: ["q1", "q2", "q3"])
-    (sub_question
-      (id "q5")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "q3", "q4", "q5")
-    (sub_question
-      (id "q6")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "q3", "q4", "q5", "q6")
-    (sub_question
-      (id "q7")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "q3", "4", "q5", "q6", "q7")
-    (sub_question
-      (id "q8")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "q4", "5", "q6", "7")
-    (sub_question
-      (id "q9")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "q4", "5", "6", "q7", "q8", "q9")
-    (sub_question
-      (id "q10")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "q4", "5", "6", "q7", "q8", "q9", "q10")
-    (sub_question
-      (id "q11")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "q4", "5", "6", "q7", "q8", "q9", "q10")
-    (sub_question
-      (id "q12")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "4", "5", "6", "q7", "8", "q9", "q10", "q11")
-    (sub_question
-      (id "q13")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "4", "5", "6", "q7", "q8", "q9", "q10", "q11", "q12")
-    (sub_question
-      (id "q14")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "4", "5", "6", "7", "q8", "q9", "q10", "q11", "q12", "q13", "q14")
-    (sub_question
-      (id "q15")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "4", "5", "6", "7", "q8", "q9", "q10", "q11", "q12", "q13", "q14", "q15")
-    (sub_question
-      (id "q16")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (q1", "q2", "3", "4", "5", "q6", "7", "8", "q9", "q10", "q11", "q12", "q13", "q14", "q15", "q16")
-    (sub_question
-      (id "q17")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "4", "q5", "6", "q7", "q8", "q9", "10", "q11", "q12", "q13", "q14", "q15", "q16", "q17")
-    (sub_question
-      (id "q18")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "4", "q5", "6", "q7", "q8", "q9", "q10", "q11", "q12", "q13", "q14", "q15", "q16", "q17")
-    (sub_question
-      (id "q19")
-      (question "What makes character arcs believable?)
-      (search_query "character arcs techniques")
-      (dependencies: ["q1", "q2", "3", "4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "/S-expression reasoning response received in %s", time.Since(startTime))
-            
-            // Parse response as JSON
-            var planJSON struct {
-                RootQuestion string             string `json:"root_question"`
-                SubQuestions []struct {
-                    ID           string   `json:"id"`
-                    Question     string   `json:"question"`
-                    SearchQuery  string   `json:"search_query"`
-                    Priority     int      `json:"priority"`
-                    Dependencies []string `json:"dependencies"`
-                } `json:"sub_questions"`
-            }
-            
-            if err := json.Unmarshal([]byte(content), &planJSON); err != nil {
-                return nil, tokens, fmt.Errorf("failed to parse plan JSON: %w", err)
-            }
-            
-            // Convert to ResearchPlan
-            plan := &ResearchPlan{
-                RootQuestion:    planJSON.RootQuestion,
-                SubQuestions:    make([]ResearchQuestion, len(planJSON.SubQuestions)),
-                CurrentStep:     0,
-                SynthesisNeeded: false,
-                CreatedAt:       time.Now(),
-                UpdatedAt:       time.Now(),
-            }
-            
-            for i, sq := range planJSON.SubQuestions {
-                plan.SubQuestions[i] = ResearchQuestion{
-                    ID:              sq.ID,
-                    Question:        sq.Question,
-                    SearchQuery:     sq.SearchQuery,
-                    Priority:        sq.Priority,
-                    Dependencies:    sq.Dependencies,
-                    Status:          ResearchStatusPending,
-                    SourcesFound:    []string{},
-                    KeyFindings:     "",
-                    ConfidenceLevel: 0.0,
-                }
-            }
-            
-            return plan, tokens, nil
-        } else {
-            // Parse as S-expression (existing behavior)
-            return e.parseResearchPlanFromSExpr(content, tokens)
-        }
-    } else {
-            // Default to old S-expression parsing
-            return e.parseResearchPlanFromSExpr(content, tokens)
-        }
-    }
-    } else {
-        // Default to S-expression parsing (existing behavior)
-            return e.parseResearchPlanFromSExpr(content, tokens)
-        }
-    }
-    } else {
-        // Default fallback
-        return nil, fmt.Errorf("failed to generate research plan: %w", err)
-    }
-}
 
 // parseResearchPlanFromSExpr parses S-expression format research plans
 func (e *Engine) parseResearchPlanFromSExpr(sExpr string, tokens int) (*ResearchPlan, int, error) {
@@ -1923,66 +1849,6 @@ func (e *Engine) parseResearchPlanFromSExpr(sExpr string, tokens int) (*Research
         // Not a research plan
         return nil, tokens, fmt.Errorf("not a research plan")
     }
-}
-
-// UPDATE THE generateResearchPlan function to return JSON format instead of S-expressions
-func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
-    prompt := fmt.Sprintf(`Create a thorough research plan to investigate this goal.
-
-Goal: %s
-
-Break this into 3-7 logical sub-questions that:
-1. Start with foundational understanding
-2. Build progressively to specific details
-3. Include verification/cross-checking
-4. Can each be answered via web search
-
-Respond with ONLY valid JSON (no markdown, no explanation):
-{
-  "root_question": "Main question being answered",
-  "sub_questions": [
-    {
-      "id": "q1",
-      "question": "What defines authentic character arcs in everyday life?",
-      "search_query": "defining authentic character arcs in everyday life",
-      "priority": 10,
-      "dependencies": []
-    },
-    {
-      "id": "q2",
-      "question": "Follow-up building on q1",
-      "search_query": "character development techniques",
-      "priority": 9,
-      "dependencies": ["q1"]
-    },
-    {
-      "id": "q3",
-      "question": "What defines authentic character arcs rooted in everyday life?",
-      "search_query": "character development techniques",
-      "priority": 8,
-      "dependencies": ["q1", "q2"]
-    },
-    {
-      "id": "q4",
-      "character development techniques",
-      "search_query": "character development over time",
-      "priority": 7,
-      "dependencies": ["q1", "q2", "q3", "q4")
-    },
-    {
-      "id": "q5",
-      "question": "How do character arcs develop over time?",
-      "search_query": "character evolution over time",
-      "dependencies": ["q1", "q2", "q3", "q4")
-    },
-    {
-      "id": "q6",
-      "question": "What makes character arcs believable?",
-      "search_query": "character arcs techniques",
-      "priority": 6,
-      "dependencies": ["q1", "q2", "q3", "q4", "q5", "q6")
-    }
-  ]
 }
 
 
@@ -2042,7 +1908,6 @@ func (e *Engine) parseResearchPlanFromJSON(jsonStr string, tokens int) (*Researc
     
     return plan, tokens, nil
 }
-
 
 // getNextResearchAction determines next action from research plan
 func (e *Engine) getNextResearchAction(ctx context.Context, goal *Goal) *Action {
