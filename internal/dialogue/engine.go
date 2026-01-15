@@ -1896,8 +1896,6 @@ Respond with ONLY S-expressions (no markdown, no explanation):
     }
 }
 
-// ADD THIS FUNCTION TO internal/dialogue/engine.go
-
 // parseResearchPlanFromSExpr parses S-expression format research plans
 func (e *Engine) parseResearchPlanFromSExpr(sExpr string, tokens int) (*ResearchPlan, int, error) {
     // Try to parse as S-expression (existing behavior)
@@ -1915,36 +1913,12 @@ func (e *Engine) parseResearchPlanFromSExpr(sExpr string, tokens int) (*Research
         return nil, tokens, fmt.Errorf("empty root list")
     }
     
-    if len(plan.list) == 0 {
-        return nil, tokens, fmt.Errorf("empty root list")
-    }
-    
     // Check if this is a research plan (starts with 'reasoning')
     if plan.list[0].isAtom && strings.ToLower(plan.list[0].atom) == "research_plan" {
         // It's a research plan - parse the sub-questions
-        subQuestions := make([]ResearchQuestion, len(plan.list)-1)
-        for i := range plan.list[1:] {
-            subQuestions[i] = ResearchQuestion{
-                ID:              plan.list[i+1].atom,
-                Question:        plan.list[i+1].atom,
-                SearchQuery:     plan.list[i+2].atom,
-                Priority:        plan.list[i+2].atom,
-                Dependencies:    plan.list[i+3].atom,
-            }
-        }
-        
-        return &ResearchPlan{
-            RootQuestion:    plan.list[0].atom,
-            SubQuestions:    subQuestions,
-            CurrentStep:     0,
-            SynthesisNeeded: false,
-            CreatedAt:       time.Now(),
-            UpdatedAt:       time.Now(),
-        }
-    } else {
-        // Not a research plan
-        return nil, tokens, fmt.Errorf("not a research plan")
-    }
+        // This implementation would need to be completed based on your S-expression parser
+        // For now, return an error to indicate this needs to be implemented
+        return nil, tokens, fmt.Errorf("S-expression research plan parsing not fully implemented")
     } else {
         // Not a research plan
         return nil, tokens, fmt.Errorf("not a research plan")
@@ -2011,7 +1985,6 @@ Respond with ONLY valid JSON (no markdown, no explanation):
   ]
 }
 
-// ADD THIS NEW FUNCTION TO internal/dialogue/engine.go
 
 // parseResearchPlanFromJSON parses JSON format research plans
 func (e *Engine) parseResearchPlanFromJSON(jsonStr string, tokens int) (*ResearchPlan, int, error) {
@@ -2022,7 +1995,7 @@ func (e *Engine) parseResearchPlanFromJSON(jsonStr string, tokens int) (*Researc
     
     // Parse JSON
     var planJSON struct {
-        RootQuestion string             string `json:"root_question"`
+        RootQuestion string `json:"root_question"`
         SubQuestions []struct {
             ID           string   `json:"id"`
             Question     string   `json:"question"`
@@ -2030,15 +2003,13 @@ func (e *Engine) parseResearchPlanFromJSON(jsonStr string, tokens int) (*Researc
             Priority     int      `json:"priority"`
             Dependencies []string `json:"dependencies"`
         } `json:"sub_questions"`
-    } `json:"sub_questions"`
-    } `json:"sub_questions"`
     }
     
-    if err := json.Unmarshal([]byte(jsonStr, &planJSON); err != nil {
+    if err := json.Unmarshal([]byte(jsonStr), &planJSON); err != nil {
         return nil, tokens, fmt.Errorf("failed to parse plan JSON: %w", err)
     }
     
-    if len(planJSON.SubQuestions) == 0) {
+    if len(planJSON.SubQuestions) == 0 {
         return nil, tokens, fmt.Errorf("plan has no questions")
     }
     if len(planJSON.SubQuestions) > 10 {
@@ -2060,7 +2031,7 @@ func (e *Engine) parseResearchPlanFromJSON(jsonStr string, tokens int) (*Researc
             ID:              sq.ID,
             Question:        sq.Question,
             SearchQuery:     sq.SearchQuery,
-            Priority:     sq.Priority,
+            Priority:        sq.Priority,
             Dependencies:    sq.Dependencies,
             Status:          ResearchStatusPending,
             SourcesFound:    []string{},
@@ -2072,75 +2043,6 @@ func (e *Engine) parseResearchPlanFromJSON(jsonStr string, tokens int) (*Researc
     return plan, tokens, nil
 }
 
-// UPDATE the generateResearchPlan function to return JSON format
-func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
-    // Call LLM with JSON format prompt
-    reqBody := map[string]interface{}{
-        "model": e.llmModel,
-        "max_tokens": e.contextSize,
-        "messages": []map[string]string{
-            {
-                "role":    "system",
-                "content": "You are GrowerAI's internal reasoning system. Output ONLY S-expressions (Lisp-style).",
-            },
-            {
-                "role":    "user",
-                "content": prompt,
-            },
-        },
-            "temperature": 0.7,
-        "stream":      false,
-    }
-    
-    log.Printf("[Dialogue] Structured reasoning LLM call via queue (prompt length: %d chars)", len(prompt))
-    startTime := time.Now()
-    
-    body, err := e.llmClient.Call(ctx, e.llmURL, reqBody)
-    if err != nil {
-        return nil, tokens, fmt.Errorf("LLM call failed: %w", err)
-    }
-    
-    log.Printf("[Dialogue] Structured reasoning response received in %s", time.Since(startTime))
-    
-    // Parse LLM response wrapper
-    var result struct {
-        Choices []struct {
-            Message struct {
-                Content string `json:"content"`
-            } `json:"message"`
-        } `json:"choices"`
-        Usage struct {
-            TotalTokens int `json:"total_tokens"`
-        } `json:"usage"`
-    }
-    
-    if err := json.Unmarshal(body, &result); err != nil {
-        return nil, tokens, fmt.Errorf("failed to decode response: %w", err)
-    }
-    
-    if len(result.Choices) == 0 {
-        return nil, tokens, fmt.Errorf("no choices returned from LLM")
-    }
-    
-    content := strings.TrimSpace(result.Choices[0].Message.Content)
-    tokens = result.Usage.TotalTokens
-    
-    // Parse S-expression with automatic repair
-    reasoning, err := ParseReasoningSExpr(content)
-    if err != nil {
-        log.Printf("[Dialogue] WARNING: Failed to parse S-expression reasoning: %v", err)
-        log.Printf("[Dialogue] Raw response (first 500 chars): %s...", truncateResponse(content, 500))
-        
-        // Fallback mode
-        return &ReasoningResponse{
-            Reflection: "Failed to parse structured reasoning. Using fallback mode.",
-            Insights:   []string{},
-        }, tokens, nil
-    }
-    
-    log.Printf("[Dialogue] ✓ Successfully parsed S-expression reasoning")
-    return reasoning, tokens, nil
-}
 
 // getNextResearchAction determines next action from research plan
 func (e *Engine) getNextResearchAction(ctx context.Context, goal *Goal) *Action {
