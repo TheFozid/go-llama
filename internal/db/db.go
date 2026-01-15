@@ -3,6 +3,7 @@ package db
 import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"go-llama/internal/config"
 	"go-llama/internal/user"
 	"go-llama/internal/chat"
@@ -14,7 +15,9 @@ import (
 var DB *gorm.DB
 
 func Init(cfg *config.Config) error {
-	db, err := gorm.Open(postgres.Open(cfg.Postgres.DSN), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(cfg.Postgres.DSN), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Error), // Only log errors, not full queries
+	})
 	if err != nil {
 		return err
 	}

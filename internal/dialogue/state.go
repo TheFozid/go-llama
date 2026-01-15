@@ -67,6 +67,31 @@ func (DialogueThought) TableName() string {
 	return "growerai_dialogue_thoughts"
 }
 
+// Truncation constants
+const maxActionResultLength = 500 // Store only first 500 chars in database
+
+// truncateGoalsForStorage creates a storage-safe copy of goals with truncated results
+func truncateGoalsForStorage(goals []Goal) []Goal {
+	truncated := make([]Goal, len(goals))
+	for i, goal := range goals {
+		truncated[i] = goal
+		truncated[i].Actions = make([]Action, len(goal.Actions))
+		
+		for j, action := range goal.Actions {
+			truncated[i].Actions[j] = action
+			
+			// Truncate result field if it's too long
+			if len(action.Result) > maxActionResultLength {
+				truncated[i].Actions[j].Result = action.Result[:maxActionResultLength] + "... [truncated for storage]"
+			}
+			
+			// Clear metadata to save space (not needed in database)
+			truncated[i].Actions[j].Metadata = nil
+		}
+	}
+	return truncated
+}
+
 // StateManager handles loading and saving internal state
 type StateManager struct {
 	db *gorm.DB
@@ -113,9 +138,13 @@ func (sm *StateManager) LoadState(ctx context.Context) (*InternalState, error) {
 
 // SaveState persists the internal state to database
 func (sm *StateManager) SaveState(ctx context.Context, state *InternalState) error {
-	// Marshal InternalState fields to JSON
-	activeGoals, _ := json.Marshal(state.ActiveGoals)
-	completedGoals, _ := json.Marshal(state.CompletedGoals)
+	// Truncate goals before marshaling to prevent huge SQL statements
+	activeGoalsTruncated := truncateGoalsForStorage(state.ActiveGoals)
+	completedGoalsTruncated := truncateGoalsForStorage(state.CompletedGoals)
+	
+	// Marshal truncated versions to JSON
+	activeGoals, _ := json.Marshal(activeGoalsTruncated)
+	completedGoals, _ := json.Marshal(completedGoalsTruncated)
 	knowledgeGaps, _ := json.Marshal(state.KnowledgeGaps)
 	recentFailures, _ := json.Marshal(state.RecentFailures)
 	patterns, _ := json.Marshal(state.Patterns)
