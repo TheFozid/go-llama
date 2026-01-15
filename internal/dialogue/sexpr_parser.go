@@ -66,7 +66,6 @@ func fixMalformedQuotedSexpr(input string) string {
 		// Find matching close quote
 		depth := 0
 		end := -1
-		inQuote := true
 		
 		for i := start + 2; i < len(result); i++ {
 			if result[i] == '(' {
