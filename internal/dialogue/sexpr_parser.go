@@ -244,19 +244,32 @@ func autoBalanceParens(input string) string {
 
 // sexprToReasoning converts parsed S-expr to ReasoningResponse
 func sexprToReasoning(root expr) (*ReasoningResponse, error) {
-	if root.isAtom || len(root.list) == 0 {
-		return nil, fmt.Errorf("root must be a list starting with 'reasoning'")
+	// LENIENT MODE: If root is not a list or doesn't start with 'reasoning',
+	// treat the entire input as a flat list of fields
+	
+	var fieldsList []expr
+	
+	if root.isAtom {
+		return nil, fmt.Errorf("root cannot be a single atom")
 	}
 	
-	// Check first element is 'reasoning' (be lenient)
-	if !root.list[0].isAtom {
-		return nil, fmt.Errorf("root must start with atom 'reasoning'")
+	if len(root.list) == 0 {
+		return nil, fmt.Errorf("empty root list")
 	}
 	
-	// Accept 'reasoning' or 'reflection' as root (LLM sometimes mixes these up)
-	rootName := strings.ToLower(root.list[0].atom)
-	if rootName != "reasoning" && rootName != "reflection" {
-		return nil, fmt.Errorf("root must start with 'reasoning' or 'reflection', got: %s", root.list[0].atom)
+	// Check if properly wrapped in (reasoning ...)
+	if root.list[0].isAtom {
+		rootName := strings.ToLower(root.list[0].atom)
+		if rootName == "reasoning" || rootName == "reflection" {
+			// Properly wrapped - use fields from position 1 onward
+			fieldsList = root.list[1:]
+		} else {
+			// Not wrapped - treat entire root.list as fields
+			fieldsList = root.list
+		}
+	} else {
+		// First element is not an atom - treat entire root.list as fields
+		fieldsList = root.list
 	}
 	
 	response := &ReasoningResponse{
@@ -268,8 +281,8 @@ func sexprToReasoning(root expr) (*ReasoningResponse, error) {
 	}
 	
 	// Parse fields
-	for i := 1; i < len(root.list); i++ {
-		field := root.list[i]
+	for i := 0; i < len(fieldsList); i++ {
+		field := fieldsList[i]
 		if field.isAtom || len(field.list) < 1 {
 			continue
 		}
