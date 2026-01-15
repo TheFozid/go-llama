@@ -223,14 +223,25 @@ func parseExpr(tokens []token, pos int) (expr, int, error) {
 
 // autoBalanceParens fixes unbalanced parentheses
 func autoBalanceParens(input string) string {
+	// First, strip any trailing incomplete content (after last valid closing paren)
+	// Find the last closing paren position
+	lastClose := strings.LastIndex(input, ")")
+	if lastClose > 0 && lastClose < len(input)-1 {
+		// Check if there's substantial text after last close paren
+		remainder := strings.TrimSpace(input[lastClose+1:])
+		// If remainder is short (<50 chars) and has no opening parens, it's probably incomplete - drop it
+		if len(remainder) < 50 && !strings.Contains(remainder, "(") {
+			input = input[:lastClose+1]
+		}
+	}
+	
 	openCount := strings.Count(input, "(")
 	closeCount := strings.Count(input, ")")
 	
 	if openCount > closeCount {
 		// Add missing closing parens
 		missing := openCount - closeCount
-		result := input + strings.Repeat(")", missing)
-		return result
+		return input + strings.Repeat(")", missing)
 	} else if closeCount > openCount {
 		// Remove extra closing parens (trim from end)
 		for closeCount > openCount && strings.HasSuffix(input, ")") {
