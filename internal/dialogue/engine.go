@@ -83,7 +83,7 @@ func NewEngine(
 		enableStrategyTracking:    enableStrategyTracking,
 		storeInsights:             storeInsights,
 		dynamicActionPlanning:     dynamicActionPlanning,
-		adaptiveConfig:            NewAdaptiveConfig(0.30, 0.85, 60),
+		adaptiveConfig:            NewAdaptiveConfig(0.30, 0.75, 60),
 		circuitBreaker:            circuitBreaker,
 	}
 }
@@ -1212,6 +1212,26 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 			}
 		}
 	}
+
+
+	// Keyword overlap detection (high precision, catches semantic duplicates)
+	proposalKeywords := e.extractSignificantKeywords(proposalDesc)
+	for _, existingGoal := range existingGoals {
+		existingKeywords := e.extractSignificantKeywords(existingGoal.Description)
+		
+		// Calculate keyword overlap ratio
+		overlap := e.calculateKeywordOverlap(proposalKeywords, existingKeywords)
+		
+		// If 60%+ keywords overlap, it's likely a duplicate
+		if overlap >= 0.60 {
+			log.Printf("[Dialogue] Duplicate detected (keyword overlap %.0f%%): '%s' ~= '%s'",
+				overlap*100, truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
+			log.Printf("[Dialogue]   Proposal keywords: %v", proposalKeywords)
+			log.Printf("[Dialogue]   Existing keywords: %v", existingKeywords)
+			return true
+		}
+	}
+
 	
 	// Semantic similarity check using embeddings
 	// Only check if we have at least 3 existing goals (avoid overhead for small lists)
@@ -2711,4 +2731,87 @@ func (e *Engine) extractSearchKeywords(goalDesc string) string {
 	}
 	
 	return strings.Join(keywords, " ")
+}
+
+// extractSignificantKeywords extracts meaningful words from a goal description
+func (e *Engine) extractSignificantKeywords(text string) []string {
+	text = strings.ToLower(text)
+	
+	// Remove common prefixes
+	text = strings.TrimPrefix(text, "learn about: ")
+	text = strings.TrimPrefix(text, "research ")
+	text = strings.TrimPrefix(text, "develop ")
+	text = strings.TrimPrefix(text, "create ")
+	text = strings.TrimPrefix(text, "need ")
+	text = strings.TrimPrefix(text, "deep ")
+	text = strings.TrimPrefix(text, "deeper ")
+	
+	// Stop words to ignore
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
+		"with": true, "by": true, "from": true, "as": true, "is": true, "was": true,
+		"are": true, "were": true, "been": true, "be": true, "have": true, "has": true,
+		"had": true, "do": true, "does": true, "did": true, "will": true, "would": true,
+		"should": true, "could": true, "may": true, "might": true, "can": true,
+		"based": true, "using": true, "about": true, "learn": true, "research": true,
+	}
+	
+	words := strings.Fields(text)
+	keywords := []string{}
+	
+	for _, word := range words {
+		// Remove punctuation
+		word = strings.Trim(word, ".,;:!?—-\"'()")
+		
+		// Skip if too short, empty, or stop word
+		if len(word) < 4 || stopWords[word] {
+			continue
+		}
+		
+		keywords = append(keywords, word)
+	}
+	
+	return keywords
+}
+
+// calculateKeywordOverlap computes Jaccard similarity between two keyword sets
+func (e *Engine) calculateKeywordOverlap(keywords1, keywords2 []string) float64 {
+	if len(keywords1) == 0 || len(keywords2) == 0 {
+		return 0.0
+	}
+	
+	// Convert to sets
+	set1 := make(map[string]bool)
+	set2 := make(map[string]bool)
+	
+	for _, kw := range keywords1 {
+		set1[kw] = true
+	}
+	for _, kw := range keywords2 {
+		set2[kw] = true
+	}
+	
+	// Count intersection
+	intersection := 0
+	for kw := range set1 {
+		if set2[kw] {
+			intersection++
+		}
+	}
+	
+	// Count union
+	union := len(set1)
+	for kw := range set2 {
+		if !set1[kw] {
+			union++
+		}
+	}
+	
+	if union == 0 {
+		return 0.0
+	}
+	
+	// Jaccard similarity
+	return float64(intersection) / float64(union)
 }
