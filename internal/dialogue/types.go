@@ -114,15 +114,15 @@ const (
 // ReasoningResponse represents structured LLM reasoning output
 type ReasoningResponse struct {
     Reflection      string              `json:"reflection"`
-    RawResponse     string              `json:"-"` // ADD THIS: Holds unparsed LLM output for specialized parsing
-    Insights        StringOrArray       `json:"insights"
-	Strengths       StringOrArray       `json:"strengths"`
-	Weaknesses      StringOrArray       `json:"weaknesses"`
-	KnowledgeGaps   StringOrArray       `json:"knowledge_gaps"`
-	Patterns        StringOrArray       `json:"patterns"`
-	GoalsToCreate   GoalsOrString       `json:"goals_to_create"`      // NEW: Flexible type
-	Learnings       LearningsOrString   `json:"learnings"`            // NEW: Flexible type
-	SelfAssessment  *SelfAssessment     `json:"self_assessment,omitempty"`
+    RawResponse     string              `json:"-"` // Holds unparsed LLM output for specialized parsing
+    Insights        StringOrArray       `json:"insights"`
+    Strengths       StringOrArray       `json:"strengths"`
+    Weaknesses      StringOrArray       `json:"weaknesses"`
+    KnowledgeGaps   StringOrArray       `json:"knowledge_gaps"`
+    Patterns        StringOrArray       `json:"patterns"`
+    GoalsToCreate   GoalsOrString       `json:"goals_to_create"`
+    Learnings       LearningsOrString   `json:"learnings"`
+    SelfAssessment  *SelfAssessment     `json:"self_assessment,omitempty"`
 }
 
 // StringOrArray handles JSON that can be either a string or array of strings
