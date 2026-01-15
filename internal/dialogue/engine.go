@@ -1577,38 +1577,80 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 	return "", 0, fmt.Errorf("LLM queue client required for dialogue")
 }
 
-// callLLMWithStructuredReasoning requests structured JSON reasoning from the LLM
+
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
-	systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY valid JSON.
+	systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY valid XML.
 
-CRITICAL: Check each array has BOTH [ and ] brackets.
+Use this structure (all fields optional except reflection):
 
-VALID EXAMPLES:
-{
-  "reflection": "text here",
-  "insights": ["item1", "item2"],
-  "strengths": [],
-  "weaknesses": ["weakness1"],
-  "knowledge_gaps": [],
-  "patterns": [],
-  "goals_to_create": [],
-  "learnings": [],
-  "self_assessment": {
-    "recent_successes": [],
-    "recent_failures": [],
-    "skill_gaps": [],
-    "confidence": 0.7,
-    "focus_areas": []
-  }
-}
+<reasoning>
+  <reflection>Your brief reflection here</reflection>
+  
+  <insights>
+    <item>First insight</item>
+    <item>Second insight</item>
+  </insights>
+  
+  <strengths>
+    <item>What you're doing well</item>
+  </strengths>
+  
+  <weaknesses>
+    <item>What needs improvement</item>
+  </weaknesses>
+  
+  <knowledge_gaps>
+    <item>What you need to learn</item>
+  </knowledge_gaps>
+  
+  <patterns>
+    <item>Pattern you've noticed</item>
+  </patterns>
+  
+  <goals_to_create>
+    <goal>
+      <description>Goal description</description>
+      <priority>7</priority>
+      <reasoning>Why this goal</reasoning>
+      <action_plan>
+        <step>First step</step>
+        <step>Second step</step>
+      </action_plan>
+      <expected_time>2 cycles</expected_time>
+    </goal>
+  </goals_to_create>
+  
+  <learnings>
+    <learning>
+      <what>What was learned</what>
+      <context>When/where learned</context>
+      <confidence>0.8</confidence>
+      <category>strategy</category>
+    </learning>
+  </learnings>
+  
+  <self_assessment>
+    <recent_successes>
+      <item>Success 1</item>
+    </recent_successes>
+    <recent_failures>
+      <item>Failure 1</item>
+    </recent_failures>
+    <skill_gaps>
+      <item>Gap 1</item>
+    </skill_gaps>
+    <confidence>0.7</confidence>
+    <focus_areas>
+      <item>Area to focus on</item>
+    </focus_areas>
+  </self_assessment>
+</reasoning>
 
 RULES:
-1. Every array needs BOTH [ and ]
-2. Put comma after ] if more fields follow
-3. No comma after last field
-4. Empty arrays are fine: []
-
-OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
+1. Output ONLY XML (no markdown, no explanations)
+2. Empty lists are fine: <insights></insights>
+3. Close all tags properly
+4. Use <item> for list elements`
 
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
@@ -1668,47 +1710,21 @@ OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 			content := strings.TrimSpace(result.Choices[0].Message.Content)
 			tokens := result.Usage.TotalTokens
 			
-			// Parse structured reasoning
-			content = strings.TrimPrefix(content, "```json")
-			content = strings.TrimPrefix(content, "```")
-			content = strings.TrimSuffix(content, "```")
-			content = strings.TrimSpace(content)
-			
-			var reasoning ReasoningResponse
-			if err := json.Unmarshal([]byte(content), &reasoning); err != nil {
-				log.Printf("[Dialogue] WARNING: Failed to parse JSON reasoning: %v", err)
+			// Parse XML with automatic repair
+			reasoning, err := ParseReasoningXML(content)
+			if err != nil {
+				log.Printf("[Dialogue] WARNING: Failed to parse XML reasoning: %v", err)
 				log.Printf("[Dialogue] Raw response (first 500 chars): %s", truncateResponse(content, 500))
 				
-				fixedContent := fixCommonJSONErrors(content)
-				
-				if fixedContent != content {
-					log.Printf("[Dialogue] Applied JSON fixes (first 500 chars): %s", truncateResponse(fixedContent, 500))
-				}
-				
-				if err := json.Unmarshal([]byte(fixedContent), &reasoning); err != nil {
-					log.Printf("[Dialogue] WARNING: Failed to parse even after JSON fixes: %v", err)
-					
-					var partialParse map[string]interface{}
-					if err := json.Unmarshal([]byte(fixedContent), &partialParse); err == nil {
-						if refl, ok := partialParse["reflection"].(string); ok {
-							log.Printf("[Dialogue] Extracted reflection field only, using degraded mode")
-							return &ReasoningResponse{
-								Reflection: refl,
-								Insights:   []string{},
-							}, tokens, nil
-						}
-					}
-					
-					log.Printf("[Dialogue] Complete JSON parse failure, using fallback mode")
-					return &ReasoningResponse{
-						Reflection: "Failed to parse structured reasoning. Using fallback mode.",
-						Insights:   []string{},
-					}, tokens, nil
-				}
-				log.Printf("[Dialogue] ✓ Successfully parsed JSON after fixes")
+				// Fallback mode
+				return &ReasoningResponse{
+					Reflection: "Failed to parse structured reasoning. Using fallback mode.",
+					Insights:   []string{},
+				}, tokens, nil
 			}
 			
-			return &reasoning, tokens, nil
+			log.Printf("[Dialogue] ✓ Successfully parsed XML reasoning")
+			return reasoning, tokens, nil
 		}
 	}
 	
@@ -1716,7 +1732,6 @@ OUTPUT ONLY JSON. NO MARKDOWN. NO EXPLANATIONS.`
 	log.Printf("[Dialogue] ERROR: LLM queue client not available for structured reasoning")
 	return nil, 0, fmt.Errorf("LLM queue client required for structured reasoning")
 }
-
 
 // generateResearchPlan creates a structured multi-step investigation plan
 func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
@@ -2580,107 +2595,6 @@ func truncateResponse(s string, maxLen int) string {
 	return s[:maxLen] + "... (truncated)"
 }
 
-// fixCommonJSONErrors attempts to fix common JSON generation errors from LLMs
-func fixCommonJSONErrors(jsonStr string) string {
-	// Remove markdown fences
-	fixed := strings.ReplaceAll(jsonStr, "```json", "")
-	fixed = strings.ReplaceAll(fixed, "```", "")
-	fixed = strings.TrimSpace(fixed)
-	
-	// Fix missing comma after array with closing bracket on new line
-	fixed = strings.ReplaceAll(fixed, "]\n  \"", "],\n  \"")
-	fixed = strings.ReplaceAll(fixed, "]\n\n  \"", "],\n\n  \"")
-	
-	// Parse line by line to fix structural issues
-	lines := strings.Split(fixed, "\n")
-	var fixedLines []string
-	
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		
-		// Skip empty lines
-		if line == "" {
-			fixedLines = append(fixedLines, lines[i])
-			continue
-		}
-		
-		// Check if this line starts an array but never closes it
-		if strings.Contains(line, "\":") && strings.Contains(line, "[") && !strings.Contains(line, "]") {
-			// This is an array field like: "insights": ["item1", "item2"
-			// Need to find where it closes
-			
-			insideArray := true
-			arrayLines := []string{lines[i]}
-			
-			// Look ahead for array items and closing
-			for j := i + 1; j < len(lines) && insideArray; j++ {
-				nextLine := strings.TrimSpace(lines[j])
-				arrayLines = append(arrayLines, lines[j])
-				
-				// Check if this is a new field (ends array)
-				if strings.Contains(nextLine, "\":") && !strings.HasPrefix(nextLine, "\"") {
-					// New field started, array was never closed
-					// Add closing bracket to previous line
-					if len(arrayLines) >= 2 {
-						prevIdx := len(arrayLines) - 2
-						prevLine := strings.TrimSpace(arrayLines[prevIdx])
-						
-						// Add ] before comma if needed
-						if strings.HasSuffix(prevLine, ",") {
-							arrayLines[prevIdx] = strings.TrimSuffix(arrayLines[prevIdx], ",") + "],"
-						} else if strings.HasSuffix(prevLine, "\"") {
-							arrayLines[prevIdx] = arrayLines[prevIdx] + "],"
-						}
-					}
-					insideArray = false
-					
-					// Don't re-add the new field line yet
-					j--
-					arrayLines = arrayLines[:len(arrayLines)-1]
-				} else if strings.Contains(nextLine, "]") {
-					// Array properly closed
-					insideArray = false
-				}
-				
-				i = j
-			}
-			
-			// Add all fixed array lines
-			fixedLines = append(fixedLines, arrayLines...)
-			continue
-		}
-		
-		// Fix trailing comma before closing brace
-		if line == "}," || line == "}" {
-			// Check if previous line has comma
-			if len(fixedLines) > 0 {
-				prevIdx := len(fixedLines) - 1
-				prevLine := strings.TrimSpace(fixedLines[prevIdx])
-				
-				// If it's the last field before }, remove comma
-				if line == "}" && strings.HasSuffix(prevLine, ",") && !strings.HasSuffix(prevLine, "],") {
-					fixedLines[prevIdx] = strings.TrimSuffix(fixedLines[prevIdx], ",")
-				}
-			}
-		}
-		
-		fixedLines = append(fixedLines, lines[i])
-	}
-	
-	fixed = strings.Join(fixedLines, "\n")
-	
-	// Final cleanup: remove trailing commas before }
-	fixed = strings.ReplaceAll(fixed, ",\n}", "\n}")
-	fixed = strings.ReplaceAll(fixed, ", }", " }")
-	
-	// Fix double commas
-	fixed = strings.ReplaceAll(fixed, ",,", ",")
-	
-	// Fix missing commas between array items (common error)
-	fixed = strings.ReplaceAll(fixed, "\" \"", "\", \"")
-	
-	return fixed
-}
 
 // extractURLsFromSearchResults extracts URLs from SearXNG search output
 func (e *Engine) extractURLsFromSearchResults(searchOutput string) []string {
