@@ -113,8 +113,9 @@ const (
 
 // ReasoningResponse represents structured LLM reasoning output
 type ReasoningResponse struct {
-	Reflection      string              `json:"reflection"`
-	Insights        StringOrArray       `json:"insights"`
+    Reflection      string              `json:"reflection"`
+    RawResponse     string              `json:"-"` // ADD THIS: Holds unparsed LLM output for specialized parsing
+    Insights        StringOrArray       `json:"insights"
 	Strengths       StringOrArray       `json:"strengths"`
 	Weaknesses      StringOrArray       `json:"weaknesses"`
 	KnowledgeGaps   StringOrArray       `json:"knowledge_gaps"`

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"math/rand"
 	"strings"
 	"time"
@@ -1695,21 +1696,26 @@ Bad: (insights First insight) - missing quotes`
 			content := strings.TrimSpace(result.Choices[0].Message.Content)
 			tokens := result.Usage.TotalTokens
 			
-			// Parse S-expression with automatic repair
-			reasoning, err := ParseReasoningSExpr(content)
-			if err != nil {
-				log.Printf("[Dialogue] WARNING: Failed to parse S-expression reasoning: %v", err)
-				log.Printf("[Dialogue] Raw response (first 500 chars): %s", truncateResponse(content, 500))
-				
-				// Fallback mode
-				return &ReasoningResponse{
-					Reflection: "Failed to parse structured reasoning. Using fallback mode.",
-					Insights:   []string{},
-				}, tokens, nil
-			}
-			
-			log.Printf("[Dialogue] ✓ Successfully parsed S-expression reasoning")
-			return reasoning, tokens, nil
+            // Parse S-expression with automatic repair
+            reasoning, err := ParseReasoningSExpr(content)
+            
+            // Store raw response for custom parsing (e.g., Research Plans)
+            reasoning.RawResponse = content
+            
+            if err != nil {
+                log.Printf("[Dialogue] WARNING: Failed to parse S-expression reasoning: %v", err)
+                log.Printf("[Dialogue] Raw response (first 500 chars): %s", truncateResponse(content, 500))
+                
+                // Fallback mode
+                return &ReasoningResponse{
+                    Reflection:  "Failed to parse structured reasoning. Using fallback mode.",
+                    RawResponse: content, // Preserve raw content
+                    Insights:    []string{},
+                }, tokens, nil
+            }
+            
+            log.Printf("[Dialogue] ✓ Successfully parsed S-expression reasoning")
+            return reasoning, tokens, nil
 		}
 	}
 	
@@ -1728,92 +1734,134 @@ Break this into 3-7 logical sub-questions that:
 1. Start with foundational understanding
 2. Build progressively to specific details
 3. Include verification/cross-checking
-4. Can each be answered via web search
 
-Respond with ONLY valid JSON (no markdown, no explanation):
-{
-  "root_question": "Main question being answered",
-  "sub_questions": [
-    {
-      "id": "q1",
-      "question": "First foundational question",
-      "search_query": "suggested search terms",
-      "priority": 10,
-      "dependencies": []
-    },
-    {
-      "id": "q2",
-      "question": "Follow-up building on q1",
-      "search_query": "more specific search terms",
-      "priority": 9,
-      "dependencies": ["q1"]
-    }
-  ]
-}
+Respond with ONLY S-expressions (Lisp-style).
 
-Keep plan achievable (3-7 questions max). Each question = 1-2 actions (search + parse).`, 
-		goal.Description)
+(research_plan
+  (root_question "Main question being answered")
+  (sub_questions
+    (question
+      (id "q1")
+      (text "First foundational question")
+      (search_query "suggested search terms")
+      (priority 10)
+      (deps ()))
+    (question
+      (id "q2")
+      (text "Follow-up building on q1")
+      (search_query "more specific search terms")
+      (priority 9)
+      (deps ("q1")))))
+
+Keep plan achievable (3-7 questions max). Each question = 2-5 actions (search + parse).`, 
+        goal.Description)
 
 	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
 	if err != nil {
 		return nil, tokens, fmt.Errorf("LLM call failed: %w", err)
 	}
 	
-	// Parse response
-	type PlanJSON struct {
-		RootQuestion string `json:"root_question"`
-		SubQuestions []struct {
-			ID           string   `json:"id"`
-			Question     string   `json:"question"`
-			SearchQuery  string   `json:"search_query"`
-			Priority     int      `json:"priority"`
-			Dependencies []string `json:"dependencies"`
-		} `json:"sub_questions"`
-	}
-	
-	content := response.Reflection
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-	
-	var planJSON PlanJSON
-	if err := json.Unmarshal([]byte(content), &planJSON); err != nil {
-		return nil, tokens, fmt.Errorf("failed to parse plan JSON: %w", err)
-	}
-	
-	if len(planJSON.SubQuestions) == 0 {
-		return nil, tokens, fmt.Errorf("plan has no questions")
-	}
-	if len(planJSON.SubQuestions) > 10 {
-		planJSON.SubQuestions = planJSON.SubQuestions[:10]
-	}
-	
-	// Convert to ResearchPlan
-	plan := &ResearchPlan{
-		RootQuestion:    planJSON.RootQuestion,
-		SubQuestions:    make([]ResearchQuestion, len(planJSON.SubQuestions)),
-		CurrentStep:     0,
-		SynthesisNeeded: false,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-	}
-	
-	for i, sq := range planJSON.SubQuestions {
-		plan.SubQuestions[i] = ResearchQuestion{
-			ID:              sq.ID,
-			Question:        sq.Question,
-			SearchQuery:     sq.SearchQuery,
-			Priority:        sq.Priority,
-			Dependencies:    sq.Dependencies,
-			Status:          ResearchStatusPending,
-			SourcesFound:    []string{},
-			KeyFindings:     "",
-			ConfidenceLevel: 0.0,
-		}
-	}
-	
-	return plan, tokens, nil
+    // Parse S-expression response
+    // Use RawResponse because Reflection might be generic fallback text
+    content := response.RawResponse
+    
+    // Clean up markdown fences
+    content = strings.TrimPrefix(content, "```lisp")
+    content = strings.TrimPrefix(content, "```")
+    content = strings.TrimSuffix(content, "```")
+    content = strings.TrimSpace(content)
+
+    // Use findBlocks helper (from sexpr_parser.go) to get the research plan
+    planBlocks := findBlocks(content, "research_plan")
+    if len(planBlocks) == 0 {
+        return nil, tokens, fmt.Errorf("no research_plan block found in S-expression")
+    }
+
+    // Extract Root Question
+    rootQuestion := extractFieldContent(planBlocks[0], "root_question")
+    
+    // Extract Sub Questions
+    questionBlocks := findBlocks(planBlocks[0], "question")
+    if len(questionBlocks) == 0 {
+        return nil, tokens, fmt.Errorf("no question blocks found in research plan")
+    }
+
+    if len(questionBlocks) > 10 {
+        questionBlocks = questionBlocks[:10]
+    }
+
+    // Convert to internal ResearchPlan
+    plan := &ResearchPlan{
+        RootQuestion:    rootQuestion,
+        SubQuestions:    make([]ResearchQuestion, len(questionBlocks)),
+        CurrentStep:     0,
+        SynthesisNeeded: false,
+        CreatedAt:       time.Now(),
+        UpdatedAt:       time.Now(),
+    }
+
+    for i, qBlock := range questionBlocks {
+        // Helper to extract integer fields safely
+        getInt := func(field string) int {
+            val := extractFieldContent(qBlock, field)
+            if val == "" {
+                return 0
+            }
+            if p, err := strconv.Atoi(val); err == nil {
+                return p
+            }
+            return 0
+        }
+
+        // Helper to extract dependencies list (deps ("q1" "q2"))
+        getDeps := func(field string) []string {
+            pattern := "(" + field + " "
+            start := strings.Index(qBlock, pattern)
+            if start == -1 {
+                return []string{}
+            }
+            start += len(pattern)
+            
+            // Handle empty list ()
+            if start < len(qBlock) && qBlock[start] == ')' {
+                return []string{}
+            }
+
+            // Naive extraction of quoted strings until closing )
+            var deps []string
+            rest := qBlock[start:]
+            for {
+                qStart := strings.Index(rest, `"`)
+                if qStart == -1 {
+                    break
+                }
+                qEnd := strings.Index(rest[qStart+1:], `"`)
+                if qEnd == -1 {
+                    break
+                }
+                deps = append(deps, rest[qStart+1:qStart+1+qEnd])
+                rest = rest[qStart+1+qEnd+1:]
+                if strings.HasPrefix(rest, ")") {
+                    break
+                }
+            }
+            return deps
+        }
+
+        plan.SubQuestions[i] = ResearchQuestion{
+            ID:              extractFieldContent(qBlock, "id"),
+            Question:        extractFieldContent(qBlock, "text"),
+            SearchQuery:     extractFieldContent(qBlock, "search_query"),
+            Priority:        getInt("priority"),
+            Dependencies:    getDeps("deps"),
+            Status:          ResearchStatusPending,
+            SourcesFound:    []string{},
+            KeyFindings:     "",
+            ConfidenceLevel: 0.0,
+        }
+    }
+    
+    return plan, tokens, nil
 }
 
 // getNextResearchAction determines next action from research plan
