@@ -1905,11 +1905,6 @@ func (e *Engine) getNextResearchAction(ctx context.Context, goal *Goal) *Action 
 		return nil // No questions available
 	}
 	
-	// Mark as in progress
-	nextQuestion.Status = ResearchStatusInProgress
-	plan.CurrentStep++
-	plan.UpdatedAt = time.Now()
-	
 	// Create search action
 	return &Action{
 		Description: nextQuestion.SearchQuery,
