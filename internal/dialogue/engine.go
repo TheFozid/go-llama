@@ -1,4 +1,3 @@
-// internal/dialogue/engine.go
 package dialogue
 
 import (
@@ -1344,108 +1343,6 @@ func (e *Engine) detectMetaLoop(state *InternalState) (bool, string) {
 	return false, ""
 }
 
-// generateResearchPlan creates a structured multi-step investigation plan
-func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
-    prompt := fmt.Sprintf(`Create a thorough research plan to investigate this goal.
-
-Goal: %s
-
-Break this into 3-7 logical sub-questions that:
-1. Start with foundational understanding
-2. Build progressively to specific details
-3. Include verification/cross-checking
-4. Can each be answered via web search
-
-Respond with ONLY valid JSON (no markdown, no explanation):
-{
-  "root_question": "Main question being answered",
-  "sub_questions": [
-    {
-      "id": "q1",
-      "question": "What defines authentic character arcs in everyday life?",
-      "search_query": "defining authentic character arcs in everyday life",
-      "priority": 10,
-      "dependencies": []
-    },
-    {
-      "id": "q2",
-      "question": "Follow-up building on q1",
-      "search_query": "character development techniques",
-      "priority": 9,
-      "dependencies": ["q1"]
-    }
-  ]
-}`, goal.Description)
-
-    // Call LLM with JSON format prompt
-    reqBody := map[string]interface{}{
-        "model": e.llmModel,
-        "max_tokens": e.contextSize,
-        "messages": []map[string]string{
-            {
-                "role":    "system",
-                "content": "You are GrowerAI's internal reasoning system. Output ONLY valid JSON (no markdown, no explanation).",
-            },
-            {
-                "role":    "user",
-                "content": prompt,
-            },
-        },
-        "temperature": 0.7,
-        "stream":      false,
-    }
-    
-    log.Printf("[Dialogue] Research plan LLM call via queue (prompt length: %d chars)", len(prompt))
-    startTime := time.Now()
-    
-    // Use queue if available
-    if e.llmClient != nil {
-        type LLMCaller interface {
-            Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
-        }
-        
-        if client, ok := e.llmClient.(LLMCaller); ok {
-            body, err := client.Call(ctx, e.llmURL, reqBody)
-            if err != nil {
-                return nil, 0, fmt.Errorf("LLM call failed: %w", err)
-            }
-            
-            log.Printf("[Dialogue] Research plan response received in %s", time.Since(startTime))
-            
-            // Parse LLM response wrapper
-            var result struct {
-                Choices []struct {
-                    Message struct {
-                        Content string `json:"content"`
-                    } `json:"message"`
-                } `json:"choices"`
-                Usage struct {
-                    TotalTokens int `json:"total_tokens"`
-                } `json:"usage"`
-            }
-            
-            if err := json.Unmarshal(body, &result); err != nil {
-                return nil, 0, fmt.Errorf("failed to decode response: %w", err)
-            }
-            
-            if len(result.Choices) == 0 {
-                return nil, 0, fmt.Errorf("no choices returned from LLM")
-            }
-            
-            content := strings.TrimSpace(result.Choices[0].Message.Content)
-            tokens := result.Usage.TotalTokens
-            
-            // Try to parse as JSON
-            return e.parseResearchPlanFromJSON(content, tokens)
-        }
-    }
-    
-    // Queue client is REQUIRED
-    log.Printf("[Dialogue] ERROR: LLM queue client not available for research plan")
-    return nil, 0, fmt.Errorf("LLM queue client required for research plan")
-}
-
-
 // generateExploratoryGoal creates a curiosity-driven goal based on context
 func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []string, avoidTopic string, recentGoalDescriptions []string) Goal {
 	var description string
@@ -1821,92 +1718,102 @@ Bad: (insights First insight) - missing quotes`
 	return nil, 0, fmt.Errorf("LLM queue client required for structured reasoning")
 }
 
+// generateResearchPlan creates a structured multi-step investigation plan
+func (e *Engine) generateResearchPlan(ctx context.Context, goal *Goal) (*ResearchPlan, int, error) {
+	prompt := fmt.Sprintf(`Create a thorough research plan to investigate this goal.
 
-// parseResearchPlanFromSExpr parses S-expression format research plans
-func (e *Engine) parseResearchPlanFromSExpr(sExpr string, tokens int) (*ResearchPlan, int, error) {
-    // Try to parse as S-expression (existing behavior)
-    plan, err := ParseReasoningSExpr(sExpr)
-    if err != nil {
-        return nil, tokens, fmt.Errorf("failed to parse S-expression: %w", err)
+Goal: %s
+
+Break this into 3-7 logical sub-questions that:
+1. Start with foundational understanding
+2. Build progressively to specific details
+3. Include verification/cross-checking
+4. Can each be answered via web search
+
+Respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "root_question": "Main question being answered",
+  "sub_questions": [
+    {
+      "id": "q1",
+      "question": "First foundational question",
+      "search_query": "suggested search terms",
+      "priority": 10,
+      "dependencies": []
+    },
+    {
+      "id": "q2",
+      "question": "Follow-up building on q1",
+      "search_query": "more specific search terms",
+      "priority": 9,
+      "dependencies": ["q1"]
     }
-    
-    // If root is not a list or doesn't start with 'reasoning'
-    if plan.isAtom {
-        return nil, tokens, fmt.Errorf("root cannot be a single atom")
-    }
-    
-    if len(plan.list) == 0 {
-        return nil, tokens, fmt.Errorf("empty root list")
-    }
-    
-    // Check if this is a research plan (starts with 'reasoning')
-    if plan.list[0].isAtom && strings.ToLower(plan.list[0].atom) == "research_plan" {
-        // It's a research plan - parse the sub-questions
-        // This implementation would need to be completed based on your S-expression parser
-        // For now, return an error to indicate this needs to be implemented
-        return nil, tokens, fmt.Errorf("S-expression research plan parsing not fully implemented")
-    } else {
-        // Not a research plan
-        return nil, tokens, fmt.Errorf("not a research plan")
-    }
+  ]
 }
 
+Keep plan achievable (3-7 questions max). Each question = 1-2 actions (search + parse).`, 
+		goal.Description)
 
-// parseResearchPlanFromJSON parses JSON format research plans
-func (e *Engine) parseResearchPlanFromJSON(jsonStr string, tokens int) (*ResearchPlan, int, error) {
-    // Remove markdown fences if present
-    jsonStr = strings.TrimPrefix(jsonStr, "```json")
-    jsonStr = strings.TrimSuffix(jsonStr, "```")
-    jsonStr = strings.TrimSpace(jsonStr)
-    
-    // Parse JSON
-    var planJSON struct {
-        RootQuestion string `json:"root_question"`
-        SubQuestions []struct {
-            ID           string   `json:"id"`
-            Question     string   `json:"question"`
-            SearchQuery  string   `json:"search_query"`
-            Priority     int      `json:"priority"`
-            Dependencies []string `json:"dependencies"`
-        } `json:"sub_questions"`
-    }
-    
-    if err := json.Unmarshal([]byte(jsonStr), &planJSON); err != nil {
-        return nil, tokens, fmt.Errorf("failed to parse plan JSON: %w", err)
-    }
-    
-    if len(planJSON.SubQuestions) == 0 {
-        return nil, tokens, fmt.Errorf("plan has no questions")
-    }
-    if len(planJSON.SubQuestions) > 10 {
-        planJSON.SubQuestions = planJSON.SubQuestions[:10]
-    }
-    
-    // Convert to ResearchPlan
-    plan := &ResearchPlan{
-        RootQuestion:    planJSON.RootQuestion,
-        SubQuestions:    make([]ResearchQuestion, len(planJSON.SubQuestions)),
-        CurrentStep:     0,
-        SynthesisNeeded: false,
-        CreatedAt:       time.Now(),
-        UpdatedAt:       time.Now(),
-    }
-    
-    for i, sq := range planJSON.SubQuestions {
-        plan.SubQuestions[i] = ResearchQuestion{
-            ID:              sq.ID,
-            Question:        sq.Question,
-            SearchQuery:     sq.SearchQuery,
-            Priority:        sq.Priority,
-            Dependencies:    sq.Dependencies,
-            Status:          ResearchStatusPending,
-            SourcesFound:    []string{},
-            KeyFindings:     "",
-            ConfidenceLevel: 0.0,
-        }
-    }
-    
-    return plan, tokens, nil
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	if err != nil {
+		return nil, tokens, fmt.Errorf("LLM call failed: %w", err)
+	}
+	
+	// Parse response
+	type PlanJSON struct {
+		RootQuestion string `json:"root_question"`
+		SubQuestions []struct {
+			ID           string   `json:"id"`
+			Question     string   `json:"question"`
+			SearchQuery  string   `json:"search_query"`
+			Priority     int      `json:"priority"`
+			Dependencies []string `json:"dependencies"`
+		} `json:"sub_questions"`
+	}
+	
+	content := response.Reflection
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	var planJSON PlanJSON
+	if err := json.Unmarshal([]byte(content), &planJSON); err != nil {
+		return nil, tokens, fmt.Errorf("failed to parse plan JSON: %w", err)
+	}
+	
+	if len(planJSON.SubQuestions) == 0 {
+		return nil, tokens, fmt.Errorf("plan has no questions")
+	}
+	if len(planJSON.SubQuestions) > 10 {
+		planJSON.SubQuestions = planJSON.SubQuestions[:10]
+	}
+	
+	// Convert to ResearchPlan
+	plan := &ResearchPlan{
+		RootQuestion:    planJSON.RootQuestion,
+		SubQuestions:    make([]ResearchQuestion, len(planJSON.SubQuestions)),
+		CurrentStep:     0,
+		SynthesisNeeded: false,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	
+	for i, sq := range planJSON.SubQuestions {
+		plan.SubQuestions[i] = ResearchQuestion{
+			ID:              sq.ID,
+			Question:        sq.Question,
+			SearchQuery:     sq.SearchQuery,
+			Priority:        sq.Priority,
+			Dependencies:    sq.Dependencies,
+			Status:          ResearchStatusPending,
+			SourcesFound:    []string{},
+			KeyFindings:     "",
+			ConfidenceLevel: 0.0,
+		}
+	}
+	
+	return plan, tokens, nil
 }
 
 // getNextResearchAction determines next action from research plan
