@@ -1579,78 +1579,64 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 
 
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
-	systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY valid XML.
+	systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY S-expressions (Lisp-style).
 
 Use this structure (all fields optional except reflection):
 
-<reasoning>
-  <reflection>Your brief reflection here</reflection>
+(reasoning
+  (reflection "Your brief reflection here")
   
-  <insights>
-    <item>First insight</item>
-    <item>Second insight</item>
-  </insights>
+  (insights
+    "First insight"
+    "Second insight")
   
-  <strengths>
-    <item>What you're doing well</item>
-  </strengths>
+  (strengths
+    "What you're doing well")
   
-  <weaknesses>
-    <item>What needs improvement</item>
-  </weaknesses>
+  (weaknesses
+    "What needs improvement")
   
-  <knowledge_gaps>
-    <item>What you need to learn</item>
-  </knowledge_gaps>
+  (knowledge_gaps
+    "What you need to learn")
   
-  <patterns>
-    <item>Pattern you've noticed</item>
-  </patterns>
+  (patterns
+    "Pattern you've noticed")
   
-  <goals_to_create>
-    <goal>
-      <description>Goal description</description>
-      <priority>7</priority>
-      <reasoning>Why this goal</reasoning>
-      <action_plan>
-        <step>First step</step>
-        <step>Second step</step>
-      </action_plan>
-      <expected_time>2 cycles</expected_time>
-    </goal>
-  </goals_to_create>
+  (goals_to_create
+    (goal
+      (description "Goal description")
+      (priority 7)
+      (reasoning "Why this goal")
+      (action_plan "First step" "Second step")
+      (expected_time "2 cycles")))
   
-  <learnings>
-    <learning>
-      <what>What was learned</what>
-      <context>When/where learned</context>
-      <confidence>0.8</confidence>
-      <category>strategy</category>
-    </learning>
-  </learnings>
+  (learnings
+    (learning
+      (what "What was learned")
+      (context "When/where learned")
+      (confidence 0.8)
+      (category "strategy")))
   
-  <self_assessment>
-    <recent_successes>
-      <item>Success 1</item>
-    </recent_successes>
-    <recent_failures>
-      <item>Failure 1</item>
-    </recent_failures>
-    <skill_gaps>
-      <item>Gap 1</item>
-    </skill_gaps>
-    <confidence>0.7</confidence>
-    <focus_areas>
-      <item>Area to focus on</item>
-    </focus_areas>
-  </self_assessment>
-</reasoning>
+  (self_assessment
+    (confidence 0.7)
+    (recent_successes "Success 1")
+    (recent_failures "Failure 1")
+    (skill_gaps "Gap 1")
+    (focus_areas "Area to focus on")))
 
 RULES:
-1. Output ONLY XML (no markdown, no explanations)
-2. Empty lists are fine: <insights></insights>
-3. Close all tags properly
-4. Use <item> for list elements`
+1. Output ONLY S-expressions (no markdown, no explanations)
+2. Empty lists are fine: (insights)
+3. Balance all parentheses
+4. Use quotes for multi-word strings
+5. Numbers don't need quotes: (priority 7) (confidence 0.8)
+
+EXAMPLES:
+Good: (insights "First insight" "Second insight")
+Good: (insights)
+Bad: <insights>...</insights>
+Bad: {"insights": [...]}
+Bad: (insights First insight) - missing quotes`
 
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
@@ -1710,10 +1696,10 @@ RULES:
 			content := strings.TrimSpace(result.Choices[0].Message.Content)
 			tokens := result.Usage.TotalTokens
 			
-			// Parse XML with automatic repair
-			reasoning, err := ParseReasoningXML(content)
+			// Parse S-expression with automatic repair
+			reasoning, err := ParseReasoningSExpr(content)
 			if err != nil {
-				log.Printf("[Dialogue] WARNING: Failed to parse XML reasoning: %v", err)
+				log.Printf("[Dialogue] WARNING: Failed to parse S-expression reasoning: %v", err)
 				log.Printf("[Dialogue] Raw response (first 500 chars): %s", truncateResponse(content, 500))
 				
 				// Fallback mode
@@ -1723,7 +1709,7 @@ RULES:
 				}, tokens, nil
 			}
 			
-			log.Printf("[Dialogue] ✓ Successfully parsed XML reasoning")
+			log.Printf("[Dialogue] ✓ Successfully parsed S-expression reasoning")
 			return reasoning, tokens, nil
 		}
 	}
