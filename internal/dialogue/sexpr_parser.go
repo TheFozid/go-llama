@@ -16,6 +16,11 @@ func ParseReasoningSExpr(input string) (*ReasoningResponse, error) {
 	input = strings.TrimSuffix(input, "```")
 	input = strings.TrimSpace(input)
 	
+	// CRITICAL FIX: Remove problematic outer quotes
+	// LLM sometimes generates: (reasoning "(insights ...)")
+	// Instead of: (reasoning (insights ...))
+	input = fixMalformedQuotedSexpr(input)
+	
 	// Auto-fix unbalanced parentheses
 	input = autoBalanceParens(input)
 	
@@ -28,11 +33,62 @@ func ParseReasoningSExpr(input string) (*ReasoningResponse, error) {
 	// Parse root
 	root, _, err := parseExpr(tokens, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse error: %w", err)
 	}
 	
 	// Convert to ReasoningResponse
 	return sexprToReasoning(root)
+}
+
+// fixMalformedQuotedSexpr removes problematic quoted S-expressions
+// Fixes: (reasoning "(insights...)") -> (reasoning (insights...))
+func fixMalformedQuotedSexpr(input string) string {
+	// Pattern: (word "(...)")
+	// This is wrong - should be: (word (...))
+	
+	// Simple approach: if we see (" after an opening paren and word, remove the quote
+	result := input
+	
+	// Replace patterns like: (reasoning "( with: (reasoning (
+	result = strings.ReplaceAll(result, " \"(", " (")
+	
+	// Replace patterns like: )") with: ))
+	result = strings.ReplaceAll(result, ")\"", ")")
+	
+	// More aggressive: strip quotes around entire S-expressions
+	// Pattern: "(anything with parens in it)"
+	for {
+		start := strings.Index(result, "\"(")
+		if start == -1 {
+			break
+		}
+		
+		// Find matching close quote
+		depth := 0
+		end := -1
+		inQuote := true
+		
+		for i := start + 2; i < len(result); i++ {
+			if result[i] == '(' {
+				depth++
+			} else if result[i] == ')' {
+				if depth == 0 && i+1 < len(result) && result[i+1] == '"' {
+					end = i + 2
+					break
+				}
+				depth--
+			}
+		}
+		
+		if end == -1 {
+			break // Can't find matching quote, give up
+		}
+		
+		// Remove the quotes
+		result = result[:start] + result[start+1:end-1] + result[end:]
+	}
+	
+	return result
 }
 
 // Token types
@@ -193,9 +249,15 @@ func sexprToReasoning(root expr) (*ReasoningResponse, error) {
 		return nil, fmt.Errorf("root must be a list starting with 'reasoning'")
 	}
 	
-	// Check first element is 'reasoning'
-	if !root.list[0].isAtom || root.list[0].atom != "reasoning" {
-		return nil, fmt.Errorf("root must start with 'reasoning', got: %s", root.list[0].atom)
+	// Check first element is 'reasoning' (be lenient)
+	if !root.list[0].isAtom {
+		return nil, fmt.Errorf("root must start with atom 'reasoning'")
+	}
+	
+	// Accept 'reasoning' or 'reflection' as root (LLM sometimes mixes these up)
+	rootName := strings.ToLower(root.list[0].atom)
+	if rootName != "reasoning" && rootName != "reflection" {
+		return nil, fmt.Errorf("root must start with 'reasoning' or 'reflection', got: %s", root.list[0].atom)
 	}
 	
 	response := &ReasoningResponse{
