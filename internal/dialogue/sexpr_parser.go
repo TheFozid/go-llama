@@ -408,3 +408,106 @@ func extractAssessment(exprs []expr) *SelfAssessment {
 	
 	return assessment
 }
+
+// ReflectionData for post-conversation analysis
+type ReflectionData struct {
+	OutcomeQuality      string
+	Reasoning           string
+	MistakeMade         bool
+	MistakeDescription  string
+	UserRequestedGoal   bool
+	GoalDescription     string
+	UserGaveFeedback    bool
+	FeedbackType        string
+	FeedbackSummary     string
+	ImportantLearning   bool
+	LearningContent     string
+}
+
+// ParseReflectionSExpr parses flat S-expression reflection
+func ParseReflectionSExpr(content string) (*ReflectionData, error) {
+	r := &ReflectionData{}
+	content = strings.TrimSpace(content)
+	
+	// Remove outer wrapper
+	if strings.HasPrefix(content, "(reflection") {
+		content = strings.TrimPrefix(content, "(reflection")
+		content = strings.TrimSuffix(content, ")")
+	}
+	
+	// Parse field by field
+	for {
+		content = strings.TrimSpace(content)
+		if content == "" {
+			break
+		}
+		
+		if !strings.HasPrefix(content, "(") {
+			break
+		}
+		
+		// Find matching close paren
+		depth := 0
+		end := -1
+		for i, ch := range content {
+			if ch == '(' {
+				depth++
+			} else if ch == ')' {
+				depth--
+				if depth == 0 {
+					end = i
+					break
+				}
+			}
+		}
+		
+		if end == -1 {
+			return nil, fmt.Errorf("unbalanced parentheses")
+		}
+		
+		// Extract field
+		field := content[1:end]
+		content = content[end+1:]
+		
+		// Parse field name and value
+		parts := strings.SplitN(field, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		
+		name := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		value = strings.Trim(value, `"`)
+		
+		switch name {
+		case "outcome_quality":
+			r.OutcomeQuality = value
+		case "reasoning":
+			r.Reasoning = value
+		case "mistake_made":
+			r.MistakeMade = value == "true"
+		case "mistake_description":
+			r.MistakeDescription = value
+		case "user_requested_goal":
+			r.UserRequestedGoal = value == "true"
+		case "goal_description":
+			r.GoalDescription = value
+		case "user_gave_feedback":
+			r.UserGaveFeedback = value == "true"
+		case "feedback_type":
+			r.FeedbackType = value
+		case "feedback_summary":
+			r.FeedbackSummary = value
+		case "important_learning":
+			r.ImportantLearning = value == "true"
+		case "learning_content":
+			r.LearningContent = value
+		}
+	}
+	
+	if r.OutcomeQuality == "" {
+		return nil, fmt.Errorf("missing outcome_quality")
+	}
+	
+	return r, nil
+}

@@ -24,22 +24,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// FlexibleBool can unmarshal both string and boolean values
-type FlexibleBool bool
-
-func (b *FlexibleBool) UnmarshalJSON(data []byte) error {
-    asString := string(data)
-    switch asString {
-    case `"true"`, `true`:
-        *b = true
-    case `"false"`, `false`:
-        *b = false
-    default:
-        return fmt.Errorf("cannot unmarshal %s into a FlexibleBool", asString)
-    }
-    return nil
-}
-
 // handleGrowerAIWebSocket processes GrowerAI messages via WebSocket with streaming
 func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, content string, userID uint, llmManager interface{}) {
 	// Check if GrowerAI is globally enabled
@@ -522,21 +506,26 @@ User: %s
 
 Your response: %s
 
-Analyze this interaction and determine what actions to take. Respond ONLY with valid JSON:
+Analyze this interaction and determine what actions to take. Output ONLY S-expressions (Lisp-style).
 
-{
-  "outcome_quality": "good|bad|neutral",
-  "reasoning": "brief explanation of outcome quality",
-  "mistake_made": false,
-  "mistake_description": "what was incorrect (if mistake_made=true)",
-  "user_requested_goal": false,
-  "goal_description": "what user wants researched/done (if user_requested_goal=true)",
-  "user_gave_feedback": false,
-  "feedback_type": "correction|personality|preference|other",
-  "feedback_summary": "what feedback was given (if user_gave_feedback=true)",
-  "important_learning": false,
-  "learning_content": "what was learned (if important_learning=true)"
-}
+(reflection
+  (outcome_quality "good")
+  (reasoning "Brief explanation")
+  (mistake_made false)
+  (mistake_description "")
+  (user_requested_goal false)
+  (goal_description "")
+  (user_gave_feedback false)
+  (feedback_type "")
+  (feedback_summary "")
+  (important_learning false)
+  (learning_content ""))
+
+RULES:
+1. Output ONLY S-expressions (no JSON, no markdown)
+2. Boolean values: true or false (no quotes)
+3. String values: use quotes
+4. Balance parentheses
 
 Guidelines:
 - outcome_quality: "bad" if you made a factual error, gave unhelpful advice, or misunderstood
@@ -555,7 +544,7 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "You are a self-reflective AI analyzing your own conversations. Be honest about mistakes and identify actionable follow-ups.",
+				"content": "You are a self-reflective AI analyzing conversations. Output ONLY S-expressions. Be honest about mistakes.",
 			},
 			{
 				"role":    "user",
@@ -690,29 +679,21 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 		content = strings.TrimSpace(result.Choices[0].Message.Content)
 	}
 	
-	// Clean JSON
-	content = strings.TrimPrefix(content, "```json")
+	// Clean S-expression
+	content = strings.TrimPrefix(content, "```lisp")
 	content = strings.TrimPrefix(content, "```")
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 
-	// Parse reflection
-var reflection struct {
-    OutcomeQuality      string       `json:"outcome_quality"`
-    Reasoning           string       `json:"reasoning"`
-    MistakeMade         FlexibleBool `json:"mistake_made"`
-    MistakeDescription  string       `json:"mistake_description"`
-    UserRequestedGoal   FlexibleBool `json:"user_requested_goal"`
-    GoalDescription     string       `json:"goal_description"`
-    UserGaveFeedback    FlexibleBool `json:"user_gave_feedback"`
-    FeedbackType        string       `json:"feedback_type"`
-    FeedbackSummary     string       `json:"feedback_summary"`
-    ImportantLearning   FlexibleBool `json:"important_learning"`  // Now using FlexibleBool
-    LearningContent     string       `json:"learning_content"`
-}
-
-	if err := json.Unmarshal([]byte(content), &reflection); err != nil {
-		log.Printf("[Reflection] WARNING: Failed to parse reflection JSON: %v", err)
+	// Parse S-expression
+	reflection, err := dialogue.ParseReflectionSExpr(content)
+	if err != nil {
+		log.Printf("[Reflection] WARNING: Failed to parse reflection S-expression: %v", err)
+		if len(content) > 200 {
+			log.Printf("[Reflection] Raw response: %s...", content[:200])
+		} else {
+			log.Printf("[Reflection] Raw response: %s", content)
+		}
 		return nil // Non-fatal
 	}
 
@@ -723,7 +704,7 @@ var reflection struct {
 	// ACT ON REFLECTION
 	
 // 1. If mistake made → create verification goal
-if bool(reflection.MistakeMade) && reflection.MistakeDescription != "" {
+if reflection.MistakeMade && reflection.MistakeDescription != "" {
     if err := createReflectionGoal(
         ctx,
         db.DB,
@@ -739,7 +720,7 @@ if bool(reflection.MistakeMade) && reflection.MistakeDescription != "" {
 }
 
 // 2. If user requested goal → create it
-if bool(reflection.UserRequestedGoal) && reflection.GoalDescription != "" {
+if reflection.UserRequestedGoal && reflection.GoalDescription != "" {
     if err := createReflectionGoal(
         ctx,
         db.DB,
@@ -755,7 +736,7 @@ if bool(reflection.UserRequestedGoal) && reflection.GoalDescription != "" {
 }
 
 // 3. If user gave personality feedback → store for identity evolution
-if bool(reflection.UserGaveFeedback) && reflection.FeedbackSummary != "" {
+if reflection.UserGaveFeedback && reflection.FeedbackSummary != "" {
     feedbackMemory := fmt.Sprintf("User feedback (%s): %s", reflection.FeedbackType, reflection.FeedbackSummary)
 		embedding, err := embedder.Embed(ctx, feedbackMemory)
 		if err == nil {
@@ -783,7 +764,7 @@ if bool(reflection.UserGaveFeedback) && reflection.FeedbackSummary != "" {
 	}
 
 // 4. If important learning → store as collective memory
-if bool(reflection.ImportantLearning) && reflection.LearningContent != "" {
+if reflection.ImportantLearning && reflection.LearningContent != "" {
     embedding, err := embedder.Embed(ctx, reflection.LearningContent)
 		if err == nil {
 			mem := &memory.Memory{
