@@ -486,11 +486,12 @@ if inMetaLoop {
 				// Execute tool
 				result, err := e.executeAction(ctx, action)
 				
-				// If this was a search, pass URLs to the next parse action
+				// If this was a search, pass URLs to the next parse action OR create one
 				if err == nil && action.Tool == ActionToolSearch {
 					if action.Metadata != nil {
 						if urls, ok := action.Metadata["extracted_urls"].([]string); ok && len(urls) > 0 {
 							// Find next pending parse action and give it the URLs
+							hasParseAction := false
 							for j := i + 1; j < len(topGoal.Actions); j++ {
 								nextAction := &topGoal.Actions[j]
 								if (nextAction.Tool == ActionToolWebParseGeneral || 
@@ -503,8 +504,46 @@ if inMetaLoop {
 									// Update description with actual URL
 									nextAction.Description = urls[0]
 									log.Printf("[Dialogue] Updated next parse action with URL: %s", truncate(urls[0], 60))
+									hasParseAction = true
 									break
 								}
+							}
+							
+							// If no parse action exists, create one NOW
+							if !hasParseAction {
+								var parseAction Action
+								goalLower := strings.ToLower(topGoal.Description)
+								
+								if strings.Contains(goalLower, "research") ||
+								   strings.Contains(goalLower, "analyze") ||
+								   strings.Contains(goalLower, "understand") ||
+								   strings.Contains(goalLower, "learn about") {
+									purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
+									parseAction = Action{
+										Description: urls[0],  // Use actual URL, not placeholder!
+										Tool:        ActionToolWebParseContextual,
+										Status:      ActionStatusPending,
+										Timestamp:   time.Now(),
+										Metadata:    map[string]interface{}{
+											"purpose": purpose,
+											"previous_search_urls": urls,
+										},
+									}
+									log.Printf("[Dialogue] Auto-created contextual parse action for: %s", truncate(urls[0], 60))
+								} else {
+									parseAction = Action{
+										Description: urls[0],  // Use actual URL, not placeholder!
+										Tool:        ActionToolWebParseGeneral,
+										Status:      ActionStatusPending,
+										Timestamp:   time.Now(),
+										Metadata:    map[string]interface{}{
+											"previous_search_urls": urls,
+										},
+									}
+									log.Printf("[Dialogue] Auto-created general parse action for: %s", truncate(urls[0], 60))
+								}
+								
+								topGoal.Actions = append(topGoal.Actions, parseAction)
 							}
 						}
 					}
@@ -647,20 +686,8 @@ if inMetaLoop {
 								log.Printf("[Dialogue] ✓ Research complete, synthesis action created")
 							}
 						} else {
-							// Simple goal without research plan
-							var searchQuery string
-							
-							if strings.Contains(desc, "research") {
-								searchQuery = strings.TrimPrefix(desc, "research ")
-								searchQuery = strings.TrimPrefix(searchQuery, "other ")
-								searchQuery = strings.TrimPrefix(searchQuery, "human like ")
-							} else if strings.Contains(desc, "learn about:") {
-								searchQuery = strings.TrimPrefix(desc, "learn about: ")
-							} else if strings.Contains(desc, "choose") || strings.Contains(desc, "select") {
-								searchQuery = desc
-							} else {
-								searchQuery = topGoal.Description
-							}
+							// Simple goal without research plan - extract keywords
+							searchQuery := e.extractSearchKeywords(topGoal.Description)
 							
 							searchAction := Action{
 								Description: searchQuery,
@@ -669,36 +696,10 @@ if inMetaLoop {
 								Timestamp:   time.Now(),
 							}
 							topGoal.Actions = append(topGoal.Actions, searchAction)
-							log.Printf("[Dialogue] Created simple search action: %s", truncate(searchQuery, 60))
+							log.Printf("[Dialogue] Created simple search action with keywords: %s", truncate(searchQuery, 60))
 							
-							// Pre-plan parse action
-							goalLower := strings.ToLower(topGoal.Description)
-							var parseAction Action
-							
-							if strings.Contains(goalLower, "research") ||
-							   strings.Contains(goalLower, "analyze") ||
-							   strings.Contains(goalLower, "understand") ||
-							   strings.Contains(goalLower, "learn about") {
-								purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
-								parseAction = Action{
-									Description: "URL from search results",
-									Tool:        ActionToolWebParseContextual,
-									Status:      ActionStatusPending,
-									Timestamp:   time.Now(),
-									Metadata:    map[string]interface{}{"purpose": purpose},
-								}
-								log.Printf("[Dialogue] Pre-planned contextual parse action")
-							} else {
-								parseAction = Action{
-									Description: "URL from search results",
-									Tool:        ActionToolWebParseGeneral,
-									Status:      ActionStatusPending,
-									Timestamp:   time.Now(),
-								}
-								log.Printf("[Dialogue] Pre-planned general parse action")
-							}
-							
-							topGoal.Actions = append(topGoal.Actions, parseAction)
+							// Parse action will be created automatically after search completes
+							log.Printf("[Dialogue] Parse action will be created after search returns URLs")
 						}
 					}
 				} else {
@@ -2644,4 +2645,70 @@ func (e *Engine) extractURLsFromSearchResults(searchOutput string) []string {
 	}
 	
 	return urls
+}
+
+// extractSearchKeywords intelligently extracts 2-5 keywords from goal description
+func (e *Engine) extractSearchKeywords(goalDesc string) string {
+	// Remove common prefixes
+	desc := strings.ToLower(goalDesc)
+	desc = strings.TrimPrefix(desc, "to research and model ")
+	desc = strings.TrimPrefix(desc, "to research ")
+	desc = strings.TrimPrefix(desc, "research ")
+	desc = strings.TrimPrefix(desc, "learn about: ")
+	desc = strings.TrimPrefix(desc, "learn about ")
+	desc = strings.TrimPrefix(desc, "explore ")
+	desc = strings.TrimPrefix(desc, "investigate ")
+	desc = strings.TrimPrefix(desc, "analyze ")
+	desc = strings.TrimPrefix(desc, "understand ")
+	
+	// Remove filler words
+	fillerWords := []string{
+		"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+		"of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+		"be", "have", "has", "had", "do", "does", "did", "will", "would",
+		"should", "could", "may", "might", "can", "based", "using", "through",
+		"emphasizing", "focusing", "quiet", "steady", "ordinary", "routine",
+	}
+	
+	words := strings.Fields(desc)
+	keywords := []string{}
+	
+	for _, word := range words {
+		// Remove punctuation
+		word = strings.Trim(word, ".,;:!?—-\"'()")
+		
+		// Skip if empty or too short
+		if word == "" || len(word) < 3 {
+			continue
+		}
+		
+		// Skip filler words
+		isFiller := false
+		for _, filler := range fillerWords {
+			if word == filler {
+				isFiller = true
+				break
+			}
+		}
+		
+		if !isFiller {
+			keywords = append(keywords, word)
+		}
+		
+		// Stop at 5 keywords
+		if len(keywords) >= 5 {
+			break
+		}
+	}
+	
+	// Join into search query
+	if len(keywords) == 0 {
+		// Fallback: use first 30 chars of original
+		if len(goalDesc) > 30 {
+			return goalDesc[:30]
+		}
+		return goalDesc
+	}
+	
+	return strings.Join(keywords, " ")
 }
