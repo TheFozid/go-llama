@@ -327,11 +327,29 @@ func sexprToReasoning(root expr) (*ReasoningResponse, error) {
 // extractStringList extracts list of strings from S-expr list
 func extractStringList(exprs []expr) []string {
 	var result []string
+	var currentString strings.Builder
+	
 	for _, e := range exprs {
 		if e.isAtom {
-			result = append(result, e.atom)
+			// If we're building a multi-word string, add space
+			if currentString.Len() > 0 {
+				currentString.WriteString(" ")
+			}
+			currentString.WriteString(e.atom)
+		} else {
+			// Hit a sub-list - flush current string if any
+			if currentString.Len() > 0 {
+				result = append(result, currentString.String())
+				currentString.Reset()
+			}
 		}
 	}
+	
+	// Flush final string
+	if currentString.Len() > 0 {
+		result = append(result, currentString.String())
+	}
+	
 	return result
 }
 
