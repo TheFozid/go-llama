@@ -193,6 +193,17 @@ func main() {
 					Access:     cfg.GrowerAI.StorageLimits.CompressionWeights.Access,
 				}
 
+				// Create LLM client for decay worker (background priority, for principles)
+				var decayWorkerLLMClient interface{}
+				if llmManager != nil {
+					decayWorkerLLMClient = llm.NewClient(
+						llmManager,
+						llm.PriorityBackground,
+						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+					)
+					log.Printf("[Main] ✓ DecayWorker using LLM queue for principles (priority: background)")
+				}
+
 				worker := memory.NewDecayWorker(
 					storage,
 					compressor,
@@ -202,6 +213,7 @@ func main() {
 					db.DB,
 					cfg.GrowerAI.Compression.Model.URL,
 					cfg.GrowerAI.Compression.Model.Name,
+					decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
 					cfg.GrowerAI.Compression.ScheduleHours,
 					cfg.GrowerAI.Principles.EvolutionScheduleHours,
 					cfg.GrowerAI.Principles.MinRatingThreshold,

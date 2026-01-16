@@ -278,7 +278,7 @@ type PrincipleCandidate struct {
 
 // ExtractPrinciples analyzes memory patterns to propose new principles
 // This is called by the background worker
-func ExtractPrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, minRatingThreshold float64, extractionLimit int, llmURL string, llmModel string) ([]PrincipleCandidate, error) {
+func ExtractPrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, minRatingThreshold float64, extractionLimit int, llmURL string, llmModel string, llmClient interface{}) ([]PrincipleCandidate, error) {
 	ctx := context.Background()
 	
 	log.Printf("[Principles] Extracting principle candidates from memory patterns (limit: %d)...", extractionLimit)
@@ -479,6 +479,7 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, minRat
 				pair.Tag1,
 				pair.Tag2,
 				len(memoryIDs),
+				llmClient,
 			)
 			
 			if err != nil {
@@ -622,7 +623,7 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 
 // EvolveIdentity updates slot 0 (system name/identity) based on experiences and learnings
 // Called separately from principle evolution to allow independent identity development
-func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL string, llmModel string) error {
+func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL string, llmModel string, llmClient interface{}) error {
 	ctx := context.Background()
 	
 	log.Printf("[Principles] Evaluating identity evolution (slot 0)...")
@@ -725,7 +726,7 @@ if len(identityMemories) < 5 {
 	}
 	
 	// Ask LLM to propose a refined identity
-	newIdentity, confidence, err := proposeIdentity(ctx, llmURL, llmModel, currentName, evidenceBuilder.String())
+	newIdentity, confidence, err := proposeIdentity(ctx, llmURL, llmModel, currentName, evidenceBuilder.String(), llmClient)
 	if err != nil {
 		log.Printf("[Principles] Failed to generate identity proposal: %v", err)
 		return nil // Non-fatal
@@ -761,7 +762,7 @@ if len(identityMemories) < 5 {
 }
 
 // proposeIdentity uses LLM to suggest an evolved identity based on experiences
-func proposeIdentity(ctx context.Context, llmURL string, llmModel string, currentName string, evidence string) (string, float64, error) {
+func proposeIdentity(ctx context.Context, llmURL string, llmModel string, currentName string, evidence string, llmClient interface{}) (string, float64, error) {
 	prompt := fmt.Sprintf(`You are analyzing an AI system's identity based on its experiences and learnings.
 
 Current Identity Profile: %s
@@ -813,6 +814,77 @@ Respond ONLY with valid JSON:
 		"stream":      false,
 	}
 
+	// Use queue client if available
+	if llmClient != nil {
+		type LLMCaller interface {
+			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+		}
+		
+		if client, ok := llmClient.(LLMCaller); ok {
+			log.Printf("[Principles] Identity evolution LLM call via queue (prompt length: %d chars)", len(prompt))
+			startTime := time.Now()
+			
+			body, err := client.Call(ctx, llmURL, reqBody)
+			if err != nil {
+				log.Printf("[Principles] Identity evolution queue call failed after %s: %v", time.Since(startTime), err)
+				return "", 0, fmt.Errorf("LLM call failed: %w", err)
+			}
+			
+			log.Printf("[Principles] Identity evolution response received in %s", time.Since(startTime))
+			
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			
+			if err := json.Unmarshal(body, &result); err != nil {
+				return "", 0, fmt.Errorf("failed to decode response: %w", err)
+			}
+			
+			if len(result.Choices) == 0 {
+				return "", 0, fmt.Errorf("no choices returned from LLM")
+			}
+			
+			content := strings.TrimSpace(result.Choices[0].Message.Content)
+			
+			// Continue with existing parsing logic...
+			content = strings.TrimPrefix(content, "```json")
+			content = strings.TrimPrefix(content, "```")
+			content = strings.TrimSuffix(content, "```")
+			content = strings.TrimSpace(content)
+			
+			var proposal struct {
+				ProposedName string  `json:"proposed_name"`
+				Confidence   float64 `json:"confidence"`
+				Reasoning    string  `json:"reasoning"`
+			}
+			
+			if err := json.Unmarshal([]byte(content), &proposal); err != nil {
+				return "", 0, fmt.Errorf("failed to parse identity proposal: %w", err)
+			}
+			
+			if len(proposal.ProposedName) < 10 || len(proposal.ProposedName) > 250 {
+				return "", 0, fmt.Errorf("proposed identity profile length invalid (%d chars): %s", 
+					len(proposal.ProposedName), proposal.ProposedName)
+			}
+			
+			if proposal.Confidence < 0 || proposal.Confidence > 1 {
+				proposal.Confidence = 0.5
+			}
+			
+			log.Printf("[Principles] Identity proposal: '%s' (confidence: %.2f) - %s", 
+				proposal.ProposedName, proposal.Confidence, proposal.Reasoning)
+			
+			return proposal.ProposedName, proposal.Confidence, nil
+		}
+	}
+	
+	// Fallback to direct HTTP (shouldn't happen in production)
+	log.Printf("[Principles] WARNING: No queue client available, using direct HTTP with 30s timeout")
+	
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
@@ -1004,7 +1076,7 @@ Respond with ONLY the principle text (10-25 words), nothing else.`,
 }
 
 // generatePrincipleFromConceptPair creates a behavioral principle from two frequently co-occurring concepts
-func generatePrincipleFromConceptPair(ctx context.Context, llmURL string, llmModel string, concept1 string, concept2 string, frequency int) (string, error) {
+func generatePrincipleFromConceptPair(ctx context.Context, llmURL string, llmModel string, concept1 string, concept2 string, frequency int, llmClient interface{}) (string, error) {
 	prompt := fmt.Sprintf(`Two concepts frequently appear together in successful interactions:
 - Concept 1: %s
 - Concept 2: %s
@@ -1042,6 +1114,54 @@ Respond with ONLY the principle text (10-25 words), nothing else.`,
 		"stream":      false,
 	}
 
+	// Use queue client if available
+	if llmClient != nil {
+		type LLMCaller interface {
+			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+		}
+		
+		if client, ok := llmClient.(LLMCaller); ok {
+			log.Printf("[Principles] Concept pair principle generation LLM call via queue (concepts: %s + %s)", concept1, concept2)
+			startTime := time.Now()
+			
+			body, err := client.Call(ctx, llmURL, reqBody)
+			if err != nil {
+				log.Printf("[Principles] Concept pair generation queue call failed after %s: %v", time.Since(startTime), err)
+				return "", err
+			}
+			
+			log.Printf("[Principles] Concept pair generation response received in %s", time.Since(startTime))
+			
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			
+			if err := json.Unmarshal(body, &result); err != nil {
+				return "", err
+			}
+			
+			if len(result.Choices) == 0 {
+				return "", fmt.Errorf("no response from LLM")
+			}
+
+			principle := strings.TrimSpace(result.Choices[0].Message.Content)
+			
+			// Validate length
+			if len(principle) < 20 || len(principle) > 200 {
+				return "", fmt.Errorf("principle length invalid: %d chars", len(principle))
+			}
+
+			return principle, nil
+		}
+	}
+	
+	// Fallback to direct HTTP (shouldn't happen in production)
+	log.Printf("[Principles] WARNING: No queue client available for concept pair, using direct HTTP with 30s timeout")
+	
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", err

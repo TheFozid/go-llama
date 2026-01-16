@@ -52,6 +52,7 @@ type DecayWorker struct {
 	db                     *gorm.DB
 	llmURL                 string     // LLM URL for principle generation
 	llmModel               string     // LLM model name for principle generation
+	llmClient              interface{} // LLM queue client for principle generation
 	scheduleHours          int
 	principleScheduleHours int
 	minRatingThreshold     float64
@@ -95,6 +96,7 @@ func NewDecayWorker(
 	db *gorm.DB,
 	llmURL string,
 	llmModel string,
+	llmClient interface{}, // NEW: LLM queue client
 	scheduleHours int,
 	principleScheduleHours int,
 	minRatingThreshold float64,
@@ -115,6 +117,7 @@ func NewDecayWorker(
 		db:                     db,
 		llmURL:                 llmURL,
 		llmModel:               llmModel,
+		llmClient:              llmClient, // NEW: Store LLM client
 		scheduleHours:          scheduleHours,
 		principleScheduleHours: principleScheduleHours,
 		minRatingThreshold:     minRatingThreshold,
@@ -474,14 +477,14 @@ func (w *DecayWorker) compressMemoriesWithClusters(ctx context.Context, candidat
 func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
 	// Sub-phase A: Evolve system identity (slot 0)
 	log.Printf("[DecayWorker] Sub-phase A: Identity evolution...")
-		if err := EvolveIdentity(w.db, w.storage, w.embedder, w.llmURL, w.llmModel); err != nil {
+		if err := EvolveIdentity(w.db, w.storage, w.embedder, w.llmURL, w.llmModel, w.llmClient); err != nil {
 		log.Printf("[DecayWorker] ERROR evolving identity: %v", err)
 		// Non-fatal, continue to principle evolution
 	}
 	
 	// Sub-phase B: Extract principle candidates from memory patterns
 	log.Printf("[DecayWorker] Sub-phase B: Principle extraction...")
-	candidates, err := ExtractPrinciples(w.db, w.storage, w.embedder, w.minRatingThreshold, w.extractionLimit, w.llmURL, w.llmModel)
+	candidates, err := ExtractPrinciples(w.db, w.storage, w.embedder, w.minRatingThreshold, w.extractionLimit, w.llmURL, w.llmModel, w.llmClient)
 	if err != nil {
 		return err
 	}
