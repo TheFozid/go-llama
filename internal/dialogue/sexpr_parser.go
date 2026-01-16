@@ -4,6 +4,7 @@ import (
     "fmt"
     "strconv"
     "strings"
+	"time"
 )
 
 // ParseReasoningSExpr parses S-expression format reasoning
