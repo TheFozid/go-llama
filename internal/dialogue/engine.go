@@ -1756,7 +1756,9 @@ Break this into 3-7 logical sub-questions that:
 2. Build progressively to specific details
 3. Include verification/cross-checking
 
-Respond with ONLY S-expressions (Lisp-style).
+CRITICAL: Respond with ONLY the research_plan S-expression. Do NOT wrap it in (reasoning ...) or any other container.
+
+REQUIRED FORMAT (copy this structure exactly):
 
 (research_plan
   (root_question "Main question being answered")
@@ -1774,7 +1776,35 @@ Respond with ONLY S-expressions (Lisp-style).
       (priority 9)
       (deps ("q1")))))
 
-Keep plan achievable (3-7 questions max). Each question = 2-5 actions (search + parse).`, 
+IMPORTANT RULES:
+- Start with (research_plan NOT (reasoning (research_plan
+- Use underscores: research_plan, root_question, sub_questions, search_query
+- IDs must be unique: "q1", "q2", "q3", etc.
+- deps is a list: use () for no deps, ("q1") for one dep, ("q1" "q2") for multiple
+- Keep plan achievable (3-7 questions max)
+
+EXAMPLE (correct format):
+(research_plan
+  (root_question "How do chatbots maintain context?")
+  (sub_questions
+    (question
+      (id "q1")
+      (text "What is conversational context?")
+      (search_query "conversational context definition chatbots")
+      (priority 10)
+      (deps ()))
+    (question
+      (id "q2")
+      (text "What techniques store conversation history?")
+      (search_query "conversation history storage techniques AI")
+      (priority 9)
+      (deps ("q1")))
+    (question
+      (id "q3")
+      (text "How do modern systems implement context windows?")
+      (search_query "context window implementation modern chatbots")
+      (priority 8)
+      (deps ("q1" "q2")))))`, 
         goal.Description)
 
 	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
@@ -1786,17 +1816,53 @@ Keep plan achievable (3-7 questions max). Each question = 2-5 actions (search + 
     // Use RawResponse because Reflection might be generic fallback text
     content := response.RawResponse
     
+    // DEBUG LOGGING: Always log what we received
+    log.Printf("[Dialogue] Research plan response length: %d chars", len(content))
+    log.Printf("[Dialogue] Research plan response (first 300 chars): %s", truncateResponse(content, 300))
+    
     // Clean up markdown fences
     content = strings.TrimPrefix(content, "```lisp")
     content = strings.TrimPrefix(content, "```")
     content = strings.TrimSuffix(content, "```")
     content = strings.TrimSpace(content)
-
-    // Use findBlocks helper (from sexpr_parser.go) to get the research plan
+    
+    // IMPROVED PARSING: Try multiple strategies
+    
+    // Strategy 1: Direct search (original behavior)
     planBlocks := findBlocks(content, "research_plan")
+    
+    // Strategy 2: Recursive search (handles nested structures)
     if len(planBlocks) == 0 {
-        return nil, tokens, fmt.Errorf("no research_plan block found in S-expression")
+        log.Printf("[Dialogue] No research_plan at top level, trying recursive search...")
+        planBlocks = findBlocksRecursive(content, "research_plan")
     }
+    
+    // Strategy 3: Regex fallback (handles malformed S-expressions)
+    if len(planBlocks) == 0 {
+        log.Printf("[Dialogue] Structured parsing failed, attempting regex extraction...")
+        plan, err := extractResearchPlanFromMalformed(content)
+        if err == nil && plan != nil {
+            log.Printf("[Dialogue] ✓ Extracted research plan via regex fallback (%d questions)", len(plan.SubQuestions))
+            return plan, tokens, nil
+        }
+        log.Printf("[Dialogue] Regex extraction also failed: %v", err)
+    }
+    
+    // If all strategies failed, provide detailed error
+    if len(planBlocks) == 0 {
+        log.Printf("[Dialogue] ERROR: All parsing strategies failed")
+        log.Printf("[Dialogue] Content structure analysis:")
+        log.Printf("[Dialogue]   - Contains '(reasoning': %v", strings.Contains(content, "(reasoning"))
+        log.Printf("[Dialogue]   - Contains '(reflection': %v", strings.Contains(content, "(reflection"))
+        log.Printf("[Dialogue]   - Contains '(research_plan': %v", strings.Contains(content, "(research_plan"))
+        log.Printf("[Dialogue]   - Contains '(research-plan': %v", strings.Contains(content, "(research-plan"))
+        log.Printf("[Dialogue]   - Contains '(question': %v", strings.Contains(content, "(question"))
+        log.Printf("[Dialogue] Full content: %s", content)
+        
+        return nil, tokens, fmt.Errorf("no research_plan block found in S-expression after trying all parsing strategies")
+    }
+    
+    log.Printf("[Dialogue] ✓ Found research_plan block using structured parsing")
 
     // Extract Root Question
     rootQuestion := extractFieldContent(planBlocks[0], "root_question")

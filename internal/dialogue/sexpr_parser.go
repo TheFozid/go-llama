@@ -832,3 +832,163 @@ func ParseReflectionSExpr(content string) (*ReflectionData, error) {
     // Only require outcome_quality - everything else is optional
     return r, nil
 }
+
+// findBlocksRecursive searches for blocks recursively, handling nested structures
+// This handles cases where LLM wraps output in (reasoning ...) or other containers
+func findBlocksRecursive(input, blockName string) []string {
+	var blocks []string
+	
+	// First try top-level search
+	topLevel := findBlocks(input, blockName)
+	blocks = append(blocks, topLevel...)
+	
+	// If found at top level, return those
+	if len(blocks) > 0 {
+		return blocks
+	}
+	
+	// Otherwise, try unwrapping common outer structures
+	// Pattern 1: (reasoning (research_plan ...))
+	if strings.Contains(input, "(reasoning") {
+		reasoningBlocks := findBlocks(input, "reasoning")
+		for _, reasoningBlock := range reasoningBlocks {
+			// Search inside the reasoning block
+			innerBlocks := findBlocks(reasoningBlock, blockName)
+			blocks = append(blocks, innerBlocks...)
+		}
+	}
+	
+	// Pattern 2: (reflection (research_plan ...))
+	if strings.Contains(input, "(reflection") {
+		reflectionBlocks := findBlocks(input, "reflection")
+		for _, reflectionBlock := range reflectionBlocks {
+			innerBlocks := findBlocks(reflectionBlock, blockName)
+			blocks = append(blocks, innerBlocks...)
+		}
+	}
+	
+	// Pattern 3: Try with underscore replaced by hyphen (research-plan vs research_plan)
+	if strings.Contains(blockName, "_") {
+		altName := strings.ReplaceAll(blockName, "_", "-")
+		altBlocks := findBlocks(input, altName)
+		blocks = append(blocks, altBlocks...)
+	}
+	
+	return blocks
+}
+
+// extractResearchPlanFromMalformed attempts to extract research plan using regex
+// This is a fallback for when structured parsing completely fails
+func extractResearchPlanFromMalformed(content string) (*ResearchPlan, error) {
+	// Look for question patterns even in malformed S-expressions
+	// Pattern: (question ... (id "q1") (text "...") ...)
+	
+	type QuestionMatch struct {
+		ID       string
+		Text     string
+		Query    string
+		Priority int
+	}
+	
+	var questions []QuestionMatch
+	
+	// Find all (question ...) blocks using a simple depth counter
+	start := 0
+	for {
+		qStart := strings.Index(content[start:], "(question")
+		if qStart == -1 {
+			break
+		}
+		qStart += start
+		
+		// Find matching close paren
+		depth := 0
+		qEnd := -1
+		for i := qStart; i < len(content); i++ {
+			if content[i] == '(' {
+				depth++
+			} else if content[i] == ')' {
+				depth--
+				if depth == 0 {
+					qEnd = i
+					break
+				}
+			}
+		}
+		
+		if qEnd == -1 {
+			break // Unclosed question block
+		}
+		
+		questionBlock := content[qStart:qEnd+1]
+		
+		// Extract fields
+		q := QuestionMatch{
+			Priority: 5, // Default priority
+		}
+		
+		// Extract ID
+		if id := extractFieldContent(questionBlock, "id"); id != "" {
+			q.ID = id
+		}
+		
+		// Extract text
+		if text := extractFieldContent(questionBlock, "text"); text != "" {
+			q.Text = text
+		}
+		
+		// Extract search_query
+		if query := extractFieldContent(questionBlock, "search_query"); query != "" {
+			q.Query = query
+		}
+		
+		// Extract priority
+		if prioStr := extractFieldContent(questionBlock, "priority"); prioStr != "" {
+			if p, err := strconv.Atoi(prioStr); err == nil {
+				q.Priority = p
+			}
+		}
+		
+		// Only add if we have at least ID and text
+		if q.ID != "" && q.Text != "" {
+			questions = append(questions, q)
+		}
+		
+		start = qEnd + 1
+	}
+	
+	if len(questions) == 0 {
+		return nil, fmt.Errorf("no question blocks found in malformed content")
+	}
+	
+	// Build ResearchPlan from extracted questions
+	plan := &ResearchPlan{
+		RootQuestion:    "Research investigation", // Generic fallback
+		SubQuestions:    make([]ResearchQuestion, len(questions)),
+		CurrentStep:     0,
+		SynthesisNeeded: false,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	
+	// Try to extract root question if present
+	if rootQ := extractFieldContent(content, "root_question"); rootQ != "" {
+		plan.RootQuestion = rootQ
+	}
+	
+	for i, q := range questions {
+		plan.SubQuestions[i] = ResearchQuestion{
+			ID:              q.ID,
+			Question:        q.Text,
+			SearchQuery:     q.Query,
+			Priority:        q.Priority,
+			Dependencies:    []string{}, // Can't reliably extract from malformed
+			Status:          ResearchStatusPending,
+			SourcesFound:    []string{},
+			KeyFindings:     "",
+			ConfidenceLevel: 0.0,
+		}
+	}
+	
+	return plan, nil
+}
