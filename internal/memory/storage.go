@@ -399,13 +399,36 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	}
 
 	if query.IncludeCollective {
-		should = append(should, qdrant.NewMatch("is_collective", true))
+		// Use boolean field condition for is_collective
+		should = append(should, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "is_collective",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Boolean{
+							Boolean: true,
+						},
+					},
+				},
+			},
+		})
 		log.Printf("[Storage] Added is_collective to OR filter")
 	}
 	
 	// If ONLY collective requested (no personal), use must instead of should
 	if query.IncludeCollective && !query.IncludePersonal {
-		must = append(must, qdrant.NewMatch("is_collective", true))
+		must = append(must, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "is_collective",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Boolean{
+							Boolean: true,
+						},
+					},
+				},
+			},
+		})
 		should = nil // Clear should, use must for exclusive collective
 		log.Printf("[Storage] Using exclusive collective filter (must)")
 	}
