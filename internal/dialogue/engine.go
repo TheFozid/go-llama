@@ -590,7 +590,7 @@ if err == nil && action.Tool == ActionToolSearch {
 									break
 								}
 							}
-						}
+						}}
 					}
 				}
 				if err != nil {
