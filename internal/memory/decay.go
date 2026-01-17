@@ -208,7 +208,7 @@ func (w *DecayWorker) runCompressionCycle() {
 	var migrationState struct {
 		MigrationIsCollectiveComplete bool
 	}
-	err = w.db.Table("growerai_dialogue_state").
+	err := w.db.Table("growerai_dialogue_state").
 		Select("migration_is_collective_complete").
 		Where("id = ?", 1).
 		First(&migrationState).Error
