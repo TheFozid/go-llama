@@ -21,9 +21,10 @@ type DialogueState struct {
 	Patterns                  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
 	LastCycleTime             time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
 	CycleCount                int            `gorm:"not null;default:0" json:"cycle_count"`
-	MigrationMemoryIDComplete bool           `gorm:"not null;default:false" json:"migration_memory_id_complete"` // NEW: Track if memory_id migration ran
-	CreatedAt                 time.Time      `json:"created_at"`
-	UpdatedAt                 time.Time      `json:"updated_at"`
+	MigrationMemoryIDComplete       bool      `gorm:"not null;default:false" json:"migration_memory_id_complete"`       // Track if memory_id migration ran
+	MigrationIsCollectiveComplete   bool      `gorm:"not null;default:false" json:"migration_is_collective_complete"`   // Track if is_collective backfill ran
+	CreatedAt                       time.Time `json:"created_at"`
+	UpdatedAt                       time.Time `json:"updated_at"`
 }
 
 // TableName specifies the table name for GORM

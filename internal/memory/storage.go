@@ -1628,3 +1628,135 @@ func (s *Storage) GetTotalMemoryCount(ctx context.Context) (int, error) {
 func PtrOf[T any](v T) *T {
 	return &v
 }
+
+// BackfillIsCollective sets is_collective=true for memories that should be collective
+// This is a one-time migration for memories created before Phase 4
+func (s *Storage) BackfillIsCollective(ctx context.Context) error {
+	log.Printf("[Storage] Starting is_collective backfill migration...")
+	
+	// Strategy: Set is_collective=true for memories that:
+	// 1. Don't have a user_id (system-generated memories)
+	// 2. OR have concept tags like "learning", "strategy", "principle"
+	// 3. OR have compressed_from set (compressions are collective)
+	
+	// Scroll through all points
+	var offset *qdrant.PointId
+	backfilledCount := 0
+	totalProcessed := 0
+	maxIterations := 100
+	iterations := 0
+	
+	for iterations < maxIterations {
+		iterations++
+		
+		scrollResult, err := s.Client.Scroll(ctx, &qdrant.ScrollPoints{
+			CollectionName: s.CollectionName,
+			Limit:          uint32Ptr(100),
+			Offset:         offset,
+			WithPayload:    qdrant.NewWithPayload(true),
+		})
+		
+		if err != nil {
+			return fmt.Errorf("scroll failed on iteration %d: %w", iterations, err)
+		}
+		
+		if len(scrollResult) == 0 {
+			log.Printf("[Storage] No more points to process (iteration %d)", iterations)
+			break
+		}
+		
+		log.Printf("[Storage] Processing batch %d: %d points", iterations, len(scrollResult))
+		
+		for _, point := range scrollResult {
+			totalProcessed++
+			payload := point.Payload
+			
+			// Check current is_collective value
+			currentIsCollective := getBoolFromPayload(payload, "is_collective")
+			
+			// If already set to true, skip
+			if currentIsCollective {
+				continue
+			}
+			
+			// Determine if this should be collective
+			shouldBeCollective := false
+			
+			// Check 1: No user_id (system-generated)
+			userID := getStringFromPayload(payload, "user_id")
+			if userID == "" {
+				shouldBeCollective = true
+			}
+			
+			// Check 2: Has compressed_from (compressions are collective knowledge)
+			compressedFrom := getStringFromPayload(payload, "compressed_from")
+			if compressedFrom != "" {
+				shouldBeCollective = true
+			}
+			
+			// Check 3: Has collective concept tags
+			conceptTags := getStringSliceFromPayload(payload, "concept_tags")
+			collectiveTags := map[string]bool{
+				"learning":  true,
+				"strategy":  true,
+				"principle": true,
+				"pattern":   true,
+				"insight":   true,
+			}
+			
+			for _, tag := range conceptTags {
+				if collectiveTags[tag] {
+					shouldBeCollective = true
+					break
+				}
+			}
+			
+			// Update if needed
+			if shouldBeCollective {
+				_, err := s.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+					CollectionName: s.CollectionName,
+					Payload: map[string]*qdrant.Value{
+						"is_collective": qdrant.NewValueBool(true),
+					},
+					PointsSelector: &qdrant.PointsSelector{
+						PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+							Points: &qdrant.PointsIdsList{
+								Ids: []*qdrant.PointId{point.Id},
+							},
+						},
+					},
+				})
+				
+				if err != nil {
+					log.Printf("[Storage] WARNING: Failed to set is_collective for point: %v", err)
+					continue
+				}
+				
+				backfilledCount++
+				
+				if backfilledCount%10 == 0 {
+					log.Printf("[Storage] Migration progress: %d/%d updated", backfilledCount, totalProcessed)
+				}
+			}
+		}
+		
+		// Update offset for pagination
+		if len(scrollResult) > 0 {
+			lastPoint := scrollResult[len(scrollResult)-1]
+			offset = lastPoint.Id
+		}
+		
+		// If we got fewer results than requested, we're done
+		if len(scrollResult) < 100 {
+			log.Printf("[Storage] Received %d < 100 results, migration complete", len(scrollResult))
+			break
+		}
+	}
+	
+	if iterations >= maxIterations {
+		log.Printf("[Storage] WARNING: Hit max iterations (%d), stopping migration", maxIterations)
+	}
+	
+	log.Printf("[Storage] is_collective backfill complete: %d/%d memories updated", backfilledCount, totalProcessed)
+	return nil
+}

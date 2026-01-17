@@ -204,6 +204,37 @@ func (w *DecayWorker) runCompressionCycle() {
 		}
 	}
 	
+	// PHASE 0.5: One-time is_collective backfill migration
+	var migrationState struct {
+		MigrationIsCollectiveComplete bool
+	}
+	err = w.db.Table("growerai_dialogue_state").
+		Select("migration_is_collective_complete").
+		Where("id = ?", 1).
+		First(&migrationState).Error
+	
+	if err != nil {
+		log.Printf("[DecayWorker] WARNING: Could not check is_collective migration status: %v", err)
+	} else if !migrationState.MigrationIsCollectiveComplete {
+		log.Println("[DecayWorker] PHASE 0.5: Running one-time is_collective backfill migration...")
+		if err := w.storage.BackfillIsCollective(ctx); err != nil {
+			log.Printf("[DecayWorker] ERROR in is_collective migration: %v", err)
+		} else {
+			// Mark migration as complete in database
+			err := w.db.Table("growerai_dialogue_state").
+				Where("id = ?", 1).
+				Update("migration_is_collective_complete", true).Error
+			
+			if err != nil {
+				log.Printf("[DecayWorker] WARNING: Failed to persist is_collective migration status: %v", err)
+			} else {
+				log.Println("[DecayWorker] ✓ is_collective backfill complete and persisted to DB")
+			}
+		}
+	} else {
+		log.Println("[DecayWorker] ✓ is_collective migration already completed (from DB), skipping")
+	}
+	
 	// PHASE 1: Enqueue untagged memories for async tagging
 	log.Println("[DecayWorker] PHASE 1: Tagging untagged memories...")
 	
