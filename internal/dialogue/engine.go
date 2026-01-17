@@ -486,64 +486,84 @@ if inMetaLoop {
 				// Execute tool
 				result, err := e.executeAction(ctx, action)
 				
-				// If this was a search, pass URLs to the next parse action OR create one
+				// If this was a search, evaluate results and create parse action for best URL
 				if err == nil && action.Tool == ActionToolSearch {
-					if action.Metadata != nil {
-						if urls, ok := action.Metadata["extracted_urls"].([]string); ok && len(urls) > 0 {
-							// Find next pending parse action and give it the URLs
-							hasParseAction := false
-							for j := i + 1; j < len(topGoal.Actions); j++ {
-								nextAction := &topGoal.Actions[j]
-								if (nextAction.Tool == ActionToolWebParseGeneral || 
-								    nextAction.Tool == ActionToolWebParseContextual) &&
-								   nextAction.Status == ActionStatusPending {
-									if nextAction.Metadata == nil {
-										nextAction.Metadata = make(map[string]interface{})
-									}
-									nextAction.Metadata["previous_search_urls"] = urls
-									// Update description with actual URL
-									nextAction.Description = urls[0]
-									log.Printf("[Dialogue] Updated next parse action with URL: %s", truncate(urls[0], 60))
-									hasParseAction = true
-									break
+					// Evaluate search results and select best URL
+					bestURL, evalErr := e.evaluateSearchResults(result, topGoal.Description)
+					
+					if evalErr != nil {
+						log.Printf("[Dialogue] WARNING: Failed to evaluate search results: %v", evalErr)
+						action.Result = fmt.Sprintf("Search completed but no suitable URLs found: %v", evalErr)
+						action.Status = ActionStatusCompleted
+						topGoal.Outcome = "bad"
+					} else {
+						// Store best URL in metadata
+						if action.Metadata == nil {
+							action.Metadata = make(map[string]interface{})
+						}
+						action.Metadata["best_url"] = bestURL
+						
+						// Check if there's already a pending parse action
+						hasParseAction := false
+						for j := i + 1; j < len(topGoal.Actions); j++ {
+							nextAction := &topGoal.Actions[j]
+							if (nextAction.Tool == ActionToolWebParseGeneral || 
+							    nextAction.Tool == ActionToolWebParseContextual) &&
+							   nextAction.Status == ActionStatusPending {
+								if nextAction.Metadata == nil {
+									nextAction.Metadata = make(map[string]interface{})
 								}
+								nextAction.Metadata["selected_url"] = bestURL
+								nextAction.Description = bestURL
+								log.Printf("[Dialogue] Updated next parse action with best URL: %s", truncate(bestURL, 60))
+								hasParseAction = true
+								break
+							}
+						}
+						
+						// If no parse action exists, create one NOW
+						if !hasParseAction {
+							var parseAction Action
+							goalLower := strings.ToLower(topGoal.Description)
+							
+							if strings.Contains(goalLower, "research") ||
+							   strings.Contains(goalLower, "analyze") ||
+							   strings.Contains(goalLower, "understand") ||
+							   strings.Contains(goalLower, "learn about") {
+								purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
+								parseAction = Action{
+									Description: bestURL,
+									Tool:        ActionToolWebParseContextual,
+									Status:      ActionStatusPending,
+									Timestamp:   time.Now(),
+									Metadata:    map[string]interface{}{
+										"purpose": purpose,
+										"selected_url": bestURL,
+									},
+								}
+								log.Printf("[Dialogue] Auto-created contextual parse action for best URL: %s", truncate(bestURL, 60))
+							} else {
+								parseAction = Action{
+									Description: bestURL,
+									Tool:        ActionToolWebParseGeneral,
+									Status:      ActionStatusPending,
+									Timestamp:   time.Now(),
+									Metadata:    map[string]interface{}{
+										"selected_url": bestURL,
+									},
+								}
+								log.Printf("[Dialogue] Auto-created general parse action for best URL: %s", truncate(bestURL, 60))
 							}
 							
-							// If no parse action exists, create one NOW
-							if !hasParseAction {
-								var parseAction Action
-								goalLower := strings.ToLower(topGoal.Description)
-								
-								if strings.Contains(goalLower, "research") ||
-								   strings.Contains(goalLower, "analyze") ||
-								   strings.Contains(goalLower, "understand") ||
-								   strings.Contains(goalLower, "learn about") {
-									purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
-									parseAction = Action{
-										Description: urls[0],  // Use actual URL, not placeholder!
-										Tool:        ActionToolWebParseContextual,
-										Status:      ActionStatusPending,
-										Timestamp:   time.Now(),
-										Metadata:    map[string]interface{}{
-											"purpose": purpose,
-											"previous_search_urls": urls,
-										},
-									}
-									log.Printf("[Dialogue] Auto-created contextual parse action for: %s", truncate(urls[0], 60))
-								} else {
-									parseAction = Action{
-										Description: urls[0],  // Use actual URL, not placeholder!
-										Tool:        ActionToolWebParseGeneral,
-										Status:      ActionStatusPending,
-										Timestamp:   time.Now(),
-										Metadata:    map[string]interface{}{
-											"previous_search_urls": urls,
-										},
-									}
-									log.Printf("[Dialogue] Auto-created general parse action for: %s", truncate(urls[0], 60))
+							topGoal.Actions = append(topGoal.Actions, parseAction)
+							
+							// CRITICAL: Update goal in state immediately
+							for k := range state.ActiveGoals {
+								if state.ActiveGoals[k].ID == topGoal.ID {
+									state.ActiveGoals[k] = topGoal
+									log.Printf("[Dialogue] ✓ Updated goal in state with new parse action")
+									break
 								}
-								
-								topGoal.Actions = append(topGoal.Actions, parseAction)
 							}
 						}
 					}
@@ -597,7 +617,7 @@ if inMetaLoop {
 			}
 		}
 		
-// If no actions were executed, check if we should create new actions
+		// If no actions were executed, check if we should create new actions
 if !actionExecuted {
     // Check for stale in-progress actions (older than 5 minutes)
     now := time.Now()
@@ -616,16 +636,32 @@ if !actionExecuted {
     }
     
     // Check if all actions are completed (need to create more)
+    hasPendingActions := false
     allActionsCompleted := len(topGoal.Actions) > 0
     for _, action := range topGoal.Actions {
-        if action.Status == ActionStatusPending || action.Status == ActionStatusInProgress {
+        if action.Status == ActionStatusPending {
+            hasPendingActions = true
             allActionsCompleted = false
             break
         }
+        if action.Status == ActionStatusInProgress {
+            allActionsCompleted = false
+        }
     }
     
-    // Create new actions if: (1) no actions at all, OR (2) all actions completed
-    if len(topGoal.Actions) == 0 || allActionsCompleted {
+    // If we have pending actions, log and wait for next cycle to execute them
+    if hasPendingActions {
+        pendingCount := 0
+        for _, action := range topGoal.Actions {
+            if action.Status == ActionStatusPending {
+                pendingCount++
+            }
+        }
+        log.Printf("[Dialogue] Goal has %d pending actions, will execute in next cycle", pendingCount)
+    }
+    
+    // Create new actions if: (1) no actions at all, OR (2) all actions completed AND no pending
+    if len(topGoal.Actions) == 0 || (allActionsCompleted && !hasPendingActions) {
 					goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
 					if err != nil {
 						log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
@@ -764,11 +800,18 @@ if !actionExecuted {
 		
 // Update goal progress based on completed actions
 completedActions := 0
+successfulActions := 0
 totalActions := len(topGoal.Actions)
 
 for _, action := range topGoal.Actions {
 	if action.Status == ActionStatusCompleted {
 		completedActions++
+		// Check if action actually succeeded (not just completed with error)
+		if !strings.Contains(strings.ToLower(action.Result), "error") &&
+		   !strings.Contains(strings.ToLower(action.Result), "failed") &&
+		   !strings.Contains(strings.ToLower(action.Result), "timeout") {
+			successfulActions++
+		}
 	}
 }
 
@@ -780,41 +823,72 @@ if totalActions > 0 {
 	topGoal.Progress = 0.0
 }
 
-// NEW: Don't mark complete if we just did a search and could parse
-// Check if the last completed action was a search
-if completedActions > 0 && totalActions == completedActions {
+// Don't mark complete if:
+// 1. Last action was a search (parse action might be pending/upcoming)
+// 2. We have pending actions that haven't executed yet
+hasPendingActions := false
+lastActionWasSearch := false
+
+if totalActions > 0 {
 	lastAction := topGoal.Actions[totalActions-1]
-	
-	// If last action was search, wait for parse action to be created
-	if lastAction.Tool == ActionToolSearch {
-		log.Printf("[Dialogue] Search completed, waiting for parse action creation")
-		topGoal.Progress = 0.99 // Almost complete, not fully complete
+	if lastAction.Tool == ActionToolSearch && lastAction.Status == ActionStatusCompleted {
+		lastActionWasSearch = true
 	}
 }
+
+for _, action := range topGoal.Actions {
+	if action.Status == ActionStatusPending {
+		hasPendingActions = true
+		break
+	}
+}
+
+if lastActionWasSearch && hasPendingActions {
+	log.Printf("[Dialogue] Search completed with pending parse action, not marking goal complete yet")
+	topGoal.Progress = 0.99 // Almost complete
+}
 		
-if topGoal.Progress >= 1.0 {
+if topGoal.Progress >= 1.0 && !hasPendingActions {
 	// Validate that the goal actually achieved something useful
 	hasUsefulOutcome := false
 	hasFailures := false
+	totalOutputLength := 0
 	
 	for _, action := range topGoal.Actions {
 		if action.Status == ActionStatusCompleted {
+			resultLower := strings.ToLower(action.Result)
+			
 			// Check if action result contains error
-			if strings.Contains(action.Result, "ERROR") || 
-			   strings.Contains(action.Result, "Failed") ||
-			   strings.Contains(action.Result, "failed") {
+			if strings.Contains(resultLower, "error") || 
+			   strings.Contains(resultLower, "failed") ||
+			   strings.Contains(resultLower, "timeout") ||
+			   strings.Contains(resultLower, "no suitable urls") {
 				hasFailures = true
 			}
 			
-			// Check if action produced meaningful output (>100 chars)
-			if len(action.Result) > 100 && !hasFailures {
+			// Accumulate output length
+			totalOutputLength += len(action.Result)
+			
+			// Check if action produced meaningful output
+			// - Parse actions should produce >200 chars
+			// - Search actions should produce >100 chars
+			minLength := 100
+			if action.Tool == ActionToolWebParseContextual || 
+			   action.Tool == ActionToolWebParseGeneral {
+				minLength = 200
+			}
+			
+			if len(action.Result) > minLength && !strings.Contains(resultLower, "error") {
 				hasUsefulOutcome = true
 			}
 		}
 	}
 	
+	log.Printf("[Dialogue] Goal evaluation: useful=%v, failures=%v, totalOutput=%d chars", 
+		hasUsefulOutcome, hasFailures, totalOutputLength)
+	
 	// Mark goal based on outcome quality
-	if hasUsefulOutcome {
+	if hasUsefulOutcome && !hasFailures {
 		// Synthesize research findings if this goal had a research plan
 		if topGoal.ResearchPlan != nil && topGoal.ResearchPlan.SynthesisNeeded {
 			log.Printf("[Dialogue] Synthesizing research findings...")
@@ -890,13 +964,45 @@ if topGoal.Progress >= 1.0 {
 		} else if goal.Status == GoalStatusAbandoned {
 			state.CompletedGoals = append(state.CompletedGoals, goal)
 			abandonedCount++
-		} else if goal.Progress == 0.0 && time.Since(goal.Created) > 24*time.Hour {
-			// Abandon goals with no progress after 24 hours
+		} else if goal.Progress == 0.0 && time.Since(goal.Created) > 48*time.Hour {
+			// Abandon goals with no progress after 48 hours (increased from 24h)
 			goal.Status = GoalStatusAbandoned
 			goal.Outcome = "neutral"
 			state.CompletedGoals = append(state.CompletedGoals, goal)
 			abandonedCount++
-			log.Printf("[Dialogue] Auto-abandoned stale goal (24h+ with no progress): %s", truncate(goal.Description, 60))
+			log.Printf("[Dialogue] Auto-abandoned stale goal (48h+ with no progress): %s", truncate(goal.Description, 60))
+		} else if goal.Progress > 0.0 && goal.Progress < 1.0 && time.Since(goal.Created) > 7*24*time.Hour {
+			// Abandon goals stuck in progress for over a week
+			goal.Status = GoalStatusAbandoned
+			goal.Outcome = "neutral"
+			state.CompletedGoals = append(state.CompletedGoals, goal)
+			abandonedCount++
+			log.Printf("[Dialogue] Auto-abandoned stuck goal (7d+ with partial progress %.0f%%): %s", 
+				goal.Progress*100, truncate(goal.Description, 60))
+		} else if len(goal.Actions) > 10 && goal.Progress < 0.5 {
+			// Abandon goals with many failed actions (>10) but low progress
+			failedActions := 0
+			for _, action := range goal.Actions {
+				if action.Status == ActionStatusCompleted {
+					resultLower := strings.ToLower(action.Result)
+					if strings.Contains(resultLower, "error") || 
+					   strings.Contains(resultLower, "failed") ||
+					   strings.Contains(resultLower, "timeout") {
+						failedActions++
+					}
+				}
+			}
+			
+			if failedActions >= 5 {
+				goal.Status = GoalStatusAbandoned
+				goal.Outcome = "bad"
+				state.CompletedGoals = append(state.CompletedGoals, goal)
+				abandonedCount++
+				log.Printf("[Dialogue] Auto-abandoned goal with too many failures (%d failed actions): %s", 
+					failedActions, truncate(goal.Description, 60))
+			} else {
+				activeGoals = append(activeGoals, goal)
+			}
 		} else {
 			activeGoals = append(activeGoals, goal)
 		}
@@ -1160,15 +1266,23 @@ func (e *Engine) formGoals(state *InternalState) []Goal {
 		description := ""
 		priority := 7
 		
-		if strings.Contains(strings.ToLower(gap), "research") ||
-		   strings.Contains(strings.ToLower(gap), "think about") ||
-		   strings.Contains(strings.ToLower(gap), "choose") ||
-		   strings.Contains(strings.ToLower(gap), "select") {
-			description = gap // Use the gap as-is for research goals
-			priority = 8 // Higher priority for explicit research requests
+		gapLower := strings.ToLower(gap)
+		
+		// Higher priority for explicit user requests
+		if strings.Contains(gapLower, "research") ||
+		   strings.Contains(gapLower, "think about") ||
+		   strings.Contains(gapLower, "choose") ||
+		   strings.Contains(gapLower, "select") {
+			description = gap
+			priority = 9 // Very high priority for explicit research requests
+		} else if strings.Contains(gapLower, "learn") ||
+		          strings.Contains(gapLower, "understand") ||
+		          strings.Contains(gapLower, "explore") {
+			description = gap
+			priority = 8 // High priority for learning goals
 		} else {
 			description = fmt.Sprintf("Learn about: %s", gap)
-			priority = 7
+			priority = 7 // Standard priority
 		}
 		
 		// Check for duplicates against active goals
@@ -1300,8 +1414,12 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 			// Calculate cosine similarity
 			similarity := cosineSimilarity(proposalEmbedding, existingEmbedding)
 			
-			// Use adaptive threshold for duplicate detection
+			// Use adaptive threshold for duplicate detection (lowered from 0.85 to 0.75)
 			threshold := e.adaptiveConfig.GetGoalSimilarityThreshold()
+			// Override if threshold is too high
+			if threshold > 0.75 {
+				threshold = 0.75
+			}
 			if similarity > threshold {
 				log.Printf("[Dialogue] Detected semantic duplicate (%.2f > %.2f threshold): '%s' ~= '%s'",
 					similarity, threshold, truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
@@ -1391,19 +1509,21 @@ func (e *Engine) detectMetaLoop(state *InternalState) (bool, string) {
 		// Extract key terms from goal description
 		desc := strings.ToLower(goal.Description)
 		
-		// Common meta-loop topics
-		if strings.Contains(desc, "memory") || strings.Contains(desc, "data") || 
-		   strings.Contains(desc, "missing") || strings.Contains(desc, "experiential") {
+		// Common meta-loop topics (narrowed definition)
+		if strings.Contains(desc, "memory system") || 
+		   strings.Contains(desc, "meta-memory") ||
+		   strings.Contains(desc, "self-awareness") {
 			topicCounts["meta-memory"]++
 		}
-		if strings.Contains(desc, "learn about") && strings.Contains(desc, "knowledge") {
+		if strings.Contains(desc, "learn about learning") || 
+		   strings.Contains(desc, "meta-learning") {
 			topicCounts["meta-learning"]++
 		}
 	}
 	
-	// If 3+ of last 5 goals are about the same meta topic, it's a loop
+	// If 4+ of last 5 goals are about the same meta topic, it's a loop (increased threshold)
 	for topic, count := range topicCounts {
-		if count >= 3 {
+		if count >= 4 {
 			log.Printf("[Dialogue] Meta-loop detected: %d/%d recent goals about '%s'", 
 				count, len(recentGoals), topic)
 			return true, topic
@@ -2236,11 +2356,18 @@ case ActionToolWebParse,
 	
 	var url string
 	
-	// First, check if previous search action stored URLs in metadata
+	// First priority: check if search evaluation selected a best URL
 	if action.Metadata != nil {
-		if urls, ok := action.Metadata["previous_search_urls"].([]string); ok && len(urls) > 0 {
+		if selectedURL, ok := action.Metadata["selected_url"].(string); ok && selectedURL != "" {
+			url = selectedURL
+			log.Printf("[Dialogue] Using evaluated best URL: %s", truncate(url, 60))
+		} else if bestURL, ok := action.Metadata["best_url"].(string); ok && bestURL != "" {
+			url = bestURL
+			log.Printf("[Dialogue] Using best URL from metadata: %s", truncate(url, 60))
+		} else if urls, ok := action.Metadata["previous_search_urls"].([]string); ok && len(urls) > 0 {
+			// Fallback: use first URL (old behavior)
 			url = urls[0]
-			log.Printf("[Dialogue] Using URL from previous search metadata: %s", truncate(url, 60))
+			log.Printf("[Dialogue] WARNING: Using first URL from search results (evaluation may have failed): %s", truncate(url, 60))
 		}
 	}
 	
@@ -2758,6 +2885,147 @@ func truncateResponse(s string, maxLen int) string {
 	return s[:maxLen] + "... (truncated)"
 }
 
+
+// evaluateSearchResults analyzes search results and selects the best URL to parse
+func (e *Engine) evaluateSearchResults(searchOutput string, goalDescription string) (string, error) {
+	urls := e.extractURLsFromSearchResults(searchOutput)
+	
+	if len(urls) == 0 {
+		return "", fmt.Errorf("no URLs found in search results")
+	}
+	
+	// Score each URL
+	type scoredURL struct {
+		url   string
+		score float64
+	}
+	
+	scored := make([]scoredURL, 0, len(urls))
+	
+	for _, url := range urls {
+		score := e.scoreURL(url, goalDescription, searchOutput)
+		scored = append(scored, scoredURL{url: url, score: score})
+		log.Printf("[Dialogue] URL score: %.2f - %s", score, truncate(url, 80))
+	}
+	
+	// Sort by score (descending)
+	for i := 0; i < len(scored); i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].score > scored[i].score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+	
+	// Return best URL (first in sorted list)
+	bestURL := scored[0].url
+	log.Printf("[Dialogue] Selected best URL (score: %.2f): %s", scored[0].score, truncate(bestURL, 80))
+	
+	return bestURL, nil
+}
+
+// scoreURL assigns a quality score to a URL based on multiple factors
+func (e *Engine) scoreURL(url string, goalDescription string, searchOutput string) float64 {
+	score := 5.0 // Base score
+	urlLower := strings.ToLower(url)
+	
+	// NEGATIVE FACTORS (check first to potentially skip URLs entirely)
+	
+	// File downloads (PDFs, etc.) - very bad (-10, essentially eliminates)
+	if strings.HasSuffix(urlLower, ".pdf") ||
+	   strings.HasSuffix(urlLower, ".doc") ||
+	   strings.HasSuffix(urlLower, ".docx") ||
+	   strings.HasSuffix(urlLower, ".ppt") ||
+	   strings.HasSuffix(urlLower, ".zip") {
+		score -= 10.0
+	}
+	
+	// Likely paywalled or login-required (-5)
+	if strings.Contains(urlLower, "/login") ||
+	   strings.Contains(urlLower, "/signin") ||
+	   strings.Contains(urlLower, "/register") ||
+	   strings.Contains(urlLower, "/subscribe") {
+		score -= 5.0
+	}
+	
+	// Low-quality domains (-3)
+	lowQualityDomains := []string{
+		"pinterest.com", "facebook.com", "twitter.com", "instagram.com",
+		"reddit.com/r/", // Reddit comments are noisy
+		"quora.com",     // Often opinion-based
+		"yahoo.com/answers",
+	}
+	
+	for _, domain := range lowQualityDomains {
+		if strings.Contains(urlLower, domain) {
+			score -= 3.0
+			break
+		}
+	}
+	
+	// POSITIVE FACTORS
+	
+	// High-quality domains (+3)
+	highQualityDomains := []string{
+		"wikipedia.org", "britannica.com", ".edu", ".gov",
+		"stanford.edu", "mit.edu", "harvard.edu",
+		"nature.com", "sciencedirect.com", "arxiv.org", "pmc.ncbi.nlm.nih.gov",
+		"github.com", "stackoverflow.com", "medium.com",
+		"theguardian.com", "bbc.com", "reuters.com", "nytimes.com",
+		"ncbi.nlm.nih.gov", "nih.gov", "cdc.gov",
+		"geeksforgeeks.org", "developer.mozilla.org", "w3schools.com",
+	}
+	
+	for _, domain := range highQualityDomains {
+		if strings.Contains(urlLower, domain) {
+			score += 3.0
+			break
+		}
+	}
+	
+	// Academic/research content (+2)
+	if strings.Contains(urlLower, "/research/") ||
+	   strings.Contains(urlLower, "/papers/") ||
+	   strings.Contains(urlLower, "/articles/") ||
+	   strings.Contains(urlLower, "/journal/") ||
+	   strings.Contains(urlLower, "/publication/") {
+		score += 2.0
+	}
+	
+	// Technical documentation (+2)
+	if strings.Contains(urlLower, "/docs/") ||
+	   strings.Contains(urlLower, "/documentation/") ||
+	   strings.Contains(urlLower, "/guide/") ||
+	   strings.Contains(urlLower, "/tutorial/") ||
+	   strings.Contains(urlLower, "/manual/") {
+		score += 2.0
+	}
+	
+	// HTTPS preferred (+0.5)
+	if strings.HasPrefix(urlLower, "https://") {
+		score += 0.5
+	}
+	
+	// Clean URLs (not too many parameters) (+1)
+	if !strings.Contains(url, "?") || strings.Count(url, "?") == 1 && strings.Count(url, "&") < 3 {
+		score += 1.0
+	}
+	
+	// Check if goal keywords appear in URL (+1 per match, max +3)
+	goalKeywords := e.extractSignificantKeywords(goalDescription)
+	keywordMatches := 0
+	for _, keyword := range goalKeywords {
+		if keywordMatches >= 3 {
+			break
+		}
+		if strings.Contains(urlLower, strings.ToLower(keyword)) {
+			score += 1.0
+			keywordMatches++
+		}
+	}
+	
+	return score
+}
 
 // extractURLsFromSearchResults extracts URLs from SearXNG search output
 func (e *Engine) extractURLsFromSearchResults(searchOutput string) []string {

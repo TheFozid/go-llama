@@ -33,8 +33,8 @@ func NewWebParserContextualTool(userAgent string, llmURL string, llmModel string
 
 	// LLM timeout should be 80% of tool timeout to allow cleanup time
 	llmTimeout := timeout * 8 / 10
-	if llmTimeout < 120*time.Second {
-		llmTimeout = 120 * time.Second // Minimum 2 minutes for contextual analysis
+	if llmTimeout < 360*time.Second {
+		llmTimeout = 360 * time.Second // Minimum 2 minutes for contextual analysis
 	}
 	
 	// Configure HTTP transport for better timeout handling
@@ -42,7 +42,7 @@ func NewWebParserContextualTool(userAgent string, llmURL string, llmModel string
 		MaxIdleConns:          10,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second, // Fail fast if LLM doesn't start responding
+		ResponseHeaderTimeout: 360 * time.Second, // Fail fast if LLM doesn't start responding
 		DisableKeepAlives:     false,
 	}
 	
@@ -112,6 +112,26 @@ func (t *WebParserContextualTool) Execute(ctx context.Context, params map[string
 			Error:    "URL must start with http:// or https://",
 			Duration: time.Since(startTime),
 		}, fmt.Errorf("invalid URL scheme")
+	}
+	
+	// Check for known problematic URL patterns
+	urlLower := strings.ToLower(url)
+	if strings.HasSuffix(urlLower, ".pdf") {
+		return &ToolResult{
+			Success:  false,
+			Error:    "Cannot parse PDF files - please search for HTML content instead",
+			Duration: time.Since(startTime),
+		}, fmt.Errorf("PDF files not supported")
+	}
+	
+	if strings.Contains(urlLower, "/login") || 
+	   strings.Contains(urlLower, "/signin") ||
+	   strings.Contains(urlLower, "/subscribe") {
+		return &ToolResult{
+			Success:  false,
+			Error:    "URL appears to require authentication - skipping",
+			Duration: time.Since(startTime),
+		}, fmt.Errorf("authentication required")
 	}
 
 	// Fetch and parse page
