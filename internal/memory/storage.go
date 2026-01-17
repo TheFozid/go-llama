@@ -399,13 +399,13 @@ func (s *Storage) Search(ctx context.Context, query RetrievalQuery, queryEmbeddi
 	}
 
 	if query.IncludeCollective {
-		should = append(should, qdrant.NewMatch("is_collective", "true"))
+		should = append(should, qdrant.NewMatch("is_collective", true))
 		log.Printf("[Storage] Added is_collective to OR filter")
 	}
 	
 	// If ONLY collective requested (no personal), use must instead of should
 	if query.IncludeCollective && !query.IncludePersonal {
-		must = append(must, qdrant.NewMatch("is_collective", "true"))
+		must = append(must, qdrant.NewMatch("is_collective", true))
 		should = nil // Clear should, use must for exclusive collective
 		log.Printf("[Storage] Using exclusive collective filter (must)")
 	}
