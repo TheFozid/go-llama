@@ -729,7 +729,6 @@ if inMetaLoop {
 							break
 						}
 					}
-					}
 				} else {
 					// Goal has pending actions - log and wait for next cycle
 					pendingCount := 0
