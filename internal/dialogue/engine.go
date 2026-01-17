@@ -598,18 +598,34 @@ if inMetaLoop {
 		}
 		
 // If no actions were executed, check if we should create new actions
-			if !actionExecuted {
-				// Check if all actions are completed (need to create more)
-				allActionsCompleted := len(topGoal.Actions) > 0
-				for _, action := range topGoal.Actions {
-					if action.Status == ActionStatusPending || action.Status == ActionStatusInProgress {
-						allActionsCompleted = false
-						break
-					}
-				}
-				
-				// Create new actions if: (1) no actions at all, OR (2) all actions completed
-				if len(topGoal.Actions) == 0 || allActionsCompleted {
+if !actionExecuted {
+    // Check for stale in-progress actions (older than 5 minutes)
+    now := time.Now()
+    for i := range topGoal.Actions {
+        action := &topGoal.Actions[i]
+        if action.Status == ActionStatusInProgress {
+            age := now.Sub(action.Timestamp)
+            if age > 5*time.Minute {
+                log.Printf("[Dialogue] Found stale in-progress action (age: %s), marking as failed: %s",
+                    age.Round(time.Second), truncate(action.Description, 60))
+                action.Status = ActionStatusCompleted
+                action.Result = fmt.Sprintf("TIMEOUT: Action abandoned after %s", age.Round(time.Second))
+                topGoal.Outcome = "bad"
+            }
+        }
+    }
+    
+    // Check if all actions are completed (need to create more)
+    allActionsCompleted := len(topGoal.Actions) > 0
+    for _, action := range topGoal.Actions {
+        if action.Status == ActionStatusPending || action.Status == ActionStatusInProgress {
+            allActionsCompleted = false
+            break
+        }
+    }
+    
+    // Create new actions if: (1) no actions at all, OR (2) all actions completed
+    if len(topGoal.Actions) == 0 || allActionsCompleted {
 					goalThought, tokens, err := e.thinkAboutGoal(ctx, &topGoal)
 					if err != nil {
 						log.Printf("[Dialogue] WARNING: Failed to think about goal: %v", err)
