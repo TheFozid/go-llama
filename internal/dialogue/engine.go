@@ -729,16 +729,21 @@ if inMetaLoop {
 							break
 						}
 					}
-				} else {
-					// Goal has pending actions - log and wait for next cycle
-					pendingCount := 0
-					for _, action := range topGoal.Actions {
-						if action.Status == ActionStatusPending {
-							pendingCount++
-						}
-					}
-					log.Printf("[Dialogue] Goal has %d pending actions, will execute next cycle", pendingCount)
-				}
+} else {
+    // Goal has pending actions - log and wait for next cycle
+    pendingCount := 0
+    completedCount := 0
+    for _, action := range topGoal.Actions {
+        if action.Status == ActionStatusPending {
+            pendingCount++
+        }
+        if action.Status == ActionStatusCompleted {
+            completedCount++
+        }
+    }
+    log.Printf("[Dialogue] DEBUG: Goal '%s' has %d total actions (%d pending, %d completed)", 
+        truncate(topGoal.Description, 40), len(topGoal.Actions), pendingCount, completedCount)
+}
 			}
 		
 // Update goal progress based on completed actions
