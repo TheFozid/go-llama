@@ -652,6 +652,15 @@ if inMetaLoop {
 									Timestamp:   time.Now(),
 								}
 								topGoal.Actions = append(topGoal.Actions, searchAction)
+								
+								// CRITICAL FIX: Update goal in state immediately
+								for i := range state.ActiveGoals {
+									if state.ActiveGoals[i].ID == topGoal.ID {
+										state.ActiveGoals[i] = topGoal
+										log.Printf("[Dialogue] ✓ Updated goal in state with %d actions (research plan fallback)", len(topGoal.Actions))
+										break
+									}
+								}
 							} else {
 								topGoal.ResearchPlan = plan
 								thoughtCount++
@@ -673,6 +682,15 @@ if inMetaLoop {
 							if nextAction != nil {
 								topGoal.Actions = append(topGoal.Actions, *nextAction)
 								log.Printf("[Dialogue] ✓ Created action: %s", nextAction.Description)
+								
+								// CRITICAL FIX: Update goal in state immediately
+								for i := range state.ActiveGoals {
+									if state.ActiveGoals[i].ID == topGoal.ID {
+										state.ActiveGoals[i] = topGoal
+										log.Printf("[Dialogue] ✓ Updated goal in state with %d actions", len(topGoal.Actions))
+										break
+									}
+								}
 							} else {
 								// All questions complete, create synthesis action
 								topGoal.ResearchPlan.SynthesisNeeded = true
@@ -701,6 +719,16 @@ if inMetaLoop {
 							// Parse action will be created automatically after search completes
 							log.Printf("[Dialogue] Parse action will be created after search returns URLs")
 						}
+					}
+					
+					// CRITICAL FIX: Update goal in state immediately after creating actions
+					for i := range state.ActiveGoals {
+						if state.ActiveGoals[i].ID == topGoal.ID {
+							state.ActiveGoals[i] = topGoal
+							log.Printf("[Dialogue] ✓ Updated goal in state with %d actions", len(topGoal.Actions))
+							break
+						}
+					}
 					}
 				} else {
 					// Goal has pending actions - log and wait for next cycle
@@ -2152,11 +2180,7 @@ case ActionToolSearch:
 	}
 	
 log.Printf("[Dialogue] Calling search tool with query: %s", truncate(action.Description, 80))
-execCtx := tools.ExecutionContext{
-	IsInteractive: false,
-	Timeout:       time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second,
-}
-result, err := e.toolRegistry.Execute(ctx, tools.ToolNameSearch, params, execCtx)
+result, err := e.toolRegistry.ExecuteIdle(ctx, tools.ToolNameSearch, params)
 	
 	elapsed := time.Since(startTime)
 	
@@ -2274,11 +2298,7 @@ case ActionToolWebParse,
 	
 	// Execute the appropriate web parse tool
 log.Printf("[Dialogue] Calling web parse tool '%s' for URL: %s", action.Tool, truncate(url, 80))
-execCtx := tools.ExecutionContext{
-	IsInteractive: false,
-	Timeout:       time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second,
-}
-result, err := e.toolRegistry.Execute(ctx, action.Tool, params, execCtx)
+result, err := e.toolRegistry.ExecuteIdle(ctx, action.Tool, params)
 	
 	elapsed := time.Since(startTime)
 	
