@@ -486,22 +486,47 @@ if inMetaLoop {
 				// Execute tool
 				result, err := e.executeAction(ctx, action)
 				
-				// If this was a search, evaluate results and create parse action for best URL
-				if err == nil && action.Tool == ActionToolSearch {
-					// Evaluate search results and select best URL
-					bestURL, evalErr := e.evaluateSearchResults(result, topGoal.Description)
-					
-					if evalErr != nil {
-						log.Printf("[Dialogue] WARNING: Failed to evaluate search results: %v", evalErr)
-						action.Result = fmt.Sprintf("Search completed but no suitable URLs found: %v", evalErr)
-						action.Status = ActionStatusCompleted
-						topGoal.Outcome = "bad"
-					} else {
+// If this was a search, extract URLs and create parse action
+if err == nil && action.Tool == ActionToolSearch {
+    // Extract URLs from search results
+    urls := e.extractURLsFromSearchResults(result)
+    
+    if len(urls) == 0 {
+        log.Printf("[Dialogue] WARNING: No URLs found in search results")
+        action.Result = "Search completed but no URLs found"
+        action.Status = ActionStatusCompleted
+        topGoal.Outcome = "bad"
+    } else {
+        // Use LLM-based evaluation to select best URL
+        log.Printf("[Dialogue] Evaluating %d search results with LLM...", len(urls))
+        
+        evaluation, evalErr := e.evaluateSearchResults(ctx, result, topGoal.Description)
+        
+        if evalErr != nil || !evaluation.ShouldProceed {
+            // Evaluation failed or no good URLs found
+            if evalErr != nil {
+                log.Printf("[Dialogue] WARNING: Search evaluation failed: %v", evalErr)
+            } else {
+                log.Printf("[Dialogue] Search evaluation determined no suitable URLs")
+            }
+            
+            action.Result = "Search completed but no suitable URLs found"
+            action.Status = ActionStatusCompleted
+            topGoal.Outcome = "bad"
+        } else {
+            // Evaluation succeeded - use best URL
+            bestURL := evaluation.BestURL
+            log.Printf("[Dialogue] ✓ LLM selected URL (confidence: %.2f): %s", 
+                evaluation.Confidence, truncate(bestURL, 60))
+            log.Printf("[Dialogue] Selection reasoning: %s", truncate(evaluation.Reasoning, 100))
 						// Store best URL in metadata
 						if action.Metadata == nil {
 							action.Metadata = make(map[string]interface{})
 						}
 						action.Metadata["best_url"] = bestURL
+						action.Metadata["eval_confidence"] = evaluation.Confidence
+						action.Metadata["eval_reasoning"] = evaluation.Reasoning
+						action.Metadata["fallback_urls"] = evaluation.FallbackURLs
 						
 						// Check if there's already a pending parse action
 						hasParseAction := false
@@ -2885,147 +2910,6 @@ func truncateResponse(s string, maxLen int) string {
 	return s[:maxLen] + "... (truncated)"
 }
 
-
-// evaluateSearchResults analyzes search results and selects the best URL to parse
-func (e *Engine) evaluateSearchResults(searchOutput string, goalDescription string) (string, error) {
-	urls := e.extractURLsFromSearchResults(searchOutput)
-	
-	if len(urls) == 0 {
-		return "", fmt.Errorf("no URLs found in search results")
-	}
-	
-	// Score each URL
-	type scoredURL struct {
-		url   string
-		score float64
-	}
-	
-	scored := make([]scoredURL, 0, len(urls))
-	
-	for _, url := range urls {
-		score := e.scoreURL(url, goalDescription, searchOutput)
-		scored = append(scored, scoredURL{url: url, score: score})
-		log.Printf("[Dialogue] URL score: %.2f - %s", score, truncate(url, 80))
-	}
-	
-	// Sort by score (descending)
-	for i := 0; i < len(scored); i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[j].score > scored[i].score {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
-		}
-	}
-	
-	// Return best URL (first in sorted list)
-	bestURL := scored[0].url
-	log.Printf("[Dialogue] Selected best URL (score: %.2f): %s", scored[0].score, truncate(bestURL, 80))
-	
-	return bestURL, nil
-}
-
-// scoreURL assigns a quality score to a URL based on multiple factors
-func (e *Engine) scoreURL(url string, goalDescription string, searchOutput string) float64 {
-	score := 5.0 // Base score
-	urlLower := strings.ToLower(url)
-	
-	// NEGATIVE FACTORS (check first to potentially skip URLs entirely)
-	
-	// File downloads (PDFs, etc.) - very bad (-10, essentially eliminates)
-	if strings.HasSuffix(urlLower, ".pdf") ||
-	   strings.HasSuffix(urlLower, ".doc") ||
-	   strings.HasSuffix(urlLower, ".docx") ||
-	   strings.HasSuffix(urlLower, ".ppt") ||
-	   strings.HasSuffix(urlLower, ".zip") {
-		score -= 10.0
-	}
-	
-	// Likely paywalled or login-required (-5)
-	if strings.Contains(urlLower, "/login") ||
-	   strings.Contains(urlLower, "/signin") ||
-	   strings.Contains(urlLower, "/register") ||
-	   strings.Contains(urlLower, "/subscribe") {
-		score -= 5.0
-	}
-	
-	// Low-quality domains (-3)
-	lowQualityDomains := []string{
-		"pinterest.com", "facebook.com", "twitter.com", "instagram.com",
-		"reddit.com/r/", // Reddit comments are noisy
-		"quora.com",     // Often opinion-based
-		"yahoo.com/answers",
-	}
-	
-	for _, domain := range lowQualityDomains {
-		if strings.Contains(urlLower, domain) {
-			score -= 3.0
-			break
-		}
-	}
-	
-	// POSITIVE FACTORS
-	
-	// High-quality domains (+3)
-	highQualityDomains := []string{
-		"wikipedia.org", "britannica.com", ".edu", ".gov",
-		"stanford.edu", "mit.edu", "harvard.edu",
-		"nature.com", "sciencedirect.com", "arxiv.org", "pmc.ncbi.nlm.nih.gov",
-		"github.com", "stackoverflow.com", "medium.com",
-		"theguardian.com", "bbc.com", "reuters.com", "nytimes.com",
-		"ncbi.nlm.nih.gov", "nih.gov", "cdc.gov",
-		"geeksforgeeks.org", "developer.mozilla.org", "w3schools.com",
-	}
-	
-	for _, domain := range highQualityDomains {
-		if strings.Contains(urlLower, domain) {
-			score += 3.0
-			break
-		}
-	}
-	
-	// Academic/research content (+2)
-	if strings.Contains(urlLower, "/research/") ||
-	   strings.Contains(urlLower, "/papers/") ||
-	   strings.Contains(urlLower, "/articles/") ||
-	   strings.Contains(urlLower, "/journal/") ||
-	   strings.Contains(urlLower, "/publication/") {
-		score += 2.0
-	}
-	
-	// Technical documentation (+2)
-	if strings.Contains(urlLower, "/docs/") ||
-	   strings.Contains(urlLower, "/documentation/") ||
-	   strings.Contains(urlLower, "/guide/") ||
-	   strings.Contains(urlLower, "/tutorial/") ||
-	   strings.Contains(urlLower, "/manual/") {
-		score += 2.0
-	}
-	
-	// HTTPS preferred (+0.5)
-	if strings.HasPrefix(urlLower, "https://") {
-		score += 0.5
-	}
-	
-	// Clean URLs (not too many parameters) (+1)
-	if !strings.Contains(url, "?") || strings.Count(url, "?") == 1 && strings.Count(url, "&") < 3 {
-		score += 1.0
-	}
-	
-	// Check if goal keywords appear in URL (+1 per match, max +3)
-	goalKeywords := e.extractSignificantKeywords(goalDescription)
-	keywordMatches := 0
-	for _, keyword := range goalKeywords {
-		if keywordMatches >= 3 {
-			break
-		}
-		if strings.Contains(urlLower, strings.ToLower(keyword)) {
-			score += 1.0
-			keywordMatches++
-		}
-	}
-	
-	return score
-}
 
 // extractURLsFromSearchResults extracts URLs from SearXNG search output
 func (e *Engine) extractURLsFromSearchResults(searchOutput string) []string {
