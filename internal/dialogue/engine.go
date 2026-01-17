@@ -2151,8 +2151,12 @@ case ActionToolSearch:
 		"query": action.Description,
 	}
 	
-	log.Printf("[Dialogue] Calling search tool with query: %s", truncate(action.Description, 80))
-	result, err := e.toolRegistry.ExecuteIdle(ctx, tools.ToolNameSearch, params)
+log.Printf("[Dialogue] Calling search tool with query: %s", truncate(action.Description, 80))
+execCtx := tools.ExecutionContext{
+	IsInteractive: false,
+	Timeout:       time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second,
+}
+result, err := e.toolRegistry.Execute(ctx, tools.ToolNameSearch, params, execCtx)
 	
 	elapsed := time.Since(startTime)
 	
@@ -2269,8 +2273,12 @@ case ActionToolWebParse,
 	}
 	
 	// Execute the appropriate web parse tool
-	log.Printf("[Dialogue] Calling web parse tool '%s' for URL: %s", action.Tool, truncate(url, 80))
-	result, err := e.toolRegistry.ExecuteIdle(ctx, action.Tool, params)
+log.Printf("[Dialogue] Calling web parse tool '%s' for URL: %s", action.Tool, truncate(url, 80))
+execCtx := tools.ExecutionContext{
+	IsInteractive: false,
+	Timeout:       time.Duration(e.adaptiveConfig.GetToolTimeout()) * time.Second,
+}
+result, err := e.toolRegistry.Execute(ctx, action.Tool, params, execCtx)
 	
 	elapsed := time.Since(startTime)
 	
