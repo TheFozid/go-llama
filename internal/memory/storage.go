@@ -118,7 +118,6 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 	// For each required index, check if it exists with correct type
 	for _, idx := range indexes {
 		needsRecreation := false
-		indexExists := false
 		
 		// Check if index exists and has correct type
 		if collectionInfo != nil && collectionInfo.PayloadSchema != nil {

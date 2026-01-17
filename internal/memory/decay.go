@@ -49,7 +49,7 @@ type DecayWorker struct {
 	embedder               *Embedder
 	taggerQueue            TaggerQueueInterface
 	linker                 *Linker
-	db                     *gorm.DB
+	db                     *gorm.DB   // Database handle (used for migration status)
 	llmURL                 string     // LLM URL for principle generation
 	llmModel               string     // LLM model name for principle generation
 	llmClient              interface{} // LLM queue client for principle generation
@@ -70,7 +70,6 @@ type DecayWorker struct {
 	lastPrincipleEvolution time.Time
 	evolutionMutex         sync.Mutex // Protects lastPrincipleEvolution
 	migrationComplete      bool       // One-time memory_id migration flag (in-memory only, check DB on start)
-	db                     *gorm.DB   // Database handle for migration status
 }
 
 // TierRules defines age thresholds for tier transitions
@@ -132,7 +131,6 @@ func NewDecayWorker(
 		stopChan:               make(chan struct{}),
 		lastPrincipleEvolution: time.Now(), // Initialize to now
 		migrationComplete:      false, // Will check DB on first cycle
-		db:                     db,
 	}
 }
 
