@@ -122,7 +122,6 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 		// Check if index exists and has correct type
 		if collectionInfo != nil && collectionInfo.PayloadSchema != nil {
 			if existingField, ok := collectionInfo.PayloadSchema[idx.field]; ok {
-				indexExists = true
 				expectedType := getQdrantDataType(idx.typ)
 				actualType := existingField.DataType
 				
