@@ -105,19 +105,39 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 	if err != nil {
 		log.Printf("[Storage] Warning: Could not get collection info: %v", err)
 		// Continue anyway - we'll try to create indexes
+	} else {
+		// Log existing schema for debugging
+		if collectionInfo.PayloadSchema != nil {
+			log.Printf("[Storage] Current payload schema:")
+			for fieldName, fieldInfo := range collectionInfo.PayloadSchema {
+				log.Printf("[Storage]   %s: %v", fieldName, fieldInfo.DataType)
+			}
+		}
 	}
 
 	// For each required index, check if it exists with correct type
 	for _, idx := range indexes {
 		needsRecreation := false
+		indexExists := false
 		
 		// Check if index exists and has correct type
 		if collectionInfo != nil && collectionInfo.PayloadSchema != nil {
 			if existingField, ok := collectionInfo.PayloadSchema[idx.field]; ok {
+				indexExists = true
 				expectedType := getQdrantDataType(idx.typ)
 				actualType := existingField.DataType
 				
-				if actualType != expectedType {
+				// Special handling for is_collective field (common migration issue)
+				if idx.field == "is_collective" {
+					if actualType != expectedType {
+						log.Printf("[Storage] CRITICAL: Index 'is_collective' has wrong type (expected: Bool/%v, actual: %v)", 
+							expectedType, actualType)
+						log.Printf("[Storage] This will cause collective memory searches to fail!")
+						needsRecreation = true
+					} else {
+						log.Printf("[Storage] ✓ Index 'is_collective' has correct type: Bool")
+					}
+				} else if actualType != expectedType {
 					log.Printf("[Storage] Index '%s' has wrong type (expected: %v, actual: %v) - recreating", 
 						idx.field, expectedType, actualType)
 					needsRecreation = true
@@ -133,8 +153,13 @@ func (s *Storage) ensureCollection(ctx context.Context) error {
 					}
 				} else {
 					// Index exists with correct type, skip
+					if idx.field == "is_collective" {
+						log.Printf("[Storage] ✓ Index 'is_collective' verified (type: Bool)")
+					}
 					continue
 				}
+			} else if idx.field == "is_collective" {
+				log.Printf("[Storage] WARNING: Index 'is_collective' does not exist - creating")
 			}
 		}
 		

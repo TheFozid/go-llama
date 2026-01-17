@@ -19,6 +19,7 @@ type Goal struct {
 	Status       string         `json:"status"` // "active", "completed", "abandoned"
 	Outcome      string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
 	ResearchPlan *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
+	FailureCount int            `json:"failure_count"` // NEW: Track consecutive failures before abandoning
 }
 
 // Action represents a step taken toward completing a goal

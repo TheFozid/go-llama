@@ -598,15 +598,19 @@ if err == nil && action.Tool == ActionToolSearch {
 					action.Result = fmt.Sprintf("ERROR: %v", err)
 					action.Status = ActionStatusCompleted
 					
-					// Mark goal as having failures
-					topGoal.Outcome = "bad"
-
+					// Track failures - don't abandon on first failure
+					topGoal.FailureCount++
 					
+					// Only mark as bad after 3+ consecutive failures
+					if topGoal.FailureCount >= 3 {
+						topGoal.Outcome = "bad"
+						log.Printf("[Dialogue] ⚠ Goal marked as bad after %d consecutive failures", topGoal.FailureCount)
+					} else {
+						log.Printf("[Dialogue] ⚠ Action failed (failure %d/3), will retry", topGoal.FailureCount)
+					}
 					
 					// Don't increment actionCount - this was a failure
 					actionExecuted = true // Still counts as execution attempt
-					
-					log.Printf("[Dialogue] ⚠ Action failed, goal marked as bad outcome")
 
 } else if action.Tool == ActionToolWebParseContextual || 
           action.Tool == ActionToolWebParseGeneral ||
@@ -819,13 +823,26 @@ if err == nil && action.Tool == ActionToolSearch {
 						log.Printf("[Dialogue] Action completed but result indicates failure")
 						action.Result = result
 						action.Status = ActionStatusCompleted
-						topGoal.Outcome = "bad"
+						
+						// Track failures - don't abandon on first failure
+						topGoal.FailureCount++
+						if topGoal.FailureCount >= 3 {
+							topGoal.Outcome = "bad"
+							log.Printf("[Dialogue] ⚠ Goal marked as bad after %d failures", topGoal.FailureCount)
+						}
 						actionExecuted = true
 					} else {
 						action.Result = result
 						action.Status = ActionStatusCompleted
 						actionCount++
 						actionExecuted = true
+						
+						// Reset failure count on success
+						if topGoal.FailureCount > 0 {
+							log.Printf("[Dialogue] Action succeeded, resetting failure count (was %d)", topGoal.FailureCount)
+							topGoal.FailureCount = 0
+						}
+						
 						log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
 					}
 					action.Timestamp = time.Now()
@@ -1603,7 +1620,6 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 		}
 	}
 
-
 	// Keyword overlap detection (high precision, catches semantic duplicates)
 	proposalKeywords := e.extractSignificantKeywords(proposalDesc)
 	for _, existingGoal := range existingGoals {
@@ -1612,8 +1628,8 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 		// Calculate keyword overlap ratio
 		overlap := e.calculateKeywordOverlap(proposalKeywords, existingKeywords)
 		
-		// If 60%+ keywords overlap, it's likely a duplicate
-		if overlap >= 0.60 {
+		// If 80%+ keywords overlap, it's likely a duplicate (raised from 60% to allow more diversity)
+		if overlap >= 0.80 {
 			log.Printf("[Dialogue] Duplicate detected (keyword overlap %.0f%%): '%s' ~= '%s'",
 				overlap*100, truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
 			log.Printf("[Dialogue]   Proposal keywords: %v", proposalKeywords)
@@ -1621,7 +1637,6 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 			return true
 		}
 	}
-
 	
 	// Semantic similarity check using embeddings
 	// Only check if we have at least 3 existing goals (avoid overhead for small lists)
@@ -1642,12 +1657,20 @@ func (e *Engine) isGoalDuplicate(ctx context.Context, proposalDesc string, exist
 			// Calculate cosine similarity
 			similarity := cosineSimilarity(proposalEmbedding, existingEmbedding)
 			
-			// Use adaptive threshold for duplicate detection (lowered from 0.85 to 0.75)
+			// Use adaptive threshold for duplicate detection (bounded between 0.70-0.80)
 			threshold := e.adaptiveConfig.GetGoalSimilarityThreshold()
-			// Override if threshold is too high
-			if threshold > 0.75 {
-				threshold = 0.75
+			// Cap threshold at 0.80 to allow reasonable variation (was 0.75)
+			if threshold > 0.80 {
+				threshold = 0.80
 			}
+			// But never go below 0.70 to still catch obvious duplicates
+			if threshold < 0.70 {
+				threshold = 0.70
+			}
+			
+			log.Printf("[Dialogue] Using semantic similarity threshold: %.2f (adaptive: %.2f)", 
+				threshold, e.adaptiveConfig.GetGoalSimilarityThreshold())
+			
 			if similarity > threshold {
 				log.Printf("[Dialogue] Detected semantic duplicate (%.2f > %.2f threshold): '%s' ~= '%s'",
 					similarity, threshold, truncate(proposalDesc, 40), truncate(existingGoal.Description, 40))
@@ -2152,9 +2175,7 @@ Break this into 3-7 logical sub-questions that:
 2. Build progressively to specific details
 3. Include verification/cross-checking
 
-CRITICAL: Respond with ONLY the research_plan S-expression. Do NOT wrap it in (reasoning ...) or any other container.
-
-REQUIRED FORMAT (copy this structure exactly):
+REQUIRED FORMAT - Respond with S-expression in this exact structure:
 
 (research_plan
   (root_question "Main question being answered")
@@ -2173,7 +2194,7 @@ REQUIRED FORMAT (copy this structure exactly):
       (deps ("q1")))))
 
 IMPORTANT RULES:
-- Start with (research_plan NOT (reasoning (research_plan
+- Output the research_plan block directly (wrapping in (reasoning ...) is acceptable)
 - Use underscores: research_plan, root_question, sub_questions, search_query
 - IDs must be unique: "q1", "q2", "q3", etc.
 - deps is a list: use () for no deps, ("q1") for one dep, ("q1" "q2") for multiple
@@ -2222,15 +2243,15 @@ EXAMPLE (correct format):
     content = strings.TrimSuffix(content, "```")
     content = strings.TrimSpace(content)
     
-    // IMPROVED PARSING: Try multiple strategies
+    // IMPROVED PARSING: Use recursive search first (most robust)
     
-    // Strategy 1: Direct search (original behavior)
-    planBlocks := findBlocks(content, "research_plan")
+    // Strategy 1: Recursive search (handles nested structures like (reasoning (research_plan ...)))
+    planBlocks := findBlocksRecursive(content, "research_plan")
     
-    // Strategy 2: Recursive search (handles nested structures)
+    // Strategy 2: Direct search as fallback
     if len(planBlocks) == 0 {
-        log.Printf("[Dialogue] No research_plan at top level, trying recursive search...")
-        planBlocks = findBlocksRecursive(content, "research_plan")
+        log.Printf("[Dialogue] Recursive search failed, trying direct search...")
+        planBlocks = findBlocks(content, "research_plan")
     }
     
     // Strategy 3: Regex fallback (handles malformed S-expressions)

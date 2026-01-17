@@ -13,16 +13,17 @@ import (
 
 // DialogueState represents the persistent internal state (singleton)
 type DialogueState struct {
-	ID             int            `gorm:"primaryKey" json:"id"`
-	ActiveGoals    datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"active_goals"`
-	CompletedGoals datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_goals"`
-	KnowledgeGaps  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"knowledge_gaps"`
-	RecentFailures datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"recent_failures"`
-	Patterns       datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
-	LastCycleTime  time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
-	CycleCount     int            `gorm:"not null;default:0" json:"cycle_count"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	ID                        int            `gorm:"primaryKey" json:"id"`
+	ActiveGoals               datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"active_goals"`
+	CompletedGoals            datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_goals"`
+	KnowledgeGaps             datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"knowledge_gaps"`
+	RecentFailures            datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"recent_failures"`
+	Patterns                  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
+	LastCycleTime             time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
+	CycleCount                int            `gorm:"not null;default:0" json:"cycle_count"`
+	MigrationMemoryIDComplete bool           `gorm:"not null;default:false" json:"migration_memory_id_complete"` // NEW: Track if memory_id migration ran
+	CreatedAt                 time.Time      `json:"created_at"`
+	UpdatedAt                 time.Time      `json:"updated_at"`
 }
 
 // TableName specifies the table name for GORM

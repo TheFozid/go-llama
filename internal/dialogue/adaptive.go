@@ -127,6 +127,13 @@ func (ac *AdaptiveConfig) UpdateMetrics(ctx context.Context, state *InternalStat
 		timeoutMultiplier *= 1.5 // Add 50% more time
 		log.Printf("[AdaptiveConfig] High timeout rate detected (%.0f%%), increasing timeout multiplier to %.1fx",
 			timeoutRate*100, timeoutMultiplier)
+	} else if timeoutRate < 0.15 { // Low timeout rate - can reduce timeout
+		timeoutMultiplier *= 0.85 // Reduce by 15% to improve efficiency
+		if timeoutMultiplier < 1.0 {
+			timeoutMultiplier = 1.0 // Never go below base
+		}
+		log.Printf("[AdaptiveConfig] Low timeout rate detected (%.0f%%), reducing timeout multiplier to %.1fx",
+			timeoutRate*100, timeoutMultiplier)
 	}
 	
 	ac.toolTimeout = int(float64(ac.baseToolTimeout) * timeoutMultiplier)

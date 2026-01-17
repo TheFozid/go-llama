@@ -59,12 +59,40 @@ This process produces higher-quality responses than naive web-injection — fast
 
 GrowerAI is an optional perpetual learning system that transforms the LLM from a stateless chatbot into an entity that learns and evolves through continuous experience. Instead of isolated chat sessions, it maintains a single continuous memory substrate across all interactions.
 
-**Key concepts:**
-* **Space-based memory management** - Stores up to 1,000,000 memories (~2.7 GB) with intelligent compression when capacity limits are reached
-* **Tiered memory architecture** - Recent → Medium → Long → Ancient, with automatic compression and concept extraction
-* **Good/bad outcome learning** - Every interaction is tagged and the system learns from what works and what doesn't
-* **Dynamic principles (10 Commandments)** - Replaces static system prompts with learned behavioral rules that evolve over time
-* **Neural memory linking** - Memories form a knowledge graph, enabling associative retrieval and pattern recognition
+**Core Architecture:**
+* **Tiered memory system** - Recent → Medium → Long → Ancient with automatic aging and compression
+* **Space-based memory management** - Up to 1,000,000 memories (~2.7 GB) with intelligent compression at 90% capacity
+* **Vector storage** - Qdrant-based semantic memory with embedding-driven retrieval
+* **LLM queue manager** - Concurrent job processing (2 slots) with priority scheduling for critical vs background tasks
+* **Circuit breaker** - Automatic LLM failure protection (3 failure threshold, 5 minute timeout)
+
+**Memory & Learning:**
+* **Outcome tagging** - Every interaction tagged as good/bad for learning patterns
+* **Semantic linking** - Automatic memory cross-referencing based on similarity (0.70 threshold, max 10 links per memory)
+* **Duplicate consolidation** - Detects and merges semantically identical memories
+* **Trust scoring** - Dynamic confidence calculation based on memory usage and outcomes
+* **Link pruning** - Removes weak connections to maintain memory graph quality
+
+**Autonomous Behavior:**
+* **Dialogue worker** - Autonomous reflection and goal-driven actions every 3±1 minutes
+* **Goal management** - Creates, pursues, and abandons learning objectives based on knowledge gaps
+* **Adaptive thresholds** - Self-adjusts search sensitivity and timeouts based on success rates
+* **Enhanced reflection** - S-expression based structured reasoning for decision-making
+* **Pattern detection** - Identifies recurring themes and failure modes
+
+**Web Research Tools:**
+* **SearxNG integration** - Semantic web search with result filtering
+* **Web parsing suite** - 4 specialized tools for different content extraction needs:
+  - Metadata extraction (lightweight structure analysis)
+  - General summarization (500 token quick facts)
+  - Contextual extraction (1500 token goal-driven research)
+  - Chunked reading (500 token incremental access for large documents)
+
+**Maintenance Workers:**
+* **Compression worker** - Runs every 6 hours to manage memory tiers and consolidate duplicates
+* **Link worker** - Runs every 6 hours to create semantic connections between memories
+* **Principle evolution** - Updates behavioral rules every 6 hours based on learned patterns
+* **Async tagger queue** - 3 workers processing memory tagging jobs (1000 job queue)
 
 **Configuration:**
 

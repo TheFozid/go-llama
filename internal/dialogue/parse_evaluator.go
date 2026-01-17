@@ -185,11 +185,11 @@ func (e *Engine) parseParseEvaluation(rawResponse string) (*ParseEvaluation, err
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 	
-	// Find parse_evaluation block
-	evalBlocks := findBlocks(content, "parse_evaluation")
+	// Find parse_evaluation block using recursive search (handles nested structures)
+	evalBlocks := findBlocksRecursive(content, "parse_evaluation")
 	if len(evalBlocks) == 0 {
 		// Try with hyphen
-		evalBlocks = findBlocks(content, "parse-evaluation")
+		evalBlocks = findBlocksRecursive(content, "parse-evaluation")
 	}
 	
 	if len(evalBlocks) == 0 {

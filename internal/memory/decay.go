@@ -69,7 +69,8 @@ type DecayWorker struct {
 	stopChan               chan struct{}
 	lastPrincipleEvolution time.Time
 	evolutionMutex         sync.Mutex // Protects lastPrincipleEvolution
-	migrationComplete      bool       // One-time memory_id migration flag
+	migrationComplete      bool       // One-time memory_id migration flag (in-memory only, check DB on start)
+	db                     *gorm.DB   // Database handle for migration status
 }
 
 // TierRules defines age thresholds for tier transitions
@@ -130,7 +131,8 @@ func NewDecayWorker(
 		compressionWeights:     compressionWeights,
 		stopChan:               make(chan struct{}),
 		lastPrincipleEvolution: time.Now(), // Initialize to now
-		migrationComplete:      false, // Will run on first cycle
+		migrationComplete:      false, // Will check DB on first cycle
+		db:                     db,
 	}
 }
 
@@ -167,14 +169,40 @@ func (w *DecayWorker) runCompressionCycle() {
 	startTime := time.Now()
 	ctx := context.Background()
 	
-	// PHASE 0: One-time migration (runs only on first cycle)
+	// PHASE 0: One-time migration (check DB status, run if needed)
 	if !w.migrationComplete {
-		log.Println("[DecayWorker] PHASE 0: Running one-time memory_id migration...")
-		if err := w.storage.MigrateMemoryIDs(ctx); err != nil {
-			log.Printf("[DecayWorker] ERROR in migration phase: %v", err)
-		} else {
+		// Check database to see if migration already ran
+		var state struct {
+			MigrationMemoryIDComplete bool
+		}
+		err := w.db.Table("growerai_dialogue_state").
+			Select("migration_memory_id_complete").
+			Where("id = ?", 1).
+			First(&state).Error
+		
+		if err != nil {
+			log.Printf("[DecayWorker] WARNING: Could not check migration status: %v", err)
+		} else if state.MigrationMemoryIDComplete {
 			w.migrationComplete = true
-			log.Println("[DecayWorker] ✓ Migration complete, will not run again")
+			log.Println("[DecayWorker] ✓ Migration already completed (from DB), skipping")
+		} else {
+			log.Println("[DecayWorker] PHASE 0: Running one-time memory_id migration...")
+			if err := w.storage.MigrateMemoryIDs(ctx); err != nil {
+				log.Printf("[DecayWorker] ERROR in migration phase: %v", err)
+			} else {
+				w.migrationComplete = true
+				
+				// Mark migration as complete in database
+				err := w.db.Table("growerai_dialogue_state").
+					Where("id = ?", 1).
+					Update("migration_memory_id_complete", true).Error
+				
+				if err != nil {
+					log.Printf("[DecayWorker] WARNING: Failed to persist migration status: %v", err)
+				} else {
+					log.Println("[DecayWorker] ✓ Migration complete and persisted to DB")
+				}
+			}
 		}
 	}
 	
