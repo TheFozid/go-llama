@@ -3096,8 +3096,15 @@ func (e *Engine) parseActionFromPlan(planStep string) Action {
 	tool := ActionToolSearch // Default to search
 	planLower := strings.ToLower(planStep)
 	
-	if strings.Contains(planLower, "parse") || strings.Contains(planLower, "read") || strings.Contains(planLower, "fetch") {
-		tool = ActionToolWebParse
+	// Map to specific registered tools (not deprecated generic web_parse)
+	if strings.Contains(planLower, "contextual") || strings.Contains(planLower, "purpose") {
+		tool = ActionToolWebParseContextual
+	} else if strings.Contains(planLower, "chunk") || strings.Contains(planLower, "incremental") {
+		tool = ActionToolWebParseChunked
+	} else if strings.Contains(planLower, "metadata") || strings.Contains(planLower, "lightweight") {
+		tool = ActionToolWebParseMetadata
+	} else if strings.Contains(planLower, "parse") || strings.Contains(planLower, "read") || strings.Contains(planLower, "fetch") {
+		tool = ActionToolWebParseGeneral // Default parse tool
 	} else if strings.Contains(planLower, "search") || strings.Contains(planLower, "find") || strings.Contains(planLower, "look up") {
 		tool = ActionToolSearch
 	}
