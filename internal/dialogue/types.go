@@ -20,6 +20,9 @@ type Goal struct {
 	Outcome      string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
 	ResearchPlan *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
 	FailureCount int            `json:"failure_count"` // NEW: Track consecutive failures before abandoning
+    Tier            string   `json:"tier"` // "primary", "secondary"
+    SupportsGoals   []string `json:"supports_goals,omitempty"` // IDs of primary goals this supports
+    DependencyScore float64  `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
 }
 
 // Action represents a step taken toward completing a goal
@@ -311,3 +314,11 @@ const (
 	ResearchStatusCompleted  = "completed"
 	ResearchStatusSkipped    = "skipped"
 )
+
+// GoalSupportValidation represents LLM's assessment of goal linkage
+type GoalSupportValidation struct {
+	SupportsGoalID string  `json:"supports_goal_id"` // ID of primary goal being supported
+	Confidence     float64 `json:"confidence"`       // 0.0-1.0 confidence in linkage
+	Reasoning      string  `json:"reasoning"`        // Why this secondary supports the primary
+	IsValid        bool    `json:"is_valid"`         // True if linkage is meaningful
+}

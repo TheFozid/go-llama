@@ -23,6 +23,7 @@ type Engine struct {
 	llmURL                    string
 	llmModel                  string
 	llmClient                 interface{} // Will be *llm.Client but avoid import cycle
+	db                        *gorm.DB    // For loading principles
     contextSize               int
 	maxTokensPerCycle         int
 	maxDurationMinutes        int
@@ -46,6 +47,7 @@ func NewEngine(
 	embedder *memory.Embedder,
 	stateManager *StateManager,
 	toolRegistry *tools.ContextualRegistry,
+	db *gorm.DB, // Add DB for principles
 	llmURL string,
 	llmModel string,
 	contextSize int,
@@ -68,6 +70,7 @@ func NewEngine(
 		embedder:                  embedder,
 		stateManager:              stateManager,
 		toolRegistry:              toolRegistry,
+		db:                        db, // Store DB
 		llmURL:                    llmURL,
 		llmModel:                  llmModel,
 		llmClient:                 llmClient, // Store client
@@ -401,7 +404,7 @@ if inMetaLoop {
 	
 	// Create goals from LLM proposals if available (but not if we have too many already)
 	newGoals := []Goal{}
-	if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 5 {
+	if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 15 { // Increased limit for tier system
 		log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
 		
 		// Get recently abandoned goals (last 10)
@@ -432,8 +435,40 @@ if inMetaLoop {
 			}
 			
 			goal := e.createGoalFromProposal(proposal)
+			
+			// TIER VALIDATION: If secondary, validate linkage to primary goals
+			if goal.Tier == "secondary" {
+				primaryGoals := e.getPrimaryGoals(state.ActiveGoals)
+				if len(primaryGoals) == 0 {
+					log.Printf("[Dialogue] No primary goals exist, promoting secondary to primary: %s",
+						truncate(goal.Description, 60))
+					goal.Tier = "primary"
+				} else {
+					// Validate linkage to at least one primary
+					validation, err := e.validateGoalSupport(ctx, &goal, primaryGoals)
+					if err != nil {
+						log.Printf("[Dialogue] WARNING: Failed to validate goal support: %v", err)
+						// Allow goal but mark as unvalidated
+						goal.DependencyScore = 0.5
+					} else if !validation.IsValid {
+						log.Printf("[Dialogue] Secondary goal does not support any primary, converting to tactical: %s",
+							truncate(goal.Description, 60))
+						goal.Tier = "tactical"
+					} else {
+						// Link to primary
+						goal.SupportsGoals = []string{validation.SupportsGoalID}
+						goal.DependencyScore = validation.Confidence
+						
+						log.Printf("[Dialogue] Secondary goal validated: supports %s (confidence: %.2f)",
+							truncate(validation.SupportsGoalID, 20), validation.Confidence)
+						log.Printf("[Dialogue]   Reasoning: %s", truncate(validation.Reasoning, 80))
+					}
+				}
+			}
+			
 			newGoals = append(newGoals, goal)
-			log.Printf("[Dialogue] Created goal from LLM proposal: %s (priority: %d)", truncate(goal.Description, 60), goal.Priority)
+			log.Printf("[Dialogue] Created goal [%s]: %s (priority: %d)", 
+				goal.Tier, truncate(goal.Description, 60), goal.Priority)
 			log.Printf("[Dialogue]   Reasoning: %s", truncate(proposal.Reasoning, 80))
 		}
 	} else {
@@ -461,11 +496,31 @@ if inMetaLoop {
 			return StopReasonNaturalStop, nil
 		}
 		
-		// Sort goals by priority
-		sortedGoals := sortGoalsByPriority(state.ActiveGoals)
-		topGoal := sortedGoals[0]
+		// GOAL CONTINUITY LOCK: Prioritize goals with pending work
+		var topGoal Goal
+		foundContinuation := false
 		
-		log.Printf("[Dialogue] Pursuing goal: %s", topGoal.Description)
+		for i := range state.ActiveGoals {
+			goal := &state.ActiveGoals[i]
+			if goal.HasPendingWork && time.Since(goal.LastPursued) < 2*time.Hour {
+				topGoal = *goal
+				foundContinuation = true
+				log.Printf("[Dialogue] Continuing goal with pending work: %s (last pursued: %s ago)",
+					truncate(topGoal.Description, 60), time.Since(goal.LastPursued).Round(time.Minute))
+				break
+			}
+		}
+		
+		// Fallback: Select highest priority goal
+		if !foundContinuation {
+			sortedGoals := sortGoalsByPriority(state.ActiveGoals)
+			topGoal = sortedGoals[0]
+			log.Printf("[Dialogue] Pursuing highest priority goal: %s (priority: %d)",
+				truncate(topGoal.Description, 60), topGoal.Priority)
+		}
+		
+		// Mark goal as actively pursued
+		topGoal.LastPursued = time.Now()
 		
 		// Phase 3.2: Execute actions with tools
 		actionExecuted := false
@@ -725,13 +780,17 @@ if err == nil && action.Tool == ActionToolSearch {
                 log.Printf("[Dialogue] ✓ Created fallback parse action (%d fallbacks remaining)", 
                     len(remainingFallbacks))
                 
-                // Update goal in state
-                for k := range state.ActiveGoals {
-                    if state.ActiveGoals[k].ID == topGoal.ID {
-                        state.ActiveGoals[k] = topGoal
-                        break
-                    }
-                }
+		// Update pending work status
+		topGoal.HasPendingWork = hasPendingActions(&topGoal)
+		
+		// Update goal in state
+		for i := range state.ActiveGoals {
+			if state.ActiveGoals[i].ID == topGoal.ID {
+				state.ActiveGoals[i] = topGoal
+				log.Printf("[Dialogue] Updated goal in state: pending_work=%v", topGoal.HasPendingWork)
+				break
+			}
+		}
             } else {
                 log.Printf("[Dialogue] No fallback URLs available, marking goal as partial failure")
                 topGoal.Outcome = "bad"
@@ -2789,8 +2848,201 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// hasPendingActions checks if a goal has any pending actions
+func hasPendingActions(goal *Goal) bool {
+	for _, action := range goal.Actions {
+		if action.Status == ActionStatusPending {
+			return true
+		}
+	}
+	return false
+}
+
+// getPrimaryGoals filters goals by primary tier
+func (e *Engine) getPrimaryGoals(goals []Goal) []Goal {
+	primaries := []Goal{}
+	for _, goal := range goals {
+		if goal.Tier == "primary" {
+			primaries = append(primaries, goal)
+		}
+	}
+	return primaries
+}
+
+// validateGoalSupport uses LLM to validate if a secondary goal supports a primary goal
+func (e *Engine) validateGoalSupport(ctx context.Context, secondary *Goal, primaryGoals []Goal) (*GoalSupportValidation, error) {
+	if len(primaryGoals) == 0 {
+		return nil, fmt.Errorf("no primary goals to validate against")
+	}
+	
+	// Build context about primary goals
+	var primaryContext strings.Builder
+	primaryContext.WriteString("CURRENT PRIMARY GOALS:\n")
+	for i, primary := range primaryGoals {
+		primaryContext.WriteString(fmt.Sprintf("%d. [ID: %s] %s\n", i+1, primary.ID, primary.Description))
+	}
+	
+	prompt := fmt.Sprintf(`Evaluate if this SECONDARY goal meaningfully supports at least one PRIMARY goal.
+
+%s
+
+SECONDARY GOAL TO EVALUATE:
+%s
+
+CRITICAL: A secondary goal "supports" a primary goal if completing the secondary goal:
+1. Directly advances progress toward the primary goal
+2. Provides knowledge/skills needed for the primary goal
+3. Creates resources/artifacts used by the primary goal
+4. Removes blockers preventing progress on the primary goal
+
+Respond ONLY with this S-expression:
+
+(goal_support_validation
+  (supports_goal_id "goal_xxx")  ; ID of primary goal being supported, or "" if none
+  (confidence 0.85)  ; 0.0-1.0 confidence in linkage
+  (reasoning "Specific explanation of how secondary supports primary")
+  (is_valid true))  ; false if secondary doesn't meaningfully support any primary
+
+RULES:
+- If secondary supports NO primary goals, set is_valid to false
+- If secondary supports multiple primaries, pick the strongest linkage
+- Be strict: only validate true if linkage is clear and meaningful
+- Output ONLY the S-expression, no markdown`, 
+		primaryContext.String(), secondary.Description)
+	
+	log.Printf("[GoalValidation] Validating secondary goal linkage via LLM...")
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+	if err != nil {
+		return nil, fmt.Errorf("LLM validation failed: %w", err)
+	}
+	
+	log.Printf("[GoalValidation] LLM validation completed (%d tokens)", tokens)
+	
+	// Parse S-expression response
+	validation, err := e.parseGoalSupportValidation(response.RawResponse)
+	if err != nil {
+		log.Printf("[GoalValidation] Failed to parse validation: %v", err)
+		return nil, err
+	}
+	
+	return validation, nil
+}
+
+// parseGoalSupportValidation extracts validation from S-expression
+func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportValidation, error) {
+	content := strings.TrimSpace(rawResponse)
+	content = strings.TrimPrefix(content, "```lisp")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	// Find goal_support_validation block
+	blocks := findBlocksRecursive(content, "goal_support_validation")
+	if len(blocks) == 0 {
+		blocks = findBlocksRecursive(content, "goal-support-validation")
+	}
+	
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("no goal_support_validation block found")
+	}
+	
+	block := blocks[0]
+	
+	validation := &GoalSupportValidation{
+		Confidence: 0.5, // Default
+		IsValid:    false,
+	}
+	
+	// Extract fields
+	if goalID := extractFieldContent(block, "supports_goal_id"); goalID != "" {
+		validation.SupportsGoalID = goalID
+	} else if goalID := extractFieldContent(block, "supports-goal-id"); goalID != "" {
+		validation.SupportsGoalID = goalID
+	}
+	
+	if reasoning := extractFieldContent(block, "reasoning"); reasoning != "" {
+		validation.Reasoning = reasoning
+	}
+	
+	if confStr := extractFieldContent(block, "confidence"); confStr != "" {
+		if conf, err := parseFloat(confStr); err == nil {
+			validation.Confidence = conf
+		}
+	}
+	
+	if validStr := extractFieldContent(block, "is_valid"); validStr != "" {
+		validation.IsValid = (validStr == "true" || validStr == "t")
+	} else if validStr := extractFieldContent(block, "is-valid"); validStr != "" {
+		validation.IsValid = (validStr == "true" || validStr == "t")
+	}
+	
+	// Validation: if is_valid is true, must have a goal ID
+	if validation.IsValid && validation.SupportsGoalID == "" {
+		return nil, fmt.Errorf("is_valid=true but no supports_goal_id specified")
+	}
+	
+	return validation, nil
+}
+
+// determineGoalTier assigns a tier based on goal characteristics
+func (e *Engine) determineGoalTier(description string, priority int, reasoning string) string {
+	descLower := strings.ToLower(description)
+	reasoningLower := strings.ToLower(reasoning)
+	
+	// PRIMARY tier indicators:
+	// - Very high priority (9-10)
+	// - User-aligned or identity-related
+	// - Long-term strategic goals
+	if priority >= 9 {
+		return "primary"
+	}
+	
+	if strings.Contains(descLower, "develop") && 
+	   (strings.Contains(descLower, "character") || 
+	    strings.Contains(descLower, "personality") ||
+	    strings.Contains(descLower, "identity")) {
+		return "primary"
+	}
+	
+	if strings.Contains(reasoningLower, "user aligned") ||
+	   strings.Contains(reasoningLower, "user interest") ||
+	   strings.Contains(reasoningLower, "core capability") {
+		return "primary"
+	}
+	
+	// TACTICAL tier indicators:
+	// - Low priority (1-4)
+	// - Short-term tasks
+	// - Specific one-off actions
+	if priority <= 4 {
+		return "tactical"
+	}
+	
+	if strings.Contains(descLower, "parse") ||
+	   strings.Contains(descLower, "fetch") ||
+	   strings.Contains(descLower, "check") {
+		return "tactical"
+	}
+	
+	// DEFAULT: SECONDARY tier (5-8 priority)
+	// Most research and learning goals fall here
+	return "secondary"
+}
+
 // performEnhancedReflection performs structured reasoning about recent activity
 func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalState) (*ReasoningResponse, int, error) {
+	// CRITICAL: Load principles FIRST - these define identity and values
+	principles, err := memory.LoadPrinciples(e.db)
+	if err != nil {
+		log.Printf("[Dialogue] WARNING: Failed to load principles: %v", err)
+		principles = []memory.Principle{} // Empty fallback
+	} else {
+		log.Printf("[Dialogue] Loaded %d principles for reflection context", len(principles))
+	}
+	
+	// Format principles for prompt injection
+	principlesContext := memory.FormatAsSystemPrompt(principles, 0.7)
+	
 	// Find recent memories for context
 	embedding, err := e.embedder.Embed(ctx, "recent activity patterns successes failures")
 	if err != nil {
@@ -2914,7 +3166,9 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	var prompt string
 	switch e.reasoningDepth {
 	case "deep":
-		prompt = fmt.Sprintf(`%s%s
+		prompt = fmt.Sprintf(`%s
+
+%s%s
 %s
 
 Perform deep analysis:
@@ -2926,10 +3180,12 @@ Perform deep analysis:
 6. Extract learnings about what strategies work
 7. Provide comprehensive self-assessment
 
-Be thorough and analytical. Focus on actionable insights.`, memoryContext, goalsContext, toolsContext)
+Be thorough and analytical. Focus on actionable insights.`, principlesContext, memoryContext, goalsContext, toolsContext)
 		
 	case "moderate":
-		prompt = fmt.Sprintf(`%s%s
+		prompt = fmt.Sprintf(`%s
+
+%s%s
 %s
 
 Analyze recent activity:
@@ -2939,10 +3195,12 @@ Analyze recent activity:
 4. Propose 1-2 goals with action plans (use only available tools)
 5. What have you learned about effective strategies?
 
-Be analytical but concise.`, memoryContext, goalsContext, toolsContext)
+Be analytical but concise.`, principlesContext, memoryContext, goalsContext, toolsContext)
 		
 	default: // conservative
-		prompt = fmt.Sprintf(`%s%s
+		prompt = fmt.Sprintf(`%s
+
+%s%s
 %s
 
 Brief analysis:
@@ -2951,7 +3209,7 @@ Brief analysis:
 3. Most important knowledge gap to address?
 4. Propose one goal if needed (use only available tools if action plan provided)
 
-Keep it focused and actionable.`, memoryContext, goalsContext, toolsContext)
+Keep it focused and actionable.`, principlesContext, memoryContext, goalsContext, toolsContext)
 	}
 	
 	// Call LLM with structured reasoning
@@ -3067,15 +3325,22 @@ func (e *Engine) calculateConfidence(ctx context.Context, state *InternalState) 
 
 // createGoalFromProposal creates a Goal from an LLM proposal
 func (e *Engine) createGoalFromProposal(proposal GoalProposal) Goal {
+	// Determine tier based on priority and description
+	tier := e.determineGoalTier(proposal.Description, proposal.Priority, proposal.Reasoning)
+	
 	goal := Goal{
-		ID:          fmt.Sprintf("goal_%d", time.Now().UnixNano()),
-		Description: proposal.Description,
-		Source:      GoalSourceKnowledgeGap, // Could be smarter based on reasoning
-		Priority:    proposal.Priority,
-		Created:     time.Now(),
-		Progress:    0.0,
-		Status:      GoalStatusActive,
-		Actions:     []Action{},
+		ID:              fmt.Sprintf("goal_%d", time.Now().UnixNano()),
+		Description:     proposal.Description,
+		Source:          GoalSourceKnowledgeGap, // Could be smarter based on reasoning
+		Priority:        proposal.Priority,
+		Created:         time.Now(),
+		Progress:        0.0,
+		Status:          GoalStatusActive,
+		Actions:         []Action{},
+		Tier:            tier,
+		SupportsGoals:   []string{},
+		DependencyScore: 0.0,
+		FailureCount:    0,
 	}
 	
 	// Create actions from LLM's action plan if dynamic planning enabled

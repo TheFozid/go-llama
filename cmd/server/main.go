@@ -363,6 +363,7 @@ func main() {
 					embedder,
 					stateManager,
 					contextualRegistry,
+					db.DB, // Add DB parameter for principles
 					cfg.GrowerAI.ReasoningModel.URL,
 					cfg.GrowerAI.ReasoningModel.Name,
 					cfg.GrowerAI.ReasoningModel.ContextSize,
