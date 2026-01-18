@@ -3120,13 +3120,15 @@ func (e *Engine) parseActionFromPlan(planStep string) Action {
 
 // validateToolExists checks if a tool is registered before creating an action
 func (e *Engine) validateToolExists(toolName string) bool {
-	_, err := e.toolRegistry.Get(toolName)
+	registry := e.toolRegistry.GetRegistry()
+	_, err := registry.Get(toolName)
 	return err == nil
 }
 
 // getAvailableToolsList returns a formatted list of registered tools for LLM context
 func (e *Engine) getAvailableToolsList() string {
-	tools := e.toolRegistry.List()
+	registry := e.toolRegistry.GetRegistry()
+	tools := registry.List()
 	var builder strings.Builder
 	builder.WriteString("\nAvailable tools for creating actions:\n")
 	
