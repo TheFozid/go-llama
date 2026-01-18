@@ -2907,45 +2907,51 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 		}
 	}
 	
+	// Add available tools to context
+	toolsContext := e.getAvailableToolsList()
+	
 	// Build prompt based on reasoning depth
 	var prompt string
 	switch e.reasoningDepth {
 	case "deep":
 		prompt = fmt.Sprintf(`%s%s
+%s
 
 Perform deep analysis:
 1. Reflect on what these memories reveal about recent interactions
 2. Identify at least 3 insights or patterns
 3. Assess your strengths and weaknesses honestly
 4. Identify knowledge gaps that need addressing
-5. Propose 1-3 specific goals with detailed action plans
+5. Propose 1-3 specific goals with detailed action plans (use only available tools)
 6. Extract learnings about what strategies work
 7. Provide comprehensive self-assessment
 
-Be thorough and analytical. Focus on actionable insights.`, memoryContext, goalsContext)
+Be thorough and analytical. Focus on actionable insights.`, memoryContext, goalsContext, toolsContext)
 		
 	case "moderate":
 		prompt = fmt.Sprintf(`%s%s
+%s
 
 Analyze recent activity:
 1. What patterns do you see in these memories?
 2. What are you doing well? What needs improvement?
 3. What knowledge gaps should you address?
-4. Propose 1-2 goals with action plans
+4. Propose 1-2 goals with action plans (use only available tools)
 5. What have you learned about effective strategies?
 
-Be analytical but concise.`, memoryContext, goalsContext)
+Be analytical but concise.`, memoryContext, goalsContext, toolsContext)
 		
 	default: // conservative
 		prompt = fmt.Sprintf(`%s%s
+%s
 
 Brief analysis:
 1. Key takeaway from recent memories?
 2. One strength, one weakness
 3. Most important knowledge gap to address?
-4. Propose one goal if needed
+4. Propose one goal if needed (use only available tools if action plan provided)
 
-Keep it focused and actionable.`, memoryContext, goalsContext)
+Keep it focused and actionable.`, memoryContext, goalsContext, toolsContext)
 	}
 	
 	// Call LLM with structured reasoning
@@ -3098,12 +3104,50 @@ func (e *Engine) parseActionFromPlan(planStep string) Action {
 	// NOTE: Removed ActionToolSandbox mapping - sandbox not yet implemented
 	// Keywords like "test", "experiment", "try" will fall back to search
 	
+	// CRITICAL: Validate tool exists before creating action
+	if !e.validateToolExists(tool) {
+		log.Printf("[Dialogue] WARNING: Tool '%s' not registered, falling back to search", tool)
+		tool = ActionToolSearch
+	}
+	
 	return Action{
 		Description: planStep,
 		Tool:        tool,
 		Status:      ActionStatusPending,
 		Timestamp:   time.Now(),
 	}
+}
+
+// validateToolExists checks if a tool is registered before creating an action
+func (e *Engine) validateToolExists(toolName string) bool {
+	_, err := e.toolRegistry.Get(toolName)
+	return err == nil
+}
+
+// getAvailableToolsList returns a formatted list of registered tools for LLM context
+func (e *Engine) getAvailableToolsList() string {
+	tools := e.toolRegistry.List()
+	var builder strings.Builder
+	builder.WriteString("\nAvailable tools for creating actions:\n")
+	
+	// List tools in logical order
+	toolOrder := []string{
+		ActionToolSearch,
+		ActionToolWebParseMetadata,
+		ActionToolWebParseGeneral,
+		ActionToolWebParseContextual,
+		ActionToolWebParseChunked,
+	}
+	
+	for _, toolName := range toolOrder {
+		if desc, exists := tools[toolName]; exists {
+			builder.WriteString(fmt.Sprintf("- %s: %s\n", toolName, desc))
+		}
+	}
+	
+	builder.WriteString("\nIMPORTANT: Only use tools from this list in action plans. Never invent tool names.\n")
+	builder.WriteString("Default to 'search' if unsure which tool to use.\n")
+	return builder.String()
 }
 
 // storeLearning stores a learning as a collective memory and returns the memory ID

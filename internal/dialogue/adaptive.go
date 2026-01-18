@@ -102,6 +102,14 @@ func (ac *AdaptiveConfig) UpdateMetrics(ctx context.Context, state *InternalStat
 		ac.goalSimilarityThreshold = ac.baseGoalSimilarity // 0.85
 	}
 	
+	// CRITICAL: Enforce minimum threshold to prevent duplicate goal spam
+	// Even during high timeout scenarios, never allow threshold below 0.75
+	if ac.goalSimilarityThreshold < 0.75 {
+		log.Printf("[AdaptiveConfig] Clamping goal similarity threshold from %.2f to 0.75 (minimum)", 
+			ac.goalSimilarityThreshold)
+		ac.goalSimilarityThreshold = 0.75
+	}
+	
 	// Adapt tool timeout based on success rate AND timeout frequency
 	// Low success = give tools more time
 	// High success = maintain efficiency
