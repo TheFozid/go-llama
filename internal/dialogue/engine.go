@@ -812,25 +812,31 @@ if err == nil && action.Tool == ActionToolSearch {
     action.Timestamp = time.Now()
 
 
-				} else {
-					// Check if result indicates success
-					resultLower := strings.ToLower(result)
-					if strings.Contains(resultLower, "error") || 
-					   strings.Contains(resultLower, "failed") ||
-					   strings.Contains(resultLower, "403") ||
-					   strings.Contains(resultLower, "404") ||
-					   strings.Contains(resultLower, "timeout") {
-						log.Printf("[Dialogue] Action completed but result indicates failure")
-						action.Result = result
-						action.Status = ActionStatusCompleted
-						
-						// Track failures - don't abandon on first failure
-						topGoal.FailureCount++
-						if topGoal.FailureCount >= 3 {
-							topGoal.Outcome = "bad"
-							log.Printf("[Dialogue] ⚠ Goal marked as bad after %d failures", topGoal.FailureCount)
-						}
-						actionExecuted = true
+} else {
+	// Check if result ACTUALLY indicates failure (check prefix only)
+	resultLower := strings.ToLower(result)
+	resultPrefix := resultLower
+	if len(resultPrefix) > 100 {
+		resultPrefix = resultPrefix[:100]
+	}
+	
+	if strings.HasPrefix(resultPrefix, "error:") || 
+	   strings.HasPrefix(resultPrefix, "failed:") ||
+	   strings.HasPrefix(resultPrefix, "timeout:") ||
+	   strings.Contains(resultPrefix, "403") ||
+	   strings.Contains(resultPrefix, "404") ||
+	   strings.Contains(resultPrefix, "no suitable urls") {
+		log.Printf("[Dialogue] Action completed but result indicates failure")
+		action.Result = result
+		action.Status = ActionStatusCompleted
+		
+		// Track failures - don't abandon on first failure
+		topGoal.FailureCount++
+		if topGoal.FailureCount >= 3 {
+			topGoal.Outcome = "bad"
+			log.Printf("[Dialogue] ⚠ Goal marked as bad after %d failures", topGoal.FailureCount)
+		}
+		actionExecuted = true
 					} else {
 						action.Result = result
 						action.Status = ActionStatusCompleted
@@ -864,21 +870,33 @@ if err == nil && action.Tool == ActionToolSearch {
 		
 		// If no actions were executed, check if we should create new actions
 if !actionExecuted {
-    // Check for stale in-progress actions (older than 5 minutes)
-    now := time.Now()
-    for i := range topGoal.Actions {
-        action := &topGoal.Actions[i]
-        if action.Status == ActionStatusInProgress {
-            age := now.Sub(action.Timestamp)
-            if age > 5*time.Minute {
-                log.Printf("[Dialogue] Found stale in-progress action (age: %s), marking as failed: %s",
-                    age.Round(time.Second), truncate(action.Description, 60))
-                action.Status = ActionStatusCompleted
-                action.Result = fmt.Sprintf("TIMEOUT: Action abandoned after %s", age.Round(time.Second))
-                topGoal.Outcome = "bad"
-            }
-        }
-    }
+// Check for stale in-progress actions with adaptive timeouts
+now := time.Now()
+for i := range topGoal.Actions {
+	action := &topGoal.Actions[i]
+	if action.Status == ActionStatusInProgress {
+		age := now.Sub(action.Timestamp)
+		
+		// Adaptive timeout based on action type (accounting for slow CPU inference)
+		timeout := 10 * time.Minute // Default: 10 minutes for search/general actions
+		
+		// Web parsing can take significantly longer due to LLM processing
+		if action.Tool == ActionToolWebParseContextual || 
+		   action.Tool == ActionToolWebParseGeneral ||
+		   action.Tool == ActionToolWebParseChunked {
+			timeout = 15 * time.Minute // 15 minutes for parse actions
+		}
+		
+		if age > timeout {
+			log.Printf("[Dialogue] Found stale in-progress action (age: %s, timeout: %s), marking as failed: %s",
+				age.Round(time.Second), timeout, truncate(action.Description, 60))
+			action.Status = ActionStatusCompleted
+			action.Result = fmt.Sprintf("TIMEOUT: Action abandoned after %s (timeout: %s)", 
+				age.Round(time.Second), timeout)
+			topGoal.Outcome = "bad"
+		}
+	}
+}
     
     // Check if all actions are completed (need to create more)
     hasPendingActions := false
@@ -1103,12 +1121,24 @@ if topGoal.Progress >= 1.0 && !hasPendingActions {
 		if action.Status == ActionStatusCompleted {
 			resultLower := strings.ToLower(action.Result)
 			
-			// Check if action result contains error
-			if strings.Contains(resultLower, "error") || 
-			   strings.Contains(resultLower, "failed") ||
-			   strings.Contains(resultLower, "timeout") ||
-			   strings.Contains(resultLower, "no suitable urls") {
+			// Check if action ACTUALLY failed (not just mentioned errors in parsed content)
+			// Only check first 100 chars where real error messages appear
+			// This prevents false positives from phrases like "error handling" in parsed articles
+			resultPrefix := resultLower
+			if len(resultPrefix) > 100 {
+				resultPrefix = resultPrefix[:100]
+			}
+			
+			// Only mark as failure if error appears at the START of the result
+			if strings.HasPrefix(resultPrefix, "error:") ||
+			   strings.HasPrefix(resultPrefix, "failed:") ||
+			   strings.HasPrefix(resultPrefix, "timeout:") ||
+			   strings.Contains(resultPrefix, "no suitable urls") ||
+			   strings.Contains(resultPrefix, "parse failed:") ||
+			   strings.Contains(resultPrefix, "action failed:") {
 				hasFailures = true
+				log.Printf("[Dialogue] Detected actual failure in action result: %s", 
+					truncate(action.Result, 80))
 			}
 			
 			// Accumulate output length
@@ -1123,7 +1153,7 @@ if topGoal.Progress >= 1.0 && !hasPendingActions {
 				minLength = 200
 			}
 			
-			if len(action.Result) > minLength && !strings.Contains(resultLower, "error") {
+			if len(action.Result) > minLength && !strings.HasPrefix(resultPrefix, "error:") {
 				hasUsefulOutcome = true
 			}
 		}
@@ -3064,9 +3094,9 @@ func (e *Engine) parseActionFromPlan(planStep string) Action {
 		tool = ActionToolWebParse
 	} else if strings.Contains(planLower, "search") || strings.Contains(planLower, "find") || strings.Contains(planLower, "look up") {
 		tool = ActionToolSearch
-	} else if strings.Contains(planLower, "test") || strings.Contains(planLower, "experiment") || strings.Contains(planLower, "try") {
-		tool = ActionToolSandbox
 	}
+	// NOTE: Removed ActionToolSandbox mapping - sandbox not yet implemented
+	// Keywords like "test", "experiment", "try" will fall back to search
 	
 	return Action{
 		Description: planStep,
