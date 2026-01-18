@@ -12,6 +12,7 @@ import (
 
 	"go-llama/internal/memory"
 	"go-llama/internal/tools"
+	"gorm.io/gorm"
 )
 
 // Engine manages the internal dialogue process

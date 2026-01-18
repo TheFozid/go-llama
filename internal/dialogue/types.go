@@ -9,20 +9,22 @@ import (
 
 // Goal represents a self-directed learning objective
 type Goal struct {
-	ID           string         `json:"id"`
-	Description  string         `json:"description"`
-	Source       string         `json:"source"` // "user_failure", "knowledge_gap", "curiosity", "principle"
-	Priority     int            `json:"priority"` // 1-10
-	Created      time.Time      `json:"created"`
-	Progress     float64        `json:"progress"` // 0.0 to 1.0
-	Actions      []Action       `json:"actions"`
-	Status       string         `json:"status"` // "active", "completed", "abandoned"
-	Outcome      string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
-	ResearchPlan *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
-	FailureCount int            `json:"failure_count"` // NEW: Track consecutive failures before abandoning
-    Tier            string   `json:"tier"` // "primary", "secondary"
-    SupportsGoals   []string `json:"supports_goals,omitempty"` // IDs of primary goals this supports
-    DependencyScore float64  `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
+	ID              string         `json:"id"`
+	Description     string         `json:"description"`
+	Source          string         `json:"source"` // "user_failure", "knowledge_gap", "curiosity", "principle"
+	Priority        int            `json:"priority"` // 1-10
+	Created         time.Time      `json:"created"`
+	Progress        float64        `json:"progress"` // 0.0 to 1.0
+	Actions         []Action       `json:"actions"`
+	Status          string         `json:"status"` // "active", "completed", "abandoned"
+	Outcome         string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
+	ResearchPlan    *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
+	FailureCount    int            `json:"failure_count"` // Track consecutive failures before abandoning
+	Tier            string         `json:"tier"` // "primary", "secondary", "tactical"
+	SupportsGoals   []string       `json:"supports_goals,omitempty"` // IDs of primary goals this supports
+	DependencyScore float64        `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
+	HasPendingWork  bool           `json:"has_pending_work"` // True if goal has pending actions
+	LastPursued     time.Time      `json:"last_pursued"` // When this goal was last worked on
 }
 
 // Action represents a step taken toward completing a goal
