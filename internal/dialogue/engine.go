@@ -675,10 +675,12 @@ if inMetaLoop {
 									break
 								}
 							}
-						}}
+						}
+						}
 					}
 				}
-				if err != nil {
+				
+				} else if err != nil {
 					log.Printf("[Dialogue] Action failed: %v", err)
 					action.Result = fmt.Sprintf("ERROR: %v", err)
 					action.Status = ActionStatusCompleted
