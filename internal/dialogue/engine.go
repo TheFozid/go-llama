@@ -616,27 +616,45 @@ if err == nil && action.Tool == ActionToolSearch {
 							   strings.Contains(goalLower, "understand") ||
 							   strings.Contains(goalLower, "learn about") {
 								purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
-								parseAction = Action{
-									Description: bestURL,
-									Tool:        ActionToolWebParseContextual,
-									Status:      ActionStatusPending,
-									Timestamp:   time.Now(),
-									Metadata:    map[string]interface{}{
-										"purpose": purpose,
-										"selected_url": bestURL,
-									},
-								}
+parseAction = Action{
+    Description: bestURL,
+    Tool:        ActionToolWebParseContextual,
+    Status:      ActionStatusPending,
+    Timestamp:   time.Now(),
+    Metadata:    map[string]interface{}{
+        "purpose": purpose,
+        "selected_url": bestURL,
+    },
+}
+// CRITICAL: Copy research metadata from search action to parse action
+if action.Metadata != nil {
+    if questionID, ok := action.Metadata["research_question_id"].(string); ok {
+        parseAction.Metadata["research_question_id"] = questionID
+    }
+    if questionText, ok := action.Metadata["question_text"].(string); ok {
+        parseAction.Metadata["question_text"] = questionText
+    }
+}
 								log.Printf("[Dialogue] Auto-created contextual parse action for best URL: %s", truncate(bestURL, 60))
-							} else {
-								parseAction = Action{
-									Description: bestURL,
-									Tool:        ActionToolWebParseGeneral,
-									Status:      ActionStatusPending,
-									Timestamp:   time.Now(),
-									Metadata:    map[string]interface{}{
-										"selected_url": bestURL,
-									},
-								}
+} else {
+    parseAction = Action{
+        Description: bestURL,
+        Tool:        ActionToolWebParseGeneral,
+        Status:      ActionStatusPending,
+        Timestamp:   time.Now(),
+        Metadata:    map[string]interface{}{
+            "selected_url": bestURL,
+        },
+    }
+    // CRITICAL: Copy research metadata from search action to parse action
+    if action.Metadata != nil {
+        if questionID, ok := action.Metadata["research_question_id"].(string); ok {
+            parseAction.Metadata["research_question_id"] = questionID
+        }
+        if questionText, ok := action.Metadata["question_text"].(string); ok {
+            parseAction.Metadata["question_text"] = questionText
+        }
+    }
 								log.Printf("[Dialogue] Auto-created general parse action for best URL: %s", truncate(bestURL, 60))
 							}
 							
