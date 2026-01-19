@@ -641,9 +641,8 @@ if inMetaLoop {
 		
 		// Phase 3.2: Execute actions with tools (skip if self-mod goal already handled)
 		if !actionExecuted {
-		
-		for i := range topGoal.Actions {
-			action := &topGoal.Actions[i]
+			for i := range topGoal.Actions {
+				action := &topGoal.Actions[i]
 			
 			// Skip completed actions
 			if action.Status == ActionStatusCompleted {
@@ -1131,9 +1130,10 @@ if action.Metadata != nil {
 				break
 			}
 		}
+		}  // Close the "if !actionExecuted" block from line 643
 		
 		// If no actions were executed, check if we should create new actions
-if !actionExecuted {
+		if !actionExecuted {
 // Check for stale in-progress actions with adaptive timeouts
 now := time.Now()
 for i := range topGoal.Actions {
