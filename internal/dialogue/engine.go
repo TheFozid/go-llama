@@ -575,13 +575,13 @@ if inMetaLoop {
 				
 				log.Printf("[Dialogue] Executing action: %s using tool '%s'", action.Description, action.Tool)
 				
-				// Execute tool
+				// Execute tool - declare result and err at this scope level
 				var result string
 				var err error
 				result, err = e.executeAction(ctx, action)
 				
-// If this was a search, extract URLs and evaluate quality
-if err == nil && action.Tool == ActionToolSearch {
+				// If this was a search, extract URLs and evaluate quality
+				if err == nil && action.Tool == ActionToolSearch {
     // Use LLM-based evaluation to select best URL
     log.Printf("[Dialogue] Evaluating search results with LLM...")
     
