@@ -1011,43 +1011,64 @@ for i := range topGoal.Actions {
 											 strings.Contains(desc, "analyze") ||
 											 strings.Contains(desc, "understand")
 						
-						if needsResearchPlan && topGoal.ResearchPlan == nil {
-							// Generate multi-step research plan
-							log.Printf("[Dialogue] Goal requires research plan, generating...")
-							
-							plan, planTokens, err := e.generateResearchPlan(ctx, &topGoal)
-							if err != nil {
-								log.Printf("[Dialogue] WARNING: Failed to generate research plan: %v", err)
-								// Fallback to simple action
-								searchQuery := topGoal.Description
-								searchAction := Action{
-									Description: searchQuery,
-									Tool:        ActionToolSearch,
-									Status:      ActionStatusPending,
-									Timestamp:   time.Now(),
-								}
-								topGoal.Actions = append(topGoal.Actions, searchAction)
-								
-								// CRITICAL FIX: Update goal in state immediately
-								for i := range state.ActiveGoals {
-									if state.ActiveGoals[i].ID == topGoal.ID {
-										state.ActiveGoals[i] = topGoal
-										log.Printf("[Dialogue] ✓ Updated goal in state with %d actions (research plan fallback)", len(topGoal.Actions))
-										break
-									}
-								}
-							} else {
-								topGoal.ResearchPlan = plan
-								thoughtCount++
-								totalTokens += planTokens
-								
-								log.Printf("[Dialogue] ✓ Research plan created: '%s' with %d questions",
-									plan.RootQuestion, len(plan.SubQuestions))
-								for i, q := range plan.SubQuestions {
-									log.Printf("[Dialogue]   Q%d [%s]: %s (deps: %v)",
-										i+1, q.ID, truncate(q.Question, 60), q.Dependencies)
-								}
-							}
+if needsResearchPlan && topGoal.ResearchPlan == nil {
+    // Generate multi-step research plan
+    log.Printf("[Dialogue] Goal requires research plan, generating...")
+    
+    plan, planTokens, err := e.generateResearchPlan(ctx, &topGoal)
+    if err != nil {
+        log.Printf("[Dialogue] WARNING: Failed to generate research plan: %v", err)
+        // Fallback to simple action
+        searchQuery := topGoal.Description
+        searchAction := Action{
+            Description: searchQuery,
+            Tool:        ActionToolSearch,
+            Status:      ActionStatusPending,
+            Timestamp:   time.Now(),
+        }
+        topGoal.Actions = append(topGoal.Actions, searchAction)
+        
+        // CRITICAL FIX: Update goal in state immediately
+        for i := range state.ActiveGoals {
+            if state.ActiveGoals[i].ID == topGoal.ID {
+                state.ActiveGoals[i] = topGoal
+                log.Printf("[Dialogue] ✓ Updated goal in state with %d actions (research plan fallback)", len(topGoal.Actions))
+                break
+            }
+        }
+    } else {
+        topGoal.ResearchPlan = plan
+        thoughtCount++
+        totalTokens += planTokens
+        
+        log.Printf("[Dialogue] ✓ Research plan created: '%s' with %d questions",
+            plan.RootQuestion, len(plan.SubQuestions))
+        for i, q := range plan.SubQuestions {
+            log.Printf("[Dialogue]   Q%d [%s]: %s (deps: %v)",
+                i+1, q.ID, truncate(q.Question, 60), q.Dependencies)
+        }
+        
+        // ✅ CRITICAL FIX: Create first action from research plan immediately
+        firstAction := e.getNextResearchAction(ctx, &topGoal)
+        if firstAction != nil {
+            topGoal.Actions = append(topGoal.Actions, *firstAction)
+            topGoal.HasPendingWork = true
+            
+            log.Printf("[Dialogue] ✓ Created first research action: %s", 
+                truncate(firstAction.Description, 60))
+            
+            // Update goal in state immediately
+            for i := range state.ActiveGoals {
+                if state.ActiveGoals[i].ID == topGoal.ID {
+                    state.ActiveGoals[i] = topGoal
+                    log.Printf("[Dialogue] ✓ Updated goal in state with first action (pending_work=true)")
+                    break
+                }
+            }
+        } else {
+            log.Printf("[Dialogue] WARNING: Research plan created but getNextResearchAction returned nil")
+        }
+    }
 						} else if topGoal.ResearchPlan != nil {
 							// Execute next step of existing research plan
 							log.Printf("[Dialogue] Executing research plan step %d/%d",
