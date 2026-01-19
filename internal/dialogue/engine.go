@@ -813,19 +813,28 @@ if action.Metadata != nil {
                             },
                         }
                         
-                        // Create chunked action as final fallback
-                        chunkedAction := Action{
-                            Description: url,
-                            Tool:        ActionToolWebParseChunked,
-                            Status:      ActionStatusPending,
-                            Timestamp:   time.Now(),
-                            Metadata: map[string]interface{}{
-                                "selected_url": url,
-                                "chunk_index":  0,
-                                "original_goal": topGoal.Description,
-                                "fallback_for": "page_too_large",
-                            },
-                        }
+// Create chunked action as final fallback with intelligent chunk selection
+chunkIndex := 0 // Default
+if topGoal.Metadata != nil {
+    if suggestedChunk, ok := topGoal.Metadata["suggested_chunk"].(int); ok {
+        chunkIndex = suggestedChunk
+        log.Printf("[Dialogue] Using suggested chunk %d from metadata analysis", chunkIndex)
+    }
+}
+
+chunkedAction := Action{
+    Description: url,
+    Tool:        ActionToolWebParseChunked,
+    Status:      ActionStatusPending,
+    Timestamp:   time.Now(),
+    Metadata: map[string]interface{}{
+        "selected_url": url,
+        "chunk_index":  chunkIndex,
+        "original_goal": topGoal.Description,
+        "fallback_for": "page_too_large",
+        "intelligent_selection": true,
+    },
+}
                         
                         // Add actions to goal in order: metadata -> contextual -> chunked
                         topGoal.Actions = append(topGoal.Actions, metadataAction, contextualAction, chunkedAction)
@@ -860,9 +869,42 @@ if action.Metadata != nil {
 
 } else if action.Tool == ActionToolWebParseContextual || 
           action.Tool == ActionToolWebParseGeneral ||
-          action.Tool == ActionToolWebParseChunked {
+          action.Tool == ActionToolWebParseChunked ||
+          action.Tool == ActionToolWebParseMetadata {
     // NEW: Parse evaluation for web parse actions
     log.Printf("[Dialogue] Parse action completed, evaluating quality...")
+    
+    // Special handling for metadata action - store findings for later use
+    if action.Tool == ActionToolWebParseMetadata && action.Metadata != nil {
+        if action.Metadata["fallback_for"] == "page_too_large" {
+            log.Printf("[Dialogue] Storing metadata findings for intelligent chunk selection")
+            
+            // Parse the metadata result to extract section information
+            sections := e.extractSectionsFromMetadata(result)
+            
+            // Store sections in goal's metadata for later use by chunked action
+            if topGoal.Metadata == nil {
+                topGoal.Metadata = make(map[string]interface{})
+            }
+            topGoal.Metadata["page_sections"] = sections
+            
+            // Also identify the most relevant chunk based on the goal
+            relevantChunk := e.findMostRelevantChunk(sections, topGoal.Description)
+            if relevantChunk >= 0 {
+                topGoal.Metadata["suggested_chunk"] = relevantChunk
+                log.Printf("[Dialogue] Suggested starting chunk: %d based on goal: %s", 
+                    relevantChunk, truncate(topGoal.Description, 60))
+            }
+            
+            // Update goal in state
+            for k := range state.ActiveGoals {
+                if state.ActiveGoals[k].ID == topGoal.ID {
+                    state.ActiveGoals[k] = topGoal
+                    break
+                }
+            }
+        }
+    }
     
     // Get fallback URLs from metadata (set during search evaluation)
     var fallbackURLs []string
@@ -4532,4 +4574,126 @@ RESPOND with S-expression:
 	} else {
 		return false, fmt.Sprintf("Rejected: %s", reasoning)
 	}
+}
+
+// extractSectionsFromMetadata parses metadata result to extract section information
+func (e *Engine) extractSectionsFromMetadata(metadataResult string) []PageSection {
+    sections := []PageSection{}
+    
+    lines := strings.Split(metadataResult, "\n")
+    currentSection := ""
+    chunkIndex := 0
+    
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        
+        // Look for headings (lines that start with # or contain "Section" or "Chapter")
+        if strings.HasPrefix(line, "#") || 
+           strings.HasPrefix(line, "##") || 
+           strings.HasPrefix(line, "###") ||
+           strings.Contains(line, "Section:") ||
+           strings.Contains(line, "Chapter:") {
+            
+            // Store the previous section if it exists
+            if currentSection != "" {
+                sections = append(sections, PageSection{
+                    Heading:    currentSection,
+                    ChunkIndex: chunkIndex,
+                })
+            }
+            
+            // Extract heading text
+            heading := line
+            if idx := strings.Index(line, ":"); idx != -1 {
+                heading = strings.TrimSpace(line[idx+1:])
+            }
+            heading = strings.TrimPrefix(heading, "#")
+            heading = strings.TrimPrefix(heading, "##")
+            heading = strings.TrimPrefix(heading, "###")
+            currentSection = strings.TrimSpace(heading)
+            
+            // Estimate chunk index (rough approximation)
+            chunkIndex++
+        }
+    }
+    
+    // Don't forget the last section
+    if currentSection != "" {
+        sections = append(sections, PageSection{
+            Heading:    currentSection,
+            ChunkIndex: chunkIndex,
+        })
+    }
+    
+    log.Printf("[Dialogue] Extracted %d sections from metadata", len(sections))
+    return sections
+}
+
+// findMostRelevantChunk identifies the most relevant chunk based on goal and sections
+func (e *Engine) findMostRelevantChunk(sections []PageSection, goalDescription string) int {
+    if len(sections) == 0 {
+        return 0 // Default to chunk 0 if no sections found
+    }
+    
+    goalLower := strings.ToLower(goalDescription)
+    
+    // Keywords for different types of goals
+    goalKeywords := map[string][]string{
+        "methodology": {"method", "methodology", "approach", "technique", "procedure"},
+        "results":     {"result", "finding", "outcome", "conclusion", "summary"},
+        "background":  {"background", "introduction", "overview", "context", "history"},
+        "analysis":    {"analysis", "discussion", "evaluation", "assessment", "review"},
+        "implementation": {"implementation", "deployment", "execution", "application", "practice"},
+    }
+    
+    // Determine goal type
+    goalType := "general"
+    for gtype, keywords := range goalKeywords {
+        for _, keyword := range keywords {
+            if strings.Contains(goalLower, keyword) {
+                goalType = gtype
+                break
+            }
+        }
+    }
+    
+    // Find the most relevant section
+    bestScore := 0
+    bestChunk := 0
+    
+    for _, section := range sections {
+        score := 0
+        sectionLower := strings.ToLower(section.Heading)
+        
+        // Score based on goal type
+        if keywords, ok := goalKeywords[goalType]; ok {
+            for _, keyword := range keywords {
+                if strings.Contains(sectionLower, keyword) {
+                    score += 10
+                }
+            }
+        }
+        
+        // Bonus for exact matches
+        if strings.Contains(sectionLower, goalType) {
+            score += 5
+        }
+        
+        // Update best match
+        if score > bestScore {
+            bestScore = score
+            bestChunk = section.ChunkIndex
+        }
+    }
+    
+    log.Printf("[Dialogue] Selected chunk %d (score: %d) for goal type: %s", 
+        bestChunk, bestScore, goalType)
+    
+    return bestChunk
+}
+
+// PageSection represents a section in a document
+type PageSection struct {
+    Heading    string `json:"heading"`
+    ChunkIndex int    `json:"chunk_index"`
 }
