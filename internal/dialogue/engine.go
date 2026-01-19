@@ -487,10 +487,10 @@ if inMetaLoop {
 						// Allow goal but mark as unvalidated
 						goal.DependencyScore = 0.5
 					} else if !validation.IsValid {
-					log.Printf("[Dialogue] Secondary goal does not support any primary, rejecting: %s",
-						truncate(goal.Description, 60))
-					// Skip this goal - it doesn't support any primary
-					continue
+						log.Printf("[Dialogue] Secondary goal does not support any primary, rejecting: %s",
+							truncate(goal.Description, 60))
+						// Skip this goal entirely - don't add to newGoals
+						continue
 					} else {
 						// Link to primary
 						goal.SupportsGoals = []string{validation.SupportsGoalID}
