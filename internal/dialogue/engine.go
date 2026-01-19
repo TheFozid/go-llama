@@ -754,13 +754,98 @@ if action.Metadata != nil {
 						}}
 					}
 				}
-				if err != nil {
-					log.Printf("[Dialogue] Action failed: %v", err)
-					action.Result = fmt.Sprintf("ERROR: %v", err)
-					action.Status = ActionStatusCompleted
-					
-					// Track failures - don't abandon on first failure
-					topGoal.FailureCount++
+                if err != nil {
+                    log.Printf("[Dialogue] Action failed: %v", err)
+                    action.Result = fmt.Sprintf("ERROR: %v", err)
+                    action.Status = ActionStatusCompleted
+                    
+                    // Check if this is a "page too large" error from web_parse_general
+                    if action.Tool == ActionToolWebParseGeneral && 
+                       strings.Contains(strings.ToLower(err.Error()), "page too large") {
+                        log.Printf("[Dialogue] Creating fallback actions for large page")
+                        
+                        // Get the URL from the action
+                        var url string
+                        if action.Metadata != nil {
+                            if selectedURL, ok := action.Metadata["selected_url"].(string); ok {
+                                url = selectedURL
+                            } else if bestURL, ok := action.Metadata["best_url"].(string); ok {
+                                url = bestURL
+                            }
+                        }
+                        
+                        // Fallback: extract URL from action description
+                        if url == "" {
+                            url = strings.TrimSpace(action.Description)
+                            if idx := strings.Index(url, "http"); idx != -1 {
+                                url = url[idx:]
+                            }
+                            if idx := strings.Index(url, " "); idx != -1 {
+                                url = url[:idx]
+                            }
+                        }
+                        
+                        // Create metadata action to get page structure
+                        metadataAction := Action{
+                            Description: url,
+                            Tool:        ActionToolWebParseMetadata,
+                            Status:      ActionStatusPending,
+                            Timestamp:   time.Now(),
+                            Metadata: map[string]interface{}{
+                                "selected_url": url,
+                                "original_goal": topGoal.Description,
+                                "fallback_for": "page_too_large",
+                            },
+                        }
+                        
+                        // Create contextual action with purpose
+                        purpose := "Extract information relevant to: " + topGoal.Description
+                        contextualAction := Action{
+                            Description: url,
+                            Tool:        ActionToolWebParseContextual,
+                            Status:      ActionStatusPending,
+                            Timestamp:   time.Now(),
+                            Metadata: map[string]interface{}{
+                                "selected_url": url,
+                                "purpose":      purpose,
+                                "original_goal": topGoal.Description,
+                                "fallback_for": "page_too_large",
+                            },
+                        }
+                        
+                        // Create chunked action as final fallback
+                        chunkedAction := Action{
+                            Description: url,
+                            Tool:        ActionToolWebParseChunked,
+                            Status:      ActionStatusPending,
+                            Timestamp:   time.Now(),
+                            Metadata: map[string]interface{}{
+                                "selected_url": url,
+                                "chunk_index":  0,
+                                "original_goal": topGoal.Description,
+                                "fallback_for": "page_too_large",
+                            },
+                        }
+                        
+                        // Add actions to goal in order: metadata -> contextual -> chunked
+                        topGoal.Actions = append(topGoal.Actions, metadataAction, contextualAction, chunkedAction)
+                        
+                        log.Printf("[Dialogue] ✓ Created 3 fallback actions for large page (metadata -> contextual -> chunked)")
+                        
+                        // Update goal in state
+                        for k := range state.ActiveGoals {
+                            if state.ActiveGoals[k].ID == topGoal.ID {
+                                state.ActiveGoals[k] = topGoal
+                                break
+                            }
+                        }
+                        
+                        // Don't increment failure count for this specific error
+                        // since we're handling it with fallback actions
+                    } else {
+                        // Track failures - don't abandon on first failure
+                        topGoal.FailureCount++
+                    }
 					
 					// Only mark as bad after 3+ consecutive failures
 					if topGoal.FailureCount >= 3 {
@@ -2934,10 +3019,20 @@ result, err := e.toolRegistry.ExecuteIdle(ctx, action.Tool, params)
 		return "", fmt.Errorf("web parse tool failed: %w", err)
 	}
 	
-	if !result.Success {
-		log.Printf("[Dialogue] Web parse returned failure after %s: %s", elapsed, result.Error)
-		return "", fmt.Errorf("web parse failed: %s", result.Error)
-	}
+    if !result.Success {
+        log.Printf("[Dialogue] Web parse returned failure after %s: %s", elapsed, result.Error)
+        
+        // Check if this is a "page too large" error from web_parse_general
+        if action.Tool == ActionToolWebParseGeneral && 
+           strings.Contains(strings.ToLower(result.Error), "page too large") {
+            log.Printf("[Dialogue] Page too large for general parsing, creating fallback actions")
+            
+            // Create a special error that will be handled by the goal pursuit system
+            return "", fmt.Errorf("page too large for general summary: %s", result.Error)
+        }
+        
+        return "", fmt.Errorf("web parse failed: %s", result.Error)
+    }
 	
 	log.Printf("[Dialogue] Web parse completed successfully in %s (%d chars output)", 
 		elapsed, len(result.Output))
