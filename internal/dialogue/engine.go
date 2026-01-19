@@ -170,7 +170,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before reflection: %w", ctx.Err())
 	}
 	
-	reasoning, tokens, err := e.performEnhancedReflection(ctx, state)
+	reasoning, principles, tokens, err := e.performEnhancedReflection(ctx, state)
 	if err != nil {
 		return StopReasonNaturalStop, fmt.Errorf("reflection failed: %w", err)
 	}
@@ -233,35 +233,6 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 			}
 		}
 		log.Printf("[Dialogue] Stored %d/%d learnings in memory (collective=true)", storedCount, len(reasoning.Learnings))
-		
-		// Give Qdrant time to index the new embeddings
-		if storedCount > 0 {
-			log.Printf("[Dialogue] Waiting 2s for Qdrant to index %d new learnings...", storedCount)
-			time.Sleep(2 * time.Second)
-			
-			// Verify learnings are searchable
-			for _, memID := range storedIDs {
-				mem, err := e.storage.GetMemoryByID(ctx, memID)
-				if err != nil {
-					log.Printf("[Dialogue] WARNING: Stored learning %s not immediately retrievable: %v", memID, err)
-				} else {
-					log.Printf("[Dialogue] ✓ Verified learning %s is retrievable", truncate(mem.Content, 60))
-				}
-			}
-		}
-	}
-	
-	// Check token budget
-	if totalTokens >= e.maxTokensPerCycle {
-		metrics.ThoughtCount = thoughtCount
-		metrics.ActionCount = actionCount
-		metrics.TokensUsed = totalTokens
-		return StopReasonMaxThoughts, nil
-	}
-
-	// Check for extended idle periods and trigger exploration
-	if len(state.ActiveGoals) == 0 {
-		timeSinceLastCycle := time.Since(state.LastCycleTime)
 		
 		// Give Qdrant time to index the new embeddings
 		if storedCount > 0 {
@@ -3201,7 +3172,7 @@ func (e *Engine) determineGoalTier(description string, priority int, reasoning s
 }
 
 // performEnhancedReflection performs structured reasoning about recent activity
-func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalState) (*ReasoningResponse, int, error) {
+func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalState) (*ReasoningResponse, []memory.Principle, int, error) {
 	// CRITICAL: Load principles FIRST - these define identity and values
 	principles, err := memory.LoadPrinciples(e.db)
 	if err != nil {
@@ -3442,7 +3413,7 @@ Keep it focused and actionable.`, principlesContext, memoryContext, goalsContext
         log.Printf("[Dialogue] [SmartFallback] LLM omitted reflection, generated: %s", truncate(reasoning.Reflection, 60))
     }
     
-    return reasoning, tokens, nil
+    return reasoning, principles, tokens, nil
 }
 
 // calculateConfidence computes confidence score based on actual metrics
