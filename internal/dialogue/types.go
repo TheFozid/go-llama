@@ -20,7 +20,7 @@ type Goal struct {
 	Outcome         string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
 	ResearchPlan    *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
 	FailureCount    int            `json:"failure_count"` // Track consecutive failures before abandoning
-	Tier            string         `json:"tier"` // "primary", "secondary", "tactical"
+	Tier            string         `json:"tier"` // "primary", "secondary"
 	SupportsGoals   []string       `json:"supports_goals,omitempty"` // IDs of primary goals this supports
 	DependencyScore float64        `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
 	HasPendingWork  bool           `json:"has_pending_work"` // True if goal has pending actions
@@ -323,4 +323,33 @@ type GoalSupportValidation struct {
 	Confidence     float64 `json:"confidence"`       // 0.0-1.0 confidence in linkage
 	Reasoning      string  `json:"reasoning"`        // Why this secondary supports the primary
 	IsValid        bool    `json:"is_valid"`         // True if linkage is meaningful
+}
+
+// SearchEvaluation represents LLM's assessment of search result quality
+type SearchEvaluation struct {
+	Quality      string   `json:"quality"`       // "sufficient", "needs_parse", "insufficient"
+	BestURL      string   `json:"best_url"`      // Highest quality URL from results
+	FallbackURLs []string `json:"fallback_urls"` // Alternative URLs to try
+	Reasoning    string   `json:"reasoning"`     // Why this assessment
+	Confidence   float64  `json:"confidence"`    // 0.0-1.0 confidence in assessment
+	ShouldProceed bool    `json:"should_proceed"` // Whether to continue with this search
+}
+
+// ParseEvaluation represents LLM's assessment of parsed content quality
+type ParseEvaluation struct {
+	Quality        string   `json:"quality"`         // "sufficient", "try_fallback", "parse_deeper", "wrong_source"
+	Reasoning      string   `json:"reasoning"`       // Why this assessment
+	Confidence     float64  `json:"confidence"`      // 0.0-1.0 confidence in assessment
+	MissingInfo    []string `json:"missing_info"`    // What information is still needed
+	ShouldContinue bool     `json:"should_continue"` // Whether to keep pursuing this goal
+}
+
+// SecondaryGoalProposal represents a proposed secondary goal
+type SecondaryGoalProposal struct {
+	Description    string   `json:"description"`
+	Priority       int      `json:"priority"`
+	Reasoning      string   `json:"reasoning"`
+	ExpectedTime   string   `json:"expected_time"`
+	ActionPlan     []string `json:"action_plan"`
+	SupportsGoalID string   `json:"supports_goal_id"` // Which primary goal this supports
 }

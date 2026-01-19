@@ -361,8 +361,43 @@ if inMetaLoop {
 			truncate(exploratoryGoal.Description, 60))
 	}
 	
-// Try to create user-aligned goal if we have capacity and no recent user-aligned goals
-	if len(state.ActiveGoals) < 3 {
+	// SECONDARY GOAL CREATION: Propose secondaries to support primaries
+	primaryGoals := getPrimaryGoals(state.ActiveGoals)
+	secondaryGoals := getSecondaryGoals(state.ActiveGoals)
+	
+	// Only create secondaries if we have primaries and room for more
+	if len(primaryGoals) > 0 && len(secondaryGoals) < 10 {
+		proposal, err := e.proposeSecondaryGoal(ctx, primaryGoals, secondaryGoals)
+		if err != nil {
+			log.Printf("[Dialogue] WARNING: Failed to propose secondary goal: %v", err)
+		} else if proposal != nil {
+			// Validate the proposal links to a valid primary
+			primaryExists := false
+			for _, primary := range primaryGoals {
+				if primary.ID == proposal.SupportsGoalID {
+					primaryExists = true
+					break
+				}
+			}
+			
+			if primaryExists {
+				secondaryGoal := e.createSecondaryGoalFromProposal(proposal)
+				state.ActiveGoals = append(state.ActiveGoals, secondaryGoal)
+				metrics.GoalsCreated++
+				log.Printf("[Dialogue] ✓ Created secondary goal: %s (supports: %s)",
+					truncate(secondaryGoal.Description, 60), 
+					truncate(proposal.SupportsGoalID, 20))
+			} else {
+				log.Printf("[Dialogue] Rejected secondary proposal: primary goal %s not found", 
+					proposal.SupportsGoalID)
+			}
+		} else {
+			log.Printf("[Dialogue] No secondary goal needed (primaries well-supported)")
+		}
+	}
+	
+	// Try to create user-aligned PRIMARY goal if we have capacity
+	if len(primaryGoals) < 3 {
 		// Check if we recently created a user-aligned goal
 		hasRecentUserGoal := false
 		for _, goal := range state.ActiveGoals {
@@ -542,21 +577,12 @@ if inMetaLoop {
 				// Execute tool
 				result, err := e.executeAction(ctx, action)
 				
-// If this was a search, extract URLs and create parse action
+// If this was a search, extract URLs and evaluate quality
 if err == nil && action.Tool == ActionToolSearch {
-    // Extract URLs from search results
-    urls := e.extractURLsFromSearchResults(result)
+    // Use LLM-based evaluation to select best URL
+    log.Printf("[Dialogue] Evaluating search results with LLM...")
     
-    if len(urls) == 0 {
-        log.Printf("[Dialogue] WARNING: No URLs found in search results")
-        action.Result = "Search completed but no URLs found"
-        action.Status = ActionStatusCompleted
-        topGoal.Outcome = "bad"
-    } else {
-        // Use LLM-based evaluation to select best URL
-        log.Printf("[Dialogue] Evaluating %d search results with LLM...", len(urls))
-        
-        evaluation, evalErr := e.evaluateSearchResults(ctx, result, topGoal.Description)
+    evaluation, evalErr := e.evaluateSearchResults(ctx, result, topGoal.Description)
         
         if evalErr != nil || !evaluation.ShouldProceed {
             // Evaluation failed or no good URLs found
@@ -1027,6 +1053,7 @@ for i := range topGoal.Actions {
 									Timestamp:   time.Now(),
 								}
 								topGoal.Actions = append(topGoal.Actions, searchAction)
+								topGoal.HasPendingWork = true
 								
 								// CRITICAL FIX: Update goal in state immediately
 								for i := range state.ActiveGoals {
@@ -1046,6 +1073,23 @@ for i := range topGoal.Actions {
 								for i, q := range plan.SubQuestions {
 									log.Printf("[Dialogue]   Q%d [%s]: %s (deps: %v)",
 										i+1, q.ID, truncate(q.Question, 60), q.Dependencies)
+								}
+								
+								// ✅ CRITICAL FIX: Create first action immediately
+								firstAction := e.getNextResearchAction(ctx, &topGoal)
+								if firstAction != nil {
+									topGoal.Actions = append(topGoal.Actions, *firstAction)
+									topGoal.HasPendingWork = true
+									log.Printf("[Dialogue] ✓ Created first research action: %s", truncate(firstAction.Description, 60))
+									
+									// Update goal in state
+									for i := range state.ActiveGoals {
+										if state.ActiveGoals[i].ID == topGoal.ID {
+											state.ActiveGoals[i] = topGoal
+											log.Printf("[Dialogue] ✓ Updated goal in state with research plan + first action")
+											break
+										}
+									}
 								}
 							}
 						} else if topGoal.ResearchPlan != nil {
@@ -1089,6 +1133,7 @@ for i := range topGoal.Actions {
 								Timestamp:   time.Now(),
 							}
 							topGoal.Actions = append(topGoal.Actions, searchAction)
+							topGoal.HasPendingWork = true
 							log.Printf("[Dialogue] Created simple search action with keywords: %s", truncate(searchQuery, 60))
 							
 							// Parse action will be created automatically after search completes
@@ -1248,6 +1293,29 @@ if topGoal.Progress >= 1.0 && !hasPendingActions {
 		topGoal.Outcome = "good"
 		log.Printf("[Dialogue] ✓ Goal completed successfully: %s", topGoal.Description)
 		metrics.GoalsCompleted++
+		
+		// If this was a secondary goal, check if its primary can now complete
+		if topGoal.Tier == "secondary" && len(topGoal.SupportsGoals) > 0 {
+			primaryGoal := findPrimaryGoal(topGoal.SupportsGoals[0], state)
+			if primaryGoal != nil {
+				allComplete := checkAllSupportingGoalsComplete(primaryGoal, state)
+				if allComplete {
+					primaryGoal.Status = GoalStatusCompleted
+					primaryGoal.Outcome = "good"
+					primaryGoal.Progress = 1.0
+					log.Printf("[Dialogue] ✓ PRIMARY GOAL COMPLETED (all secondaries done): %s",
+						truncate(primaryGoal.Description, 60))
+					
+					// Update in state
+					for i := range state.ActiveGoals {
+						if state.ActiveGoals[i].ID == primaryGoal.ID {
+							state.ActiveGoals[i] = *primaryGoal
+							break
+						}
+					}
+				}
+			}
+		}
 	} else if hasFailures {
 		topGoal.Status = GoalStatusAbandoned
 		topGoal.Outcome = "bad"
@@ -1260,10 +1328,14 @@ if topGoal.Progress >= 1.0 && !hasPendingActions {
 	}
 }
 		
+		// Update pending work status
+		topGoal.HasPendingWork = hasPendingActions(&topGoal)
+		
 		// Update goal in state
 		for i := range state.ActiveGoals {
 			if state.ActiveGoals[i].ID == topGoal.ID {
 				state.ActiveGoals[i] = topGoal
+				log.Printf("[Dialogue] Updated goal in state: pending_work=%v", topGoal.HasPendingWork)
 				break
 			}
 		}
@@ -3011,22 +3083,10 @@ func (e *Engine) determineGoalTier(description string, priority int, reasoning s
 		return "primary"
 	}
 	
-	// TACTICAL tier indicators:
-	// - Low priority (1-4)
-	// - Short-term tasks
-	// - Specific one-off actions
-	if priority <= 4 {
-		return "tactical"
-	}
-	
-	if strings.Contains(descLower, "parse") ||
-	   strings.Contains(descLower, "fetch") ||
-	   strings.Contains(descLower, "check") {
-		return "tactical"
-	}
-	
 	// DEFAULT: SECONDARY tier (5-8 priority)
 	// Most research and learning goals fall here
+	// Note: Actions like "parse" and "fetch" are no longer separate goals,
+	// they are actions within a goal's research plan
 	return "secondary"
 }
 
@@ -3328,6 +3388,10 @@ func (e *Engine) calculateConfidence(ctx context.Context, state *InternalState) 
 func (e *Engine) createGoalFromProposal(proposal GoalProposal) Goal {
 	// Determine tier based on priority and description
 	tier := e.determineGoalTier(proposal.Description, proposal.Priority, proposal.Reasoning)
+	
+	// TIER VALIDATION: Secondary goals MUST be validated against primaries
+	// This happens in the calling code, not here
+	// We just create the goal structure
 	
 	goal := Goal{
 		ID:              fmt.Sprintf("goal_%d", time.Now().UnixNano()),
