@@ -1327,7 +1327,6 @@ if topGoal.Progress >= 1.0 && !hasPendingActions {
 		topGoal.Outcome = "neutral"
 		log.Printf("[Dialogue] ⚠ Goal abandoned (no useful output): %s", truncate(topGoal.Description, 60))
 	}
-}
 		
 		// Update pending work status
 		topGoal.HasPendingWork = hasPendingActions(&topGoal)
