@@ -20,12 +20,11 @@ type Goal struct {
     Outcome         string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
     ResearchPlan    *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
     Metadata        map[string]interface{} `json:"metadata,omitempty"` // Additional metadata for the goal
-	ResearchPlan    *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
-	FailureCount    int            `json:"failure_count"` // Track consecutive failures before abandoning
-	Tier            string         `json:"tier"` // "primary", "secondary", "tactical"
-	SupportsGoals   []string       `json:"supports_goals,omitempty"` // IDs of primary goals this supports
-	DependencyScore float64        `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
-	HasPendingWork     bool                    `json:"has_pending_work"` // True if goal has pending actions
+    FailureCount    int            `json:"failure_count"` // Track consecutive failures before abandoning
+    Tier            string         `json:"tier"` // "primary", "secondary", "tactical"
+    SupportsGoals   []string       `json:"supports_goals,omitempty"` // IDs of primary goals this supports
+    DependencyScore float64        `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
+    HasPendingWork     bool                    `json:"has_pending_work"` // True if goal has pending actions
 	LastPursued        time.Time               `json:"last_pursued"` // When this goal was last worked on
 	LastAssessment     *PlanAssessment         `json:"last_assessment,omitempty"` // Result of last progress check
 	ReplanCount        int                     `json:"replan_count"` // Number of times this goal has been replanned
