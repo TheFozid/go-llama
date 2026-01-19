@@ -3923,11 +3923,42 @@ func (e *Engine) parseAssessmentSExpr(rawResponse string) (*PlanAssessment, erro
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 	
-	// Find assessment block
-	blocks := findBlocksRecursive(content, "assessment")
-	if len(blocks) == 0 {
-		return nil, fmt.Errorf("no assessment block found in response")
-	}
+    // Find assessment block
+    blocks := findBlocksRecursive(content, "assessment")
+    
+    // FALLBACK: If recursive search fails, try to find the block manually
+    // This handles cases where LLM adds conversational text before the block
+    // or uses slightly different formatting.
+    if len(blocks) == 0 {
+        if strings.Contains(content, "(assessment") {
+            // Find last occurrence (most likely to be the actual data)
+            startIndex := strings.LastIndex(content, "(assessment")
+            if startIndex != -1 {
+                // Find matching closing parenthesis
+                depth := 0
+                endIndex := -1
+                for i := startIndex; i < len(content); i++ {
+                    if content[i] == '(' {
+                        depth++
+                    } else if content[i] == ')' {
+                        depth--
+                        if depth == 0 {
+                            endIndex = i + 1 // Include closing paren
+                            break
+                        }
+                    }
+                }
+                
+                if endIndex != -1 {
+                    blocks = append(blocks, content[startIndex:endIndex])
+                }
+            }
+        }
+    }
+
+    if len(blocks) == 0 {
+        return nil, fmt.Errorf("no assessment block found in response")
+    }
 	
 	block := blocks[0]
 	
