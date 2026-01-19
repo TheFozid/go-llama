@@ -3188,7 +3188,7 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	// Find recent memories for context
 	embedding, err := e.embedder.Embed(ctx, "recent activity patterns successes failures")
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to generate embedding: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 	
 	searchThreshold := e.adaptiveConfig.GetSearchThreshold()
@@ -3212,7 +3212,7 @@ func (e *Engine) performEnhancedReflection(ctx context.Context, state *InternalS
 	
 	results, err := e.storage.Search(ctx, query, embedding)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to search memories: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to search memories: %w", err)
 	}
 	
 	log.Printf("[Dialogue] Collective memory search returned %d results", len(results))
@@ -3357,7 +3357,7 @@ Keep it focused and actionable.`, principlesContext, memoryContext, goalsContext
 	// Call LLM with structured reasoning
 	reasoning, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
 	if err != nil {
-		return nil, tokens, err
+		return nil, nil, tokens, err
 	}
 	
 	// Override LLM's confidence with calculated confidence based on actual metrics
