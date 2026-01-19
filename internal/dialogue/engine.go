@@ -251,32 +251,6 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		}
 	}
 	
-	// NEW: Metacognitive evaluation - should we modify our thinking principles?
-	if e.enableMetaLearning {
-		log.Printf("[Dialogue] Evaluating principle effectiveness (metacognitive check)...")
-		principleFeedback, feedbackTokens, err := e.evaluatePrincipleEffectiveness(ctx, principles, state)
-		if err != nil {
-			log.Printf("[Dialogue] WARNING: Principle evaluation failed: %v", err)
-		} else {
-			totalTokens += feedbackTokens
-			
-			if principleFeedback.ShouldModify {
-				log.Printf("[Dialogue] ✓ Principle modification recommended:")
-				log.Printf("[Dialogue]   Target: Slot %d", principleFeedback.TargetSlot)
-				log.Printf("[Dialogue]   Current: %s", truncate(principleFeedback.CurrentPrinciple, 60))
-				log.Printf("[Dialogue]   Proposed: %s", truncate(principleFeedback.ProposedPrinciple, 60))
-				log.Printf("[Dialogue]   Justification: %s", truncate(principleFeedback.Justification, 100))
-				
-				// Create self-modification goal
-				modGoal := e.createSelfModificationGoal(principleFeedback)
-				newGoals = append(newGoals, modGoal)
-				log.Printf("[Dialogue] ✓ Created self-modification goal: %s", truncate(modGoal.Description, 60))
-			} else {
-				log.Printf("[Dialogue] Current principles are working well, no modification needed")
-			}
-		}
-	}
-	
 	// Check token budget
 	if totalTokens >= e.maxTokensPerCycle {
 		metrics.ThoughtCount = thoughtCount
@@ -542,7 +516,33 @@ if inMetaLoop {
 		log.Printf("[Dialogue] Created %d new goals total", len(newGoals))
 	}
 	
-
+	// NEW: Metacognitive evaluation - should we modify our thinking principles?
+	if e.enableMetaLearning {
+		log.Printf("[Dialogue] Evaluating principle effectiveness (metacognitive check)...")
+		principleFeedback, feedbackTokens, err := e.evaluatePrincipleEffectiveness(ctx, principles, state)
+		if err != nil {
+			log.Printf("[Dialogue] WARNING: Principle evaluation failed: %v", err)
+		} else {
+			totalTokens += feedbackTokens
+			
+			if principleFeedback.ShouldModify {
+				log.Printf("[Dialogue] ✓ Principle modification recommended:")
+				log.Printf("[Dialogue]   Target: Slot %d", principleFeedback.TargetSlot)
+				log.Printf("[Dialogue]   Current: %s", truncate(principleFeedback.CurrentPrinciple, 60))
+				log.Printf("[Dialogue]   Proposed: %s", truncate(principleFeedback.ProposedPrinciple, 60))
+				log.Printf("[Dialogue]   Justification: %s", truncate(principleFeedback.Justification, 100))
+				
+				// Create self-modification goal
+				modGoal := e.createSelfModificationGoal(principleFeedback)
+				state.ActiveGoals = append(state.ActiveGoals, modGoal)
+				metrics.GoalsCreated++
+				log.Printf("[Dialogue] ✓ Created self-modification goal: %s", truncate(modGoal.Description, 60))
+			} else {
+				log.Printf("[Dialogue] Current principles are working well, no modification needed")
+			}
+		}
+	}
+	
 	// PHASE 3: Goal Pursuit (if we have active goals)
 	if len(state.ActiveGoals) > 0 {
 		log.Printf("[Dialogue] PHASE 3: Goal Pursuit (%d active goals)", len(state.ActiveGoals))
@@ -558,6 +558,7 @@ if inMetaLoop {
 		
 		// GOAL CONTINUITY LOCK: Prioritize goals with pending work
 		var topGoal Goal
+		var actionExecuted bool
 		foundContinuation := false
 		
 		for i := range state.ActiveGoals {
@@ -633,12 +634,13 @@ if inMetaLoop {
 			
 			// Skip normal action execution for self-mod goals
 			actionExecuted = true
+		} else {
+			// For non-self-mod goals, start with actionExecuted = false
+			actionExecuted = false
 		}
 		
 		// Phase 3.2: Execute actions with tools (skip if self-mod goal already handled)
-		if topGoal.Source != GoalSourceSelfModification {
-			actionExecuted = false
-		}
+		if !actionExecuted {
 		
 		for i := range topGoal.Actions {
 			action := &topGoal.Actions[i]
