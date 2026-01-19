@@ -23,10 +23,22 @@ type Goal struct {
 	Tier            string         `json:"tier"` // "primary", "secondary", "tactical"
 	SupportsGoals   []string       `json:"supports_goals,omitempty"` // IDs of primary goals this supports
 	DependencyScore float64        `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
-	HasPendingWork  bool             `json:"has_pending_work"` // True if goal has pending actions
-	LastPursued     time.Time        `json:"last_pursued"` // When this goal was last worked on
-	LastAssessment  *PlanAssessment  `json:"last_assessment,omitempty"` // Result of last progress check
-	ReplanCount     int              `json:"replan_count"` // Number of times this goal has been replanned
+	HasPendingWork     bool                    `json:"has_pending_work"` // True if goal has pending actions
+	LastPursued        time.Time               `json:"last_pursued"` // When this goal was last worked on
+	LastAssessment     *PlanAssessment         `json:"last_assessment,omitempty"` // Result of last progress check
+	ReplanCount        int                     `json:"replan_count"` // Number of times this goal has been replanned
+	SelfModGoal        *SelfModificationGoal   `json:"self_mod_goal,omitempty"` // Self-modification details if applicable
+}
+
+// SelfModificationGoal represents a deliberate attempt to modify thinking patterns
+type SelfModificationGoal struct {
+	TargetSlot         int      `json:"target_slot"`          // Which principle to modify (4-10 only)
+	CurrentPrinciple   string   `json:"current_principle"`    // What it says now
+	ProposedPrinciple  string   `json:"proposed_principle"`   // What it should say
+	Justification      string   `json:"justification"`        // Why this change is needed
+	TestActions        []Action `json:"test_actions"`         // Actions to validate the change
+	BaselineComparison string   `json:"baseline_comparison"`  // What to compare against
+	ValidationStatus   string   `json:"validation_status"`    // "pending", "testing", "validated", "failed"
 }
 
 // PlanAssessment represents evaluation of progress after completing an action
@@ -86,11 +98,12 @@ type CycleMetrics struct {
 
 // GoalSource constants
 const (
-	GoalSourceUserFailure  = "user_failure"
-	GoalSourceKnowledgeGap = "knowledge_gap"
-	GoalSourceCuriosity    = "curiosity"
-	GoalSourcePrinciple    = "principle"
-	GoalSourceUserInterest = "user_interest"
+	GoalSourceUserFailure     = "user_failure"
+	GoalSourceKnowledgeGap    = "knowledge_gap"
+	GoalSourceCuriosity       = "curiosity"
+	GoalSourcePrinciple       = "principle"
+	GoalSourceUserInterest    = "user_interest"
+	GoalSourceSelfModification = "self_modification"
 )
 
 // GoalStatus constants

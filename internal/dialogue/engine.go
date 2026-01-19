@@ -251,6 +251,61 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		}
 	}
 	
+	// NEW: Metacognitive evaluation - should we modify our thinking principles?
+	if e.enableMetaLearning {
+		log.Printf("[Dialogue] Evaluating principle effectiveness (metacognitive check)...")
+		principleFeedback, feedbackTokens, err := e.evaluatePrincipleEffectiveness(ctx, principles, state)
+		if err != nil {
+			log.Printf("[Dialogue] WARNING: Principle evaluation failed: %v", err)
+		} else {
+			totalTokens += feedbackTokens
+			
+			if principleFeedback.ShouldModify {
+				log.Printf("[Dialogue] ✓ Principle modification recommended:")
+				log.Printf("[Dialogue]   Target: Slot %d", principleFeedback.TargetSlot)
+				log.Printf("[Dialogue]   Current: %s", truncate(principleFeedback.CurrentPrinciple, 60))
+				log.Printf("[Dialogue]   Proposed: %s", truncate(principleFeedback.ProposedPrinciple, 60))
+				log.Printf("[Dialogue]   Justification: %s", truncate(principleFeedback.Justification, 100))
+				
+				// Create self-modification goal
+				modGoal := e.createSelfModificationGoal(principleFeedback)
+				newGoals = append(newGoals, modGoal)
+				log.Printf("[Dialogue] ✓ Created self-modification goal: %s", truncate(modGoal.Description, 60))
+			} else {
+				log.Printf("[Dialogue] Current principles are working well, no modification needed")
+			}
+		}
+	}
+	
+	// Check token budget
+	if totalTokens >= e.maxTokensPerCycle {
+		metrics.ThoughtCount = thoughtCount
+		metrics.ActionCount = actionCount
+		metrics.TokensUsed = totalTokens
+		return StopReasonMaxThoughts, nil
+	}
+
+	// Check for extended idle periods and trigger exploration
+	if len(state.ActiveGoals) == 0 {
+		timeSinceLastCycle := time.Since(state.LastCycleTime)
+		
+		// Give Qdrant time to index the new embeddings
+		if storedCount > 0 {
+			log.Printf("[Dialogue] Waiting 2s for Qdrant to index %d new learnings...", storedCount)
+			time.Sleep(2 * time.Second)
+			
+			// Verify learnings are searchable
+			for _, memID := range storedIDs {
+				mem, err := e.storage.GetMemoryByID(ctx, memID)
+				if err != nil {
+					log.Printf("[Dialogue] WARNING: Stored learning %s not immediately retrievable: %v", memID, err)
+				} else {
+					log.Printf("[Dialogue] ✓ Verified learning %s is retrievable", truncate(mem.Content, 60))
+				}
+			}
+		}
+	}
+	
 	// Check token budget
 	if totalTokens >= e.maxTokensPerCycle {
 		metrics.ThoughtCount = thoughtCount
@@ -527,10 +582,64 @@ if inMetaLoop {
 		// Mark goal as actively pursued
 		topGoal.LastPursued = time.Now()
 		
-		// Phase 3.2: Execute actions with tools
+		// NEW: Handle self-modification goals specially
+		if topGoal.Source == GoalSourceSelfModification && topGoal.SelfModGoal != nil {
+			log.Printf("[Dialogue] Executing self-modification goal for slot %d", topGoal.SelfModGoal.TargetSlot)
+			
+			// Test the proposed principle change
+			success, testResult := e.testPrincipleModification(ctx, &topGoal, principles)
+			
+			if success {
+				// Commit the change permanently
+				err := memory.UpdatePrinciple(e.db, 
+					topGoal.SelfModGoal.TargetSlot,
+					topGoal.SelfModGoal.ProposedPrinciple,
+					0.8) // High rating for deliberate modifications
+				
+				if err != nil {
+					log.Printf("[Dialogue] ERROR: Failed to commit principle change: %v", err)
+					topGoal.Status = GoalStatusAbandoned
+					topGoal.Outcome = "bad"
+				} else {
+					log.Printf("[Dialogue] ✓ Principle modification committed to slot %d", topGoal.SelfModGoal.TargetSlot)
+					log.Printf("[Dialogue]   New principle: %s", topGoal.SelfModGoal.ProposedPrinciple)
+					topGoal.Status = GoalStatusCompleted
+					topGoal.Outcome = "good"
+					topGoal.Progress = 1.0
+					
+					// Store this as a high-value learning
+					learning := Learning{
+						What:       fmt.Sprintf("Modified principle (slot %d): %s", topGoal.SelfModGoal.TargetSlot, topGoal.SelfModGoal.ProposedPrinciple),
+						Context:    fmt.Sprintf("Self-modification goal. Justification: %s. Test result: %s", topGoal.SelfModGoal.Justification, testResult),
+						Confidence: 0.9,
+						Category:   "self_modification",
+					}
+					e.storeLearning(ctx, learning)
+				}
+			} else {
+				log.Printf("[Dialogue] ✗ Principle modification test failed: %s", testResult)
+				log.Printf("[Dialogue]   Keeping current principle in slot %d", topGoal.SelfModGoal.TargetSlot)
+				topGoal.Status = GoalStatusAbandoned
+				topGoal.Outcome = "neutral" // Not a failure, just didn't improve things
+			}
+			
+			// Update goal in state
+			for i := range state.ActiveGoals {
+				if state.ActiveGoals[i].ID == topGoal.ID {
+					state.ActiveGoals[i] = topGoal
+					break
+				}
+			}
+			
+			// Skip normal action execution for self-mod goals
+			actionExecuted = true
+		}
+		
+		// Phase 3.2: Execute actions with tools (skip if self-mod goal already handled)
 		actionExecuted := false
-		for i := range topGoal.Actions {
-			action := &topGoal.Actions[i]
+		if topGoal.Source != GoalSourceSelfModification {
+			for i := range topGoal.Actions {
+				action := &topGoal.Actions[i]
 			
 			// Skip completed actions
 			if action.Status == ActionStatusCompleted {
@@ -4056,4 +4165,270 @@ CRITICAL:
 	}
 	
 	return newPlan, tokens, nil
+}
+
+// evaluatePrincipleEffectiveness checks if current principles are working well
+func (e *Engine) evaluatePrincipleEffectiveness(ctx context.Context, principles []memory.Principle, state *InternalState) (*PrincipleFeedback, int, error) {
+	// Only check if we have recent failures
+	if len(state.RecentFailures) == 0 {
+		return &PrincipleFeedback{ShouldModify: false}, 0, nil
+	}
+	
+	// Get recent goal outcomes (last 10)
+	recentGoals := state.CompletedGoals
+	if len(recentGoals) > 10 {
+		recentGoals = recentGoals[len(recentGoals)-10:]
+	}
+	
+	// Count failures
+	failureCount := 0
+	for _, goal := range recentGoals {
+		if goal.Outcome == "bad" {
+			failureCount++
+		}
+	}
+	
+	// Need at least 3 failures to consider modification
+	if failureCount < 3 {
+		return &PrincipleFeedback{ShouldModify: false}, 0, nil
+	}
+	
+	// Build context about failures
+	failureContext := ""
+	for i, goal := range recentGoals {
+		if goal.Outcome == "bad" {
+			failureContext += fmt.Sprintf("%d. %s (Source: %s)\n", i+1, truncate(goal.Description, 80), goal.Source)
+		}
+	}
+	
+	// Build current principles context (AI-managed only)
+	aiPrinciples := ""
+	for _, p := range principles {
+		if p.Slot >= 4 && p.Slot <= 10 && p.Content != "" {
+			aiPrinciples += fmt.Sprintf("Slot %d: %s\n", p.Slot, p.Content)
+		}
+	}
+	
+	if aiPrinciples == "" {
+		aiPrinciples = "No AI-managed principles defined yet.\n"
+	}
+	
+	prompt := fmt.Sprintf(`Evaluate if current thinking principles need modification based on recent failures.
+
+CURRENT AI-MANAGED PRINCIPLES (Slots 4-10):
+%s
+
+RECENT FAILURES (%d out of last %d goals):
+%s
+
+METACOGNITIVE ANALYSIS:
+1. Is there a pattern in these failures?
+2. Would modifying a principle help prevent similar failures?
+3. Which specific principle (slot 4-10) should change, if any?
+
+CRITICAL RULES:
+- NEVER propose modifying slots 1-3 (admin principles)
+- Only propose modification if pattern is clear
+- Principle must be BEHAVIORAL (how to think/act), not a goal
+- Must be specific enough to actually change behavior
+
+RESPOND with S-expression (no markdown):
+
+(principle_evaluation
+  (should_modify true|false)
+  (target_slot 4-10)  ; Only if should_modify=true
+  (current_principle "Current text from that slot")
+  (proposed_principle "New behavioral principle to replace it")
+  (justification "Why this specific change addresses the failure pattern")
+  (test_strategy "How to validate this change works"))
+
+If should_modify=false, only include (should_modify false).`, 
+		aiPrinciples,
+		failureCount,
+		len(recentGoals),
+		failureContext)
+	
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	if err != nil {
+		return nil, tokens, fmt.Errorf("principle evaluation failed: %w", err)
+	}
+	
+	// Parse response
+	feedback, err := e.parsePrincipleFeedback(response.RawResponse)
+	if err != nil {
+		return nil, tokens, fmt.Errorf("failed to parse principle feedback: %w", err)
+	}
+	
+	return feedback, tokens, nil
+}
+
+// PrincipleFeedback represents LLM's evaluation of whether to modify principles
+type PrincipleFeedback struct {
+	ShouldModify       bool
+	TargetSlot         int
+	CurrentPrinciple   string
+	ProposedPrinciple  string
+	Justification      string
+	TestStrategy       string
+}
+
+// parsePrincipleFeedback extracts feedback from S-expression
+func (e *Engine) parsePrincipleFeedback(rawResponse string) (*PrincipleFeedback, error) {
+	content := strings.TrimSpace(rawResponse)
+	content = strings.TrimPrefix(content, "```lisp")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	blocks := findBlocksRecursive(content, "principle_evaluation")
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("no principle_evaluation block found")
+	}
+	
+	block := blocks[0]
+	
+	shouldModifyStr := extractFieldContent(block, "should_modify")
+	shouldModify := (shouldModifyStr == "true" || shouldModifyStr == "t")
+	
+	feedback := &PrincipleFeedback{
+		ShouldModify: shouldModify,
+	}
+	
+	if !shouldModify {
+		return feedback, nil
+	}
+	
+	// Extract modification details
+	targetSlotStr := extractFieldContent(block, "target_slot")
+	if targetSlotStr != "" {
+		if slot, err := strconv.Atoi(targetSlotStr); err == nil {
+			feedback.TargetSlot = slot
+		}
+	}
+	
+	feedback.CurrentPrinciple = extractFieldContent(block, "current_principle")
+	feedback.ProposedPrinciple = extractFieldContent(block, "proposed_principle")
+	feedback.Justification = extractFieldContent(block, "justification")
+	feedback.TestStrategy = extractFieldContent(block, "test_strategy")
+	
+	// Validate slot range
+	if feedback.TargetSlot < 4 || feedback.TargetSlot > 10 {
+		return nil, fmt.Errorf("invalid target slot: %d (must be 4-10)", feedback.TargetSlot)
+	}
+	
+	// Validate required fields
+	if feedback.ProposedPrinciple == "" {
+		return nil, fmt.Errorf("proposed_principle is required when should_modify=true")
+	}
+	
+	return feedback, nil
+}
+
+// createSelfModificationGoal creates a goal to test and potentially commit a principle change
+func (e *Engine) createSelfModificationGoal(feedback *PrincipleFeedback) Goal {
+	// Generate test actions based on strategy
+	testActions := []Action{
+		{
+			Description: "Test new principle with search task",
+			Tool:        ActionToolSearch,
+			Status:      ActionStatusPending,
+			Timestamp:   time.Now(),
+			Metadata: map[string]interface{}{
+				"is_principle_test": true,
+				"test_type":         "search_quality",
+			},
+		},
+	}
+	
+	goal := Goal{
+		ID:          fmt.Sprintf("goal_%d", time.Now().UnixNano()),
+		Description: fmt.Sprintf("Test principle modification: %s", truncate(feedback.ProposedPrinciple, 60)),
+		Source:      GoalSourceSelfModification,
+		Priority:    8, // High priority - self-improvement is important
+		Created:     time.Now(),
+		Progress:    0.0,
+		Status:      GoalStatusActive,
+		Actions:     testActions,
+		Tier:        "primary",
+		SelfModGoal: &SelfModificationGoal{
+			TargetSlot:         feedback.TargetSlot,
+			CurrentPrinciple:   feedback.CurrentPrinciple,
+			ProposedPrinciple:  feedback.ProposedPrinciple,
+			Justification:      feedback.Justification,
+			TestActions:        testActions,
+			BaselineComparison: "Compare to recent failures with current principle",
+			ValidationStatus:   "pending",
+		},
+	}
+	
+	return goal
+}
+
+// testPrincipleModification validates a proposed principle change
+func (e *Engine) testPrincipleModification(ctx context.Context, goal *Goal, currentPrinciples []memory.Principle) (bool, string) {
+	if goal.SelfModGoal == nil {
+		return false, "No self-modification data"
+	}
+	
+	modGoal := goal.SelfModGoal
+	
+	// Simple validation test: Does the new principle make semantic sense?
+	// In a full implementation, this would execute test actions and compare results
+	
+	prompt := fmt.Sprintf(`Validate a proposed principle modification.
+
+CURRENT PRINCIPLE (Slot %d):
+%s
+
+PROPOSED PRINCIPLE:
+%s
+
+JUSTIFICATION:
+%s
+
+VALIDATION CRITERIA:
+1. Is the proposed principle BEHAVIORAL (how to think/act, not a task/goal)?
+2. Is it specific enough to actually change behavior?
+3. Does it address the stated justification?
+4. Would it likely improve outcomes based on the justification?
+
+RESPOND with S-expression:
+
+(validation
+  (is_valid true|false)
+  (reasoning "Why this change would/wouldn't help")
+  (predicted_improvement "low|medium|high"))`, 
+		modGoal.TargetSlot,
+		modGoal.CurrentPrinciple,
+		modGoal.ProposedPrinciple,
+		modGoal.Justification)
+	
+	response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	if err != nil {
+		return false, fmt.Sprintf("Validation failed: %v", err)
+	}
+	
+	// Parse validation
+	content := strings.TrimSpace(response.RawResponse)
+	content = strings.TrimPrefix(content, "```lisp")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	blocks := findBlocksRecursive(content, "validation")
+	if len(blocks) == 0 {
+		return false, "Could not parse validation response"
+	}
+	
+	block := blocks[0]
+	isValidStr := extractFieldContent(block, "is_valid")
+	reasoning := extractFieldContent(block, "reasoning")
+	
+	isValid := (isValidStr == "true" || isValidStr == "t")
+	
+	if isValid {
+		return true, fmt.Sprintf("Validated: %s", reasoning)
+	} else {
+		return false, fmt.Sprintf("Rejected: %s", reasoning)
+	}
 }
