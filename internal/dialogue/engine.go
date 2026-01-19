@@ -2136,7 +2136,7 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
     systemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
 Format: (reasoning (reflection "...") (insights "...") (goals_to_create (goal (description "...") (priority 7))))
-Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))
+Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))`
 
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
