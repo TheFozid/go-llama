@@ -9,15 +9,17 @@ import (
 
 // Goal represents a self-directed learning objective
 type Goal struct {
-	ID              string         `json:"id"`
-	Description     string         `json:"description"`
-	Source          string         `json:"source"` // "user_failure", "knowledge_gap", "curiosity", "principle"
-	Priority        int            `json:"priority"` // 1-10
-	Created         time.Time      `json:"created"`
-	Progress        float64        `json:"progress"` // 0.0 to 1.0
-	Actions         []Action       `json:"actions"`
-	Status          string         `json:"status"` // "active", "completed", "abandoned"
-	Outcome         string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
+    ID              string         `json:"id"`
+    Description     string         `json:"description"`
+    Source          string         `json:"source"` // "user_failure", "knowledge_gap", "curiosity", "principle"
+    Priority        int            `json:"priority"` // 1-10
+    Created         time.Time      `json:"created"`
+    Progress        float64        `json:"progress"` // 0.0 to 1.0
+    Actions         []Action       `json:"actions"`
+    Status          string         `json:"status"` // "active", "completed", "abandoned"
+    Outcome         string         `json:"outcome,omitempty"` // "good", "bad", "neutral" (when completed)
+    ResearchPlan    *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
+    Metadata        map[string]interface{} `json:"metadata,omitempty"` // Additional metadata for the goal
 	ResearchPlan    *ResearchPlan  `json:"research_plan,omitempty"` // Multi-step investigation plan
 	FailureCount    int            `json:"failure_count"` // Track consecutive failures before abandoning
 	Tier            string         `json:"tier"` // "primary", "secondary", "tactical"
