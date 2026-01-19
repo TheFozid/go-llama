@@ -945,6 +945,75 @@ if action.Metadata != nil {
 					}
 				}
 				
+				// NEW: Assess progress after EVERY action completes
+				log.Printf("[Dialogue] Assessing progress after action completion...")
+				assessment, assessTokens, err := e.assessProgress(ctx, &topGoal)
+				if err != nil {
+					log.Printf("[Dialogue] WARNING: Progress assessment failed: %v", err)
+					// Continue with current plan on assessment failure
+				} else {
+					totalTokens += assessTokens
+					topGoal.LastAssessment = assessment
+					
+					log.Printf("[Dialogue] Assessment: quality=%s, validity=%s, recommendation=%s",
+						assessment.ProgressQuality, assessment.PlanValidity, assessment.Recommendation)
+					log.Printf("[Dialogue] Reasoning: %s", truncate(assessment.Reasoning, 120))
+					
+					// Act on recommendation
+					if assessment.Recommendation == "replan" && topGoal.ReplanCount < 3 {
+						log.Printf("[Dialogue] Replanning goal based on assessment (attempt %d/3)...", topGoal.ReplanCount+1)
+						
+						// Clear pending actions (keep completed for context)
+						completedActions := []Action{}
+						for _, a := range topGoal.Actions {
+							if a.Status == ActionStatusCompleted {
+								completedActions = append(completedActions, a)
+							}
+						}
+						topGoal.Actions = completedActions
+						
+						// Generate new plan
+						if topGoal.ResearchPlan != nil {
+							newPlan, replanTokens, err := e.replanGoal(ctx, &topGoal, assessment.Reasoning)
+							if err != nil {
+								log.Printf("[Dialogue] WARNING: Replan failed: %v", err)
+								// Continue with existing plan
+							} else {
+								totalTokens += replanTokens
+								topGoal.ResearchPlan = newPlan
+								topGoal.ReplanCount++
+								
+								log.Printf("[Dialogue] ✓ New plan generated (replan #%d): %d questions",
+									topGoal.ReplanCount, len(newPlan.SubQuestions))
+								
+								// Create first action from new plan
+								nextAction := e.getNextResearchAction(ctx, &topGoal)
+								if nextAction != nil {
+									topGoal.Actions = append(topGoal.Actions, *nextAction)
+									topGoal.HasPendingWork = true
+									log.Printf("[Dialogue] ✓ Created first action from new plan: %s", 
+										truncate(nextAction.Description, 60))
+								}
+								
+								// Update goal in state immediately
+								for i := range state.ActiveGoals {
+									if state.ActiveGoals[i].ID == topGoal.ID {
+										state.ActiveGoals[i] = topGoal
+										break
+									}
+								}
+							}
+						}
+					} else if assessment.Recommendation == "replan" && topGoal.ReplanCount >= 3 {
+						log.Printf("[Dialogue] ⚠ Goal reached max replans (3), marking as failed")
+						topGoal.Status = GoalStatusAbandoned
+						topGoal.Outcome = "bad"
+					} else if assessment.Recommendation == "adjust" {
+						log.Printf("[Dialogue] Plan needs minor adjustment, will naturally adapt on next action")
+						// No action needed - system will adjust when creating next action
+					}
+				}
+				
 				// Only execute one action per cycle
 				break
 			}
@@ -3656,4 +3725,335 @@ func (e *Engine) calculateKeywordOverlap(keywords1, keywords2 []string) float64 
 	
 	// Jaccard similarity
 	return float64(intersection) / float64(union)
+}
+
+// assessProgress evaluates if the current plan is still optimal after completing an action
+func (e *Engine) assessProgress(ctx context.Context, goal *Goal) (*PlanAssessment, int, error) {
+	// Gather completed and pending actions
+	completedActions := []Action{}
+	pendingActions := []Action{}
+	
+	for _, action := range goal.Actions {
+		if action.Status == ActionStatusCompleted {
+			completedActions = append(completedActions, action)
+		} else if action.Status == ActionStatusPending {
+			pendingActions = append(pendingActions, action)
+		}
+	}
+	
+	// Build action summaries
+	completedSummary := ""
+	for i, action := range completedActions {
+		resultPreview := action.Result
+		if len(resultPreview) > 200 {
+			resultPreview = resultPreview[:200] + "..."
+		}
+		completedSummary += fmt.Sprintf("%d. %s [%s]\n   Result: %s\n", 
+			i+1, action.Tool, action.Description, resultPreview)
+	}
+	
+	pendingSummary := ""
+	for i, action := range pendingActions {
+		pendingSummary += fmt.Sprintf("%d. %s [%s]\n", 
+			i+1, action.Tool, action.Description)
+	}
+	
+	// Build research plan summary if exists
+	planSummary := ""
+	if goal.ResearchPlan != nil {
+		planSummary = fmt.Sprintf("Root Question: %s\n", goal.ResearchPlan.RootQuestion)
+		planSummary += fmt.Sprintf("Total Questions: %d\n", len(goal.ResearchPlan.SubQuestions))
+		planSummary += fmt.Sprintf("Current Step: %d\n", goal.ResearchPlan.CurrentStep+1)
+	}
+	
+	prompt := fmt.Sprintf(`Assess progress toward this goal after completing an action.
+
+GOAL: %s
+
+COMPLETED ACTIONS (most recent last):
+%s
+
+PENDING ACTIONS:
+%s
+
+CURRENT RESEARCH PLAN:
+%s
+
+EVALUATION CRITERIA:
+1. Did the last action produce useful, relevant results?
+2. Are we making progress toward the goal?
+3. Is the remaining plan still optimal given what we learned?
+4. Do we need to change direction?
+
+RESPOND ONLY with S-expression (no markdown):
+
+(assessment
+  (progress_quality "good|partial|poor")
+  (plan_validity "valid|needs_adjustment|needs_replan")
+  (reasoning "1-2 sentence explanation of current state and why")
+  (recommendation "continue|adjust|replan"))
+
+DECISION RULES:
+- progress_quality "good" = action produced relevant, useful information
+- progress_quality "partial" = action produced some info but not ideal
+- progress_quality "poor" = action failed or produced irrelevant info
+
+- plan_validity "valid" = current plan will achieve goal
+- plan_validity "needs_adjustment" = plan mostly works but needs tweaks
+- plan_validity "needs_replan" = current approach won't work, need new strategy
+
+- recommendation "continue" = keep executing current plan
+- recommendation "adjust" = modify next actions but keep general approach
+- recommendation "replan" = abandon current plan, generate completely new one
+
+CRITICAL: Recommend "replan" if:
+- Search returned no relevant results
+- Parse found content unrelated to goal
+- We're clearly on wrong track from first action
+- Results don't match what we need for the goal`, 
+		goal.Description,
+		completedSummary,
+		pendingSummary,
+		planSummary)
+	
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	if err != nil {
+		return nil, tokens, fmt.Errorf("assessment LLM call failed: %w", err)
+	}
+	
+	// Parse S-expression response
+	assessment, err := e.parseAssessmentSExpr(response.RawResponse)
+	if err != nil {
+		return nil, tokens, fmt.Errorf("failed to parse assessment: %w", err)
+	}
+	
+	assessment.Timestamp = time.Now()
+	return assessment, tokens, nil
+}
+
+// parseAssessmentSExpr extracts assessment from S-expression response
+func (e *Engine) parseAssessmentSExpr(rawResponse string) (*PlanAssessment, error) {
+	content := strings.TrimSpace(rawResponse)
+	content = strings.TrimPrefix(content, "```lisp")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	// Find assessment block
+	blocks := findBlocksRecursive(content, "assessment")
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("no assessment block found in response")
+	}
+	
+	block := blocks[0]
+	
+	assessment := &PlanAssessment{
+		ProgressQuality: extractFieldContent(block, "progress_quality"),
+		PlanValidity:    extractFieldContent(block, "plan_validity"),
+		Reasoning:       extractFieldContent(block, "reasoning"),
+		Recommendation:  extractFieldContent(block, "recommendation"),
+	}
+	
+	// Validate required fields
+	if assessment.ProgressQuality == "" {
+		assessment.ProgressQuality = "unknown"
+	}
+	if assessment.PlanValidity == "" {
+		assessment.PlanValidity = "valid"
+	}
+	if assessment.Recommendation == "" {
+		assessment.Recommendation = "continue"
+	}
+	
+	return assessment, nil
+}
+
+// replanGoal generates a new plan based on what we've learned so far
+func (e *Engine) replanGoal(ctx context.Context, goal *Goal, reason string) (*ResearchPlan, int, error) {
+	// Summarize what we've learned from completed actions
+	completedSummary := ""
+	for i, action := range goal.Actions {
+		if action.Status == ActionStatusCompleted {
+			resultPreview := action.Result
+			if len(resultPreview) > 300 {
+				resultPreview = resultPreview[:300] + "..."
+			}
+			
+			// Analyze if this was useful or not
+			quality := "unknown"
+			resultLower := strings.ToLower(action.Result)
+			if strings.HasPrefix(resultLower, "error:") || 
+			   strings.HasPrefix(resultLower, "failed:") ||
+			   strings.Contains(resultLower[:min(100, len(resultLower))], "no suitable urls") {
+				quality = "failed"
+			} else if len(action.Result) > 500 {
+				quality = "success"
+			} else {
+				quality = "partial"
+			}
+			
+			completedSummary += fmt.Sprintf("%d. [%s] %s → %s\n   Result: %s\n", 
+				i+1, quality, action.Tool, action.Description, resultPreview)
+		}
+	}
+	
+	// Get original plan summary
+	originalPlanSummary := ""
+	if goal.ResearchPlan != nil {
+		originalPlanSummary = fmt.Sprintf("Original Root Question: %s\n", goal.ResearchPlan.RootQuestion)
+		for i, q := range goal.ResearchPlan.SubQuestions {
+			status := q.Status
+			if status == "" {
+				status = "pending"
+			}
+			originalPlanSummary += fmt.Sprintf("  Q%d [%s]: %s\n", i+1, status, q.Question)
+		}
+	}
+	
+	prompt := fmt.Sprintf(`Generate a NEW research plan for a goal that needs replanning.
+
+ORIGINAL GOAL: %s
+
+WHAT WE'VE TRIED SO FAR:
+%s
+
+ORIGINAL PLAN:
+%s
+
+WHY WE NEED TO REPLAN:
+%s
+
+REQUIREMENTS FOR NEW PLAN:
+1. Learn from failures - don't repeat approaches that didn't work
+2. Adjust search strategy based on what we learned
+3. Stay focused on ORIGINAL goal (don't drift)
+4. Keep plan achievable (3-7 questions)
+5. Make questions more specific if previous ones were too broad
+6. Try different angles if direct approach failed
+
+Generate research plan in SAME S-expression format as before:
+
+(research_plan
+  (root_question "Rephrased or refocused version of original goal")
+  (sub_questions
+    (question
+      (id "q1")
+      (text "First question - informed by what we learned")
+      (search_query "better search terms")
+      (priority 10)
+      (deps ()))
+    ... more questions ...))
+
+CRITICAL: 
+- If searches failed due to bad keywords, use DIFFERENT, MORE SPECIFIC terms
+- If results were too technical, target beginner/practical resources  
+- If results were too general, add specific constraints to searches
+- Keep root_question aligned with original goal`,
+		goal.Description,
+		completedSummary,
+		originalPlanSummary,
+		reason)
+	
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	if err != nil {
+		return nil, tokens, fmt.Errorf("replan LLM call failed: %w", err)
+	}
+	
+	// Parse using existing research plan parser
+	content := response.RawResponse
+	content = strings.TrimPrefix(content, "```lisp")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	
+	// Use existing parsing logic
+	planBlocks := findBlocksRecursive(content, "research_plan")
+	if len(planBlocks) == 0 {
+		planBlocks = findBlocks(content, "research_plan")
+	}
+	
+	if len(planBlocks) == 0 {
+		return nil, tokens, fmt.Errorf("no research_plan block found in replan response")
+	}
+	
+	// Extract fields using existing helpers
+	rootQuestion := extractFieldContent(planBlocks[0], "root_question")
+	questionBlocks := findBlocks(planBlocks[0], "question")
+	
+	if len(questionBlocks) == 0 {
+		return nil, tokens, fmt.Errorf("no question blocks found in research plan")
+	}
+	
+	if len(questionBlocks) > 10 {
+		questionBlocks = questionBlocks[:10]
+	}
+	
+	newPlan := &ResearchPlan{
+		RootQuestion:    rootQuestion,
+		SubQuestions:    make([]ResearchQuestion, len(questionBlocks)),
+		CurrentStep:     0,
+		SynthesisNeeded: false,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	
+	// Parse questions using existing logic
+	for i, qBlock := range questionBlocks {
+		getInt := func(field string) int {
+			val := extractFieldContent(qBlock, field)
+			if val == "" {
+				return 0
+			}
+			if p, err := strconv.Atoi(val); err == nil {
+				return p
+			}
+			return 0
+		}
+		
+		getDeps := func(field string) []string {
+			pattern := "(" + field + " "
+			start := strings.Index(qBlock, pattern)
+			if start == -1 {
+				return []string{}
+			}
+			start += len(pattern)
+			
+			if start < len(qBlock) && qBlock[start] == ')' {
+				return []string{}
+			}
+			
+			var deps []string
+			rest := qBlock[start:]
+			for {
+				qStart := strings.Index(rest, `"`)
+				if qStart == -1 {
+					break
+				}
+				qEnd := strings.Index(rest[qStart+1:], `"`)
+				if qEnd == -1 {
+					break
+				}
+				deps = append(deps, rest[qStart+1:qStart+1+qEnd])
+				rest = rest[qStart+1+qEnd+1:]
+				if strings.HasPrefix(rest, ")") {
+					break
+				}
+			}
+			return deps
+		}
+		
+		newPlan.SubQuestions[i] = ResearchQuestion{
+			ID:              extractFieldContent(qBlock, "id"),
+			Question:        extractFieldContent(qBlock, "text"),
+			SearchQuery:     extractFieldContent(qBlock, "search_query"),
+			Priority:        getInt("priority"),
+			Dependencies:    getDeps("deps"),
+			Status:          ResearchStatusPending,
+			SourcesFound:    []string{},
+			KeyFindings:     "",
+			ConfidenceLevel: 0.0,
+		}
+	}
+	
+	return newPlan, tokens, nil
 }

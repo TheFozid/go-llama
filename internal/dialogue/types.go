@@ -23,8 +23,19 @@ type Goal struct {
 	Tier            string         `json:"tier"` // "primary", "secondary", "tactical"
 	SupportsGoals   []string       `json:"supports_goals,omitempty"` // IDs of primary goals this supports
 	DependencyScore float64        `json:"dependency_score"` // 0.0-1.0 confidence in dependency link
-	HasPendingWork  bool           `json:"has_pending_work"` // True if goal has pending actions
-	LastPursued     time.Time      `json:"last_pursued"` // When this goal was last worked on
+	HasPendingWork  bool             `json:"has_pending_work"` // True if goal has pending actions
+	LastPursued     time.Time        `json:"last_pursued"` // When this goal was last worked on
+	LastAssessment  *PlanAssessment  `json:"last_assessment,omitempty"` // Result of last progress check
+	ReplanCount     int              `json:"replan_count"` // Number of times this goal has been replanned
+}
+
+// PlanAssessment represents evaluation of progress after completing an action
+type PlanAssessment struct {
+	Timestamp       time.Time `json:"timestamp"`
+	ProgressQuality string    `json:"progress_quality"` // "good", "partial", "poor"
+	PlanValidity    string    `json:"plan_validity"`    // "valid", "needs_adjustment", "needs_replan"
+	Reasoning       string    `json:"reasoning"`
+	Recommendation  string    `json:"recommendation"`   // "continue", "adjust", "replan"
 }
 
 // Action represents a step taken toward completing a goal
