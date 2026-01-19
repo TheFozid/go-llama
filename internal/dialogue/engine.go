@@ -675,7 +675,6 @@ if inMetaLoop {
 									break
 								}
 							}
-							}
 						}
 					}
 				} else if err != nil {
