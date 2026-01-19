@@ -898,6 +898,7 @@ if inMetaLoop {
     }
     
     action.Timestamp = time.Now()
+    }
 
 
 } else {
