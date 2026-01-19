@@ -528,8 +528,9 @@ RULES:
 4. Balance parentheses
 
 Guidelines:
-- outcome_quality: "bad" if you made a factual error, gave unhelpful advice, or misunderstood
-- outcome_quality: "good" if conversation was helpful and accurate
+- outcome_quality: "bad" if user expresses dissatisfaction, uses negative keywords (e.g., "bad", "wrong", "useless", "annoying", "terrible"), or explicitly criticizes the response.
+- outcome_quality: "good" ONLY if user is satisfied, confirms utility, or expresses gratitude.
+- CRITICAL: If user message contains ANY negative sentiment, set outcome_quality to "bad". Do not default to "good" just because no technical error occurred.
 - mistake_made: true if user corrected you or you realize you were wrong
 - user_requested_goal: true if user asked you to research, learn about, investigate, or find something
 - user_gave_feedback: true if user commented on your personality, style, helpfulness, or behavior
