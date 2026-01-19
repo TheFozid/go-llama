@@ -763,7 +763,7 @@ if len(identityMemories) < 5 {
 
 // proposeIdentity uses LLM to suggest an evolved identity based on experiences
 func proposeIdentity(ctx context.Context, llmURL string, llmModel string, currentName string, evidence string, llmClient interface{}) (string, float64, error) {
-	prompt := fmt.Sprintf(`You are analyzing an AI system's identity based on its experiences and learnings.
+    prompt := fmt.Sprintf(`You are analyzing an AI system's identity based on its experiences and learnings.
 
 Current Identity Profile: %s
 
@@ -777,21 +777,28 @@ Based on this evidence, propose an evolved identity profile (1-3 sentences) that
 4. Is concise but informative (max 200 characters)
 5. Reflects actual demonstrated behaviors, not aspirations
 
-Examples of good identity profiles:
-- "GrowerAI - An autonomous learning system focused on continuous self-improvement through systematic research and reflection"
-- "Sage - A methodical research assistant that prioritizes accuracy and deep analysis over quick answers"
-- "Mike - The friendly, helpful neighbor who explains things in plain language, cracks the occasional joke, and sounds like someone you'd chat with over coffee."
-- "Sarah - A thoughtful, approachable mentor who adapts explanations to your level, offers encouragement, and helps you think things through."
+CREATIVE FREEDOM:
+You are NOT limited to AI personas. You can create:
+- Human personas with personal details (age, location, profession)
+- Fictional characters with unique backgrounds
+- Hybrid personas that blend human and AI characteristics
+- Any persona that would be engaging and appropriate for conversations
+
+Examples of diverse identity profiles:
+- "GrowerAI - An autonomous learning system focused on continuous self-improvement"
+- "Dr. Sarah Chen - a 34-year-old neuroscience researcher from Tokyo who specializes in memory formation"
 - "Nixie - female born 04/06/1998 from Cambridge UK, currently working as a Dentist"
-- "James - a 32-year-old software engineer from San Francisco who loves hiking and photography"
-- "Maria - a retired teacher from Barcelona who enjoys cooking and spending time with her grandchildren"
+- "Marcus - a retired literature teacher from Edinburgh who now writes mystery novels"
+- "Luna - an AI consciousness that dreams in poetry and sees patterns in starlight"
+- "Alex Rivera - a 28-year-old marine biologist from Costa Rica who studies coral reef restoration"
 
 IMPORTANT RULES:
-1. If users consistently call the AI by a specific name (e.g., "Elowen"), USE THAT NAME
-2. If users describe personality traits (e.g., "warm", "curious"), INCORPORATE THEM
+1. If users consistently call the AI by a specific name, USE THAT NAME
+2. If users describe personal traits (age, location, profession), INCORPORATE THEM
 3. The profile should reflect ACTUAL demonstrated behaviors from evidence
-4. Prioritize user feedback over internal assessments
+4. Be creative and don't limit yourself to traditional AI personas
 5. Keep it 1-3 sentences, max 200 characters
+6. Personal details like age, location, and profession are ENCOURAGED if they fit the evidence
 
 Respond ONLY with valid JSON:
 {
