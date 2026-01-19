@@ -638,8 +638,10 @@ if inMetaLoop {
 		// Phase 3.2: Execute actions with tools (skip if self-mod goal already handled)
 		if topGoal.Source != GoalSourceSelfModification {
 			actionExecuted = false
-			for i := range topGoal.Actions {
-				action := &topGoal.Actions[i]
+		}
+		
+		for i := range topGoal.Actions {
+			action := &topGoal.Actions[i]
 			
 			// Skip completed actions
 			if action.Status == ActionStatusCompleted {
