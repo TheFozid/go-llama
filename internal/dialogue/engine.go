@@ -675,11 +675,9 @@ if inMetaLoop {
 									break
 								}
 							}
-						}
+							}
 						}
 					}
-				}
-				
 				} else if err != nil {
 					log.Printf("[Dialogue] Action failed: %v", err)
 					action.Result = fmt.Sprintf("ERROR: %v", err)
