@@ -325,25 +325,6 @@ type GoalSupportValidation struct {
 	IsValid        bool    `json:"is_valid"`         // True if linkage is meaningful
 }
 
-// SearchEvaluation represents LLM's assessment of search result quality
-type SearchEvaluation struct {
-	Quality      string   `json:"quality"`       // "sufficient", "needs_parse", "insufficient"
-	BestURL      string   `json:"best_url"`      // Highest quality URL from results
-	FallbackURLs []string `json:"fallback_urls"` // Alternative URLs to try
-	Reasoning    string   `json:"reasoning"`     // Why this assessment
-	Confidence   float64  `json:"confidence"`    // 0.0-1.0 confidence in assessment
-	ShouldProceed bool    `json:"should_proceed"` // Whether to continue with this search
-}
-
-// ParseEvaluation represents LLM's assessment of parsed content quality
-type ParseEvaluation struct {
-	Quality        string   `json:"quality"`         // "sufficient", "try_fallback", "parse_deeper", "wrong_source"
-	Reasoning      string   `json:"reasoning"`       // Why this assessment
-	Confidence     float64  `json:"confidence"`      // 0.0-1.0 confidence in assessment
-	MissingInfo    []string `json:"missing_info"`    // What information is still needed
-	ShouldContinue bool     `json:"should_continue"` // Whether to keep pursuing this goal
-}
-
 // SecondaryGoalProposal represents a proposed secondary goal
 type SecondaryGoalProposal struct {
 	Description    string   `json:"description"`
