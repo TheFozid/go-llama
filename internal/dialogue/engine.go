@@ -576,7 +576,9 @@ if inMetaLoop {
 				log.Printf("[Dialogue] Executing action: %s using tool '%s'", action.Description, action.Tool)
 				
 				// Execute tool
-				result, err := e.executeAction(ctx, action)
+				var result string
+				var err error
+				result, err = e.executeAction(ctx, action)
 				
 // If this was a search, extract URLs and evaluate quality
 if err == nil && action.Tool == ActionToolSearch {
