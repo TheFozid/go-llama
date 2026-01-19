@@ -189,7 +189,11 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		Timestamp:   time.Now(),
 	})
 	
-	log.Printf("[Dialogue] Reflection: %s", truncate(reasoning.Reflection, 80))
+    if reasoning.Reflection == "" {
+        log.Printf("[Dialogue] Reflection: (Empty - LLM did not provide reflection text)")
+    } else {
+        log.Printf("[Dialogue] Reflection: %s", truncate(reasoning.Reflection, 80))
+    }
 	
 	// Log insights
 	insights := reasoning.Insights.ToSlice()
@@ -2130,64 +2134,9 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 
 
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
-	systemPrompt := `You are GrowerAI's internal reasoning system. Output ONLY S-expressions (Lisp-style).
-
-Use this structure (all fields optional except reflection):
-
-(reasoning
-  (reflection "Your brief reflection here")
-  
-  (insights
-    "First insight"
-    "Second insight")
-  
-  (strengths
-    "What you're doing well")
-  
-  (weaknesses
-    "What needs improvement")
-  
-  (knowledge_gaps
-    "What you need to learn")
-  
-  (patterns
-    "Pattern you've noticed")
-  
-  (goals_to_create
-    (goal
-      (description "Goal description")
-      (priority 7)
-      (reasoning "Why this goal")
-      (action_plan "First step" "Second step")
-      (expected_time "2 cycles")))
-  
-  (learnings
-    (learning
-      (what "What was learned")
-      (context "When/where learned")
-      (confidence 0.8)
-      (category "strategy")))
-  
-  (self_assessment
-    (confidence 0.7)
-    (recent_successes "Success 1")
-    (recent_failures "Failure 1")
-    (skill_gaps "Gap 1")
-    (focus_areas "Area to focus on")))
-
-RULES:
-1. Output ONLY S-expressions (no markdown, no explanations)
-2. Empty lists are fine: (insights)
-3. Balance all parentheses
-4. Use quotes for multi-word strings
-5. Numbers don't need quotes: (priority 7) (confidence 0.8)
-
-EXAMPLES:
-Good: (insights "First insight" "Second insight")
-Good: (insights)
-Bad: <insights>...</insights>
-Bad: {"insights": [...]}
-Bad: (insights First insight) - missing quotes`
+    systemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
+Format: (reasoning (reflection "...") (insights "...") (goals_to_create (goal (description "...") (priority 7))))
+Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))
 
 	reqBody := map[string]interface{}{
 		"model": e.llmModel,
@@ -3275,10 +3224,25 @@ Keep it focused and actionable.`, principlesContext, memoryContext, goalsContext
 		reasoning.SelfAssessment = &SelfAssessment{
 			Confidence: calculatedConfidence,
 		}
-		log.Printf("[Dialogue] Confidence: calculated=%.2f (no LLM assessment)", calculatedConfidence)
-	}
-	
-	return reasoning, tokens, nil
+        log.Printf("[Dialogue] Confidence: calculated=%.2f (no LLM assessment)", calculatedConfidence)
+    }
+
+    // SMART FALLBACK: If LLM omitted reflection (common on weak models), synthesize from context
+    if reasoning.Reflection == "" {
+        if len(reasoning.Insights.ToSlice()) > 0 {
+            reasoning.Reflection = fmt.Sprintf("Reflected on %d insights about current state.", len(reasoning.Insights.ToSlice()))
+        } else if len(reasoning.Patterns.ToSlice()) > 0 {
+            reasoning.Reflection = "Reflected on identified patterns in recent activity."
+        } else if len(reasoning.Weaknesses.ToSlice()) > 0 {
+            reasoning.Reflection = "Reflected on identified weaknesses requiring attention."
+        } else {
+            // Ultimate fallback
+            reasoning.Reflection = "Internal reflection cycle completed."
+        }
+        log.Printf("[Dialogue] [SmartFallback] LLM omitted reflection, generated: %s", truncate(reasoning.Reflection, 60))
+    }
+    
+    return reasoning, tokens, nil
 }
 
 // calculateConfidence computes confidence score based on actual metrics
