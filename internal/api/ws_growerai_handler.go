@@ -478,6 +478,7 @@ err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPe
 				storage,
 				embedder,
 				llmManager,        // ADD THIS
+				discoveryService,
 			); err != nil {
 				log.Printf("[GrowerAI-WS] WARNING: Post-conversation reflection failed: %v", err)
 			}
