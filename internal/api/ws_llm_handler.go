@@ -2,11 +2,9 @@
 package api
 
 import (
-    "bytes"
     "context"
     "encoding/json"
     "fmt"
-    "io"
     "log"
     "net/http"
     "net/url"
@@ -14,12 +12,10 @@ import (
     "strings"
     "time"
 
-    "github.com/gorilla/websocket"
     "go-llama/internal/chat"
     "go-llama/internal/config"
     "go-llama/internal/db"
     "go-llama/internal/llm"
-    "go-llama/internal/memory"
 )
 
 // handleStandardLLMWebSocket processes standard LLM messages via WebSocket with streaming
@@ -196,11 +192,12 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
 	// Use queue if available (critical priority for user messages)
 	if llmManager != nil {
 		if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
-			llmClient := llm.NewClient(
-				mgr,
-				llm.PriorityCritical,
-				time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
-			)
+            llmClient := llm.NewClient(
+                mgr,
+                llm.PriorityCritical,
+                time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
+                discoveryService,
+            )
 			
 			log.Printf("[LLM-WS] Using LLM queue (priority: CRITICAL, timeout: %ds)", 
 				cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)

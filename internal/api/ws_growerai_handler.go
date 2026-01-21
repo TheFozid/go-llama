@@ -497,9 +497,10 @@ func performPostConversationReflection(
 	cfg *config.Config,
 	storage *memory.Storage,
 	embedder *memory.Embedder,
-	llmManager interface{},
+    llmManager interface{},
+    discoveryService *llm.DiscoveryService,
 ) error {
-	log.Printf("[Reflection] Analyzing conversation for actions...")
+    log.Printf("[Reflection] Analyzing conversation for actions...")
 	
 	// Build reflection prompt
 	prompt := fmt.Sprintf(`You just had this conversation with a user:
@@ -602,7 +603,7 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 				return fmt.Errorf("failed to marshal request: %w", err)
 			}
 
-			req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.URL, bytes.NewBuffer(jsonData))
+            req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.BaseURL, bytes.NewBuffer(jsonData))
 			if err != nil {
 				return fmt.Errorf("failed to create request: %w", err)
 			}
@@ -646,7 +647,7 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.URL, bytes.NewBuffer(jsonData))
+        req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.BaseURL, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
