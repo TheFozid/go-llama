@@ -52,7 +52,14 @@ func main() {
         if err != nil {
             log.Fatalf("[Main] Critical: Failed to resolve reasoning model name for %s: %v", cfg.GrowerAI.ReasoningModel.BaseURL, err)
         }
-        reasoningName = name
+
+        // Clean model name by removing common file extensions (.gguf, .bin, .safetensors)
+        // Discovery service might return filename, but Chat API expects just as model ID.
+        cleanedModel := strings.TrimSuffix(name, ".gguf")
+        cleanedModel = strings.TrimSuffix(cleanedModel, ".bin")
+        cleanedModel = strings.TrimSuffix(cleanedModel, ".safetensors")
+
+        reasoningName = cleanedModel
         log.Printf("[Main] ✓ Resolved reasoning model: %s", name)
     }
     if cfg.GrowerAI.EmbeddingModel.BaseURL != "" {
