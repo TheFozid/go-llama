@@ -211,19 +211,22 @@ Focus on factual information. Be concise and accurate.`,
         return "", 0, fmt.Errorf("failed to marshal request: %w", err)
     }
 
+    // CRITICAL FIX: Use a new local HTTP client, DO NOT use t.llmClient
+    client := &http.Client{Timeout: 30 * time.Second}
+
     // CRITICAL FIX: Append /v1/chat/completions to Base URL
     fullURL := t.llmURL + "/v1/chat/completions"
     req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to create request: %w", err)
+    }
+    req.Header.Set("Content-Type", "application/json")
 
-	resp, err := t.llmClient.Do(req)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
+    resp, err := client.Do(req)
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to send request: %w", err)
+    }
+    defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
