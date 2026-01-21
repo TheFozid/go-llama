@@ -25,7 +25,7 @@ import (
 )
 
 // handleGrowerAIWebSocket processes GrowerAI messages via WebSocket with streaming
-func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, content string, userID uint, llmManager interface{}) {
+func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, prompt string, userID uint, llmManager interface{}, discoveryService *llm.DiscoveryService) {
 	// Check if GrowerAI is globally enabled
 	if !cfg.GrowerAI.Enabled {
 		log.Printf("[GrowerAI-WS] GrowerAI disabled in config")
@@ -211,8 +211,9 @@ if len(allLinkedIDs) > 0 {
 		messages = []chat.Message{}
 	}
 	
-	// Apply sliding window to respect context size
-	messages = chat.BuildSlidingWindow(messages, cfg.GrowerAI.ReasoningModel.ContextSize)
+    // Apply sliding window to respect context size
+    // Using default 8192 as ContextSize was removed from config struct
+    messages = chat.BuildSlidingWindow(messages, 8192)
 	
 	log.Printf("[GrowerAI-WS] ✓ Loaded %d messages from conversation history", len(messages))
 
@@ -311,13 +312,13 @@ if len(allLinkedIDs) > 0 {
 	log.Printf("[GrowerAI-WS] ✓ Built conversation context: %d messages (%d history + 1 current)",
 		len(llmMessages)-1, len(messages)) // -1 for system message
 
-	payload := map[string]interface{}{
-		"model":    cfg.GrowerAI.ReasoningModel.Name,
-		"messages": llmMessages,
-		"stream":   true,
-	}
+    payload := map[string]interface{}{
+        "model":    "default", // Name field removed, using default
+        "messages": llmMessages,
+        "stream":   true,
+    }
 
-	log.Printf("[GrowerAI-WS] Calling LLM with streaming: %s", cfg.GrowerAI.ReasoningModel.URL)
+    log.Printf("[GrowerAI-WS] Calling LLM with streaming: %s", cfg.GrowerAI.ReasoningModel.BaseURL)
 
 	var botResponse string
 	var toksPerSec float64
@@ -325,17 +326,18 @@ if len(allLinkedIDs) > 0 {
 	// Use queue if available (critical priority for user messages)
 	if llmManager != nil {
 		if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
-			llmClient := llm.NewClient(
-				mgr,
-				llm.PriorityCritical,
-				time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
-			)
+            llmClient := llm.NewClient(
+                mgr,
+                llm.PriorityCritical,
+                time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
+                discoveryService,
+            )
 			
 			log.Printf("[GrowerAI-WS] Using LLM queue (priority: CRITICAL, timeout: %ds)", 
 				cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)
 			
-			// Get streaming HTTP response from queue
-httpResp, queueErr := llmClient.CallStreaming(ctx, cfg.GrowerAI.ReasoningModel.URL, payload)
+            // Get streaming HTTP response from queue
+            httpResp, queueErr := llmClient.CallStreaming(ctx, cfg.GrowerAI.ReasoningModel.BaseURL, payload)
 if queueErr != nil {
 	log.Printf("[GrowerAI-WS] ERROR: LLM queue streaming failed: %v", queueErr)
 	conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
@@ -345,14 +347,14 @@ if queueErr != nil {
 // Use helper to stream from HTTP response
 err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
 // Context cleanup happens automatically via httpResp.Body.Close()
-		} else {
-			log.Printf("[GrowerAI-WS] Using legacy direct LLM call")
-			err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
-		}
-	} else {
-		log.Printf("[GrowerAI-WS] Using legacy direct LLM call (no queue manager)")
-		err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
-	}
+        } else {
+            log.Printf("[GrowerAI-WS] Using legacy direct LLM call")
+            err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.BaseURL, payload, &botResponse, &toksPerSec)
+        }
+    } else {
+        log.Printf("[GrowerAI-WS] Using legacy direct LLM call (no queue manager)")
+        err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.BaseURL, payload, &botResponse, &toksPerSec)
+    }
 	
 	if err != nil {
 		log.Printf("[GrowerAI-WS] ERROR: LLM streaming failed: %v", err)
@@ -539,9 +541,9 @@ Guidelines:
 Be honest about mistakes. Don't create goals for simple questions that were already answered.`, 
 		userMessage, botResponse)
 
-	// Call LLM for reflection
-	reqBody := map[string]interface{}{
-		"model": cfg.GrowerAI.ReasoningModel.Name,
+    // Call LLM for reflection
+    reqBody := map[string]interface{}{
+        "model": "default", // Name field removed, using default
 		"messages": []map[string]string{
 			{
 				"role":    "system",

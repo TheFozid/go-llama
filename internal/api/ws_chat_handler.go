@@ -12,10 +12,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"go-llama/internal/auth"
-	"go-llama/internal/chat"
-	"go-llama/internal/config"
-	"go-llama/internal/db"
+    "go-llama/internal/auth"
+    "go-llama/internal/chat"
+    "go-llama/internal/config"
+    "go-llama/internal/db"
+    "go-llama/internal/llm"
 )
 
 // WebSocket message format
@@ -112,7 +113,7 @@ func WSChatHandler(cfg *config.Config, llmManager interface{}, discoveryService 
 
         // Route to appropriate handler
         if chatInst.UseGrowerAI {
-            handleGrowerAIWebSocket(conn, cfg, &chatInst, req.Prompt, userID, llmManager)
+            handleGrowerAIWebSocket(conn, cfg, &chatInst, req.Prompt, userID, llmManager, discoveryService)
         } else {
             handleStandardLLMWebSocket(conn, cfg, &chatInst, req, userID, llmManager, discoveryService)
         }

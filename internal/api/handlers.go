@@ -1,9 +1,10 @@
 package api
 
 import (
-	"net/http"
-	"go-llama/internal/config"
-	"github.com/gin-gonic/gin"
+    "net/http"
+    "go-llama/internal/config"
+    "go-llama/internal/llm"
+    "github.com/gin-gonic/gin"
 )
 
 // GET /health
