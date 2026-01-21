@@ -112,9 +112,20 @@ func main() {
 				log.Fatalf("[Main] Storage not initialized for compression worker")
 			}
 			
-            embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL)
+            // Resolve embedding model name dynamically
+            embeddingName, err := discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
+            if err != nil {
+                log.Fatalf("[Main] Failed to get embedding model name: %v", err)
+            }
+            embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
 
-				linker := memory.NewLinker(
+            // Resolve reasoning/compression model name dynamically
+            reasoningName, err := discoveryService.GetFirstModelName(cfg.GrowerAI.ReasoningModel.BaseURL)
+            if err != nil {
+                log.Fatalf("[Main] Failed to get reasoning/compression model name: %v", err)
+            }
+
+                linker := memory.NewLinker(
 					storage,
 					cfg.GrowerAI.Linking.SimilarityThreshold,
 					cfg.GrowerAI.Linking.MaxLinksPerMemory,
@@ -134,7 +145,7 @@ func main() {
 
                 compressor := memory.NewCompressor(
                     cfg.GrowerAI.Compression.Model.BaseURL,
-                    "default", // Name field removed from config, using default
+                    reasoningName, // Use discovered name
                     embedder,
 					linker,
 					compressorLLMClient,
@@ -154,7 +165,7 @@ func main() {
 
                 tagger := memory.NewTagger(
                     cfg.GrowerAI.Compression.Model.BaseURL,
-                    "default", // Name field removed from config, using default
+                    reasoningName, // Use discovered name
                     cfg.GrowerAI.Tagging.BatchSize,
 					embedder,
 					taggerLLMClient,
@@ -220,7 +231,7 @@ func main() {
                     linker,
                     db.DB,
                     cfg.GrowerAI.Compression.Model.BaseURL,
-                    "default", // Name field removed from config, using default
+                    reasoningName, // Use discovered name
 					decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
 					cfg.GrowerAI.Compression.ScheduleHours,
 					cfg.GrowerAI.Principles.EvolutionScheduleHours,
@@ -294,7 +305,7 @@ func main() {
 			maxPageSizeMB := cfg.GrowerAI.Tools.WebParse.MaxPageSizeMB
             chunkSize := cfg.GrowerAI.Tools.WebParse.ChunkSize
             llmURL := cfg.GrowerAI.Compression.Model.BaseURL
-            llmModel := "default" // Name field removed from config
+            llmModel := reasoningName // Use discovered name
 
 			metadataTool := tools.NewWebParserMetadataTool(userAgent, webParseConfig)
 			if err := toolRegistry.Register(metadataTool); err != nil {
@@ -341,9 +352,10 @@ func main() {
 
 			if storage == nil {
 				log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
-			} else {
-                embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL)
-				stateManager := dialogue.NewStateManager(db.DB)
+            else {
+                // Re-use embeddingName or resolve again
+                dialEmbedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
+                stateManager := dialogue.NewStateManager(db.DB)
 
 				// Initialize circuit breaker for LLM resilience
 				llmCircuitBreaker := tools.NewCircuitBreaker(
@@ -369,12 +381,12 @@ func main() {
 
     engine := dialogue.NewEngine(
                     storage,
-                    embedder,
+                    dialEmbedder, // Use the dialogue-scoped embedder
                     stateManager,
                     contextualRegistry,
                     db.DB, // Add DB parameter for principles
                     cfg.GrowerAI.ReasoningModel.BaseURL,
-                    "default", // Name field removed from config
+                    reasoningName, // Use discovered name
                     8192, // ContextSize field removed from config, using default 8192
                     llmClient, // NEW PARAMETER - insert here
                     cfg.GrowerAI.Dialogue.MaxTokensPerCycle,

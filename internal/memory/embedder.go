@@ -13,26 +13,28 @@ import (
 
 // Embedder generates vector embeddings from text
 type Embedder struct {
-	apiURL string
-	client *http.Client
+    apiURL    string
+    modelName string
+    client    *http.Client
 }
 
 // NewEmbedder creates a new embedder client
-func NewEmbedder(apiURL string) *Embedder {
-	return &Embedder{
-		apiURL: apiURL,
-		client: &http.Client{
-			Timeout: 15 * time.Second, // Reasonable timeout for embedding generation
-		},
-	}
+func NewEmbedder(apiURL, modelName string) *Embedder {
+    return &Embedder{
+        apiURL:    apiURL,
+        modelName: modelName,
+        client: &http.Client{
+            Timeout: 15 * time.Second, // Reasonable timeout for embedding generation
+        },
+    }
 }
 
 // Embed converts text to a vector embedding
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	reqBody := map[string]interface{}{
-		"input": text,
-		"model": "text-embedding-ada-002", // The API expects a model field
-	}
+    reqBody := map[string]interface{}{
+        "input": text,
+        "model": e.modelName, // Use the dynamically discovered model name
+    }
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
