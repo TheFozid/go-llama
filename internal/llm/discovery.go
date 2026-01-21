@@ -340,3 +340,23 @@ func (d *DiscoveryService) GetAllEndpoints() map[string]*LLMEndpoint {
     }
     return result
 }
+
+// GetFirstModelName returns name of the first available model at the given URL
+func (d *DiscoveryService) GetFirstModelName(baseURL string) (string, error) {
+    d.mutex.RLock()
+    defer d.mutex.RUnlock()
+
+    endpoint, exists := d.endpoints[baseURL]
+    if !exists {
+        return "", fmt.Errorf("endpoint not found: %s", baseURL)
+    }
+
+    endpoint.mutex.RLock()
+    defer endpoint.mutex.RUnlock()
+
+    if len(endpoint.Models) == 0 {
+        return "", fmt.Errorf("no models found at endpoint %s", baseURL)
+    }
+
+    return endpoint.Models[0].Name, nil
+}

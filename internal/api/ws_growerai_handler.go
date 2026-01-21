@@ -45,15 +45,15 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 
 	// Initialize memory components
     log.Printf("[GrowerAI-WS] Initializing embedder: %s", cfg.GrowerAI.EmbeddingModel.BaseURL)
-    
+
     // Resolve embedding model name dynamically
     embeddingName, err := discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
     if err != nil {
         conn.WriteJSON(map[string]string{"error": "failed to resolve embedding model"})
         return
     }
-    
-    embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
+
+    embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL+"/v1/embeddings", embeddingName)
 
 	log.Printf("[GrowerAI-WS] Initializing storage: %s/%s", cfg.GrowerAI.Qdrant.URL, cfg.GrowerAI.Qdrant.Collection)
 	storage, err := memory.NewStorage(
