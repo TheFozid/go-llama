@@ -2,7 +2,6 @@ package llm
 
 import (
     "bytes"
-    "context"
     "encoding/json"
     "fmt"
     "log"
