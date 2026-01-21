@@ -61,7 +61,7 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
     embeddingEndpoint := discoveryService.FindEndpointForModel(embeddingModel.Name)
     
     log.Printf("[GrowerAI] Initializing embedder: %s", embeddingModel.Name)
-    embedder := memory.NewEmbedder(embeddingEndpoint.BaseURL + "/v1/embeddings")
+    embedder := memory.NewEmbedder(embeddingEndpoint.BaseURL + "/v1/embeddings", embeddingModel.Name)
 	
 	log.Printf("[GrowerAI] Initializing storage: %s/%s", cfg.GrowerAI.Qdrant.URL, cfg.GrowerAI.Qdrant.Collection)
 	storage, err := memory.NewStorage(
