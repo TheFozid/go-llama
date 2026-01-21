@@ -39,43 +39,29 @@ func main() {
     discoveryService.Start()
     defer discoveryService.Stop()
 
-    // Resolve model names globally so they are available to all subsystems (Dialogue, WebParse, etc.)
-    // Note: Discovery runs in background, so we retry briefly to allow it to populate models.
+    // Force a synchronous refresh of all endpoints immediately to ensure models are available.
+    // This prevents the startup race condition where components start before Discovery finishes.
+    log.Printf("[Main] Refreshing model discovery cache...")
+    discoveryService.RefreshAllEndpoints()
+
+    // Resolve model names globally
     var reasoningName, embeddingName string
     
     if cfg.GrowerAI.ReasoningModel.BaseURL != "" {
-        var name string
-        var err error
-        for i := 0; i < 10; i++ { // Retry for up to 10 seconds
-            name, err = discoveryService.GetFirstModelName(cfg.GrowerAI.ReasoningModel.BaseURL)
-            if err == nil {
-                reasoningName = name
-                log.Printf("[Main] ✓ Resolved reasoning model: %s", name)
-                break
-            }
-            time.Sleep(1 * time.Second)
-        }
+        name, err := discoveryService.GetFirstModelName(cfg.GrowerAI.ReasoningModel.BaseURL)
         if err != nil {
-            log.Printf("[Main] WARNING: Failed to resolve reasoning model name after 10s: %v. Falling back to 'default'.", err)
-            reasoningName = "default"
+            log.Fatalf("[Main] Critical: Failed to resolve reasoning model name for %s: %v", cfg.GrowerAI.ReasoningModel.BaseURL, err)
         }
+        reasoningName = name
+        log.Printf("[Main] ✓ Resolved reasoning model: %s", name)
     }
     if cfg.GrowerAI.EmbeddingModel.BaseURL != "" {
-        var name string
-        var err error
-        for i := 0; i < 10; i++ { // Retry for up to 10 seconds
-            name, err = discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
-            if err == nil {
-                embeddingName = name
-                log.Printf("[Main] ✓ Resolved embedding model: %s", name)
-                break
-            }
-            time.Sleep(1 * time.Second)
-        }
+        name, err := discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
         if err != nil {
-            log.Printf("[Main] WARNING: Failed to resolve embedding model name after 10s: %v. Falling back to 'default'.", err)
-            embeddingName = "default"
+            log.Fatalf("[Main] Critical: Failed to resolve embedding model name for %s: %v", cfg.GrowerAI.EmbeddingModel.BaseURL, err)
         }
+        embeddingName = name
+        log.Printf("[Main] ✓ Resolved embedding model: %s", name)
     }
 
     // Check if GrowerAI is enabled globally
@@ -152,7 +138,8 @@ func main() {
             }
 
             // Use globally resolved model names
-            embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
+            // Note: Must append /v1/embeddings to the BaseURL
+            embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL+"/v1/embeddings", embeddingName)
 
                 linker := memory.NewLinker(
 					storage,
@@ -193,7 +180,7 @@ func main() {
                 }
 
                 tagger := memory.NewTagger(
-                    cfg.GrowerAI.Compression.Model.BaseURL,
+                    cfg.GrowerAI.Compression.Model.BaseURL, // Revert to base URL
                     reasoningName, // Use discovered name
                     cfg.GrowerAI.Tagging.BatchSize,
 					embedder,
@@ -383,7 +370,8 @@ func main() {
                 log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
             } else {
                 // Use globally resolved embedding name
-                dialEmbedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
+                // Note: Must append /v1/embeddings to the BaseURL
+                dialEmbedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL+"/v1/embeddings", embeddingName)
                 stateManager := dialogue.NewStateManager(db.DB)
 
 				// Initialize circuit breaker for LLM resilience
