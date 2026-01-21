@@ -2387,10 +2387,10 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 				"stream":      false,
 			}
 			
-			log.Printf("[Dialogue] LLM call via queue (prompt length: %d chars)", len(prompt))
-			startTime := time.Now()
-			
-			body, err := client.Call(ctx, e.llmURL, reqBody)
+            log.Printf("[Dialogue] LLM call via queue (prompt length: %d chars)", len(prompt))
+            startTime := time.Now()
+
+            body, err := client.Call(ctx, e.llmModel, reqBody)
 			if err != nil {
 				log.Printf("[Dialogue] LLM queue call failed after %s: %v", time.Since(startTime), err)
 				return "", 0, fmt.Errorf("LLM call failed: %w", err)
@@ -2460,10 +2460,10 @@ Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to
 		}
 		
 		if client, ok := e.llmClient.(LLMCaller); ok {
-			log.Printf("[Dialogue] Structured reasoning LLM call via queue (prompt length: %d chars)", len(prompt))
-			startTime := time.Now()
-			
-			body, err := client.Call(ctx, e.llmURL, reqBody)
+            log.Printf("[Dialogue] Structured reasoning LLM call via queue (prompt length: %d chars)", len(prompt))
+            startTime := time.Now()
+
+            body, err := client.Call(ctx, e.llmModel, reqBody)
 			if err != nil {
 				log.Printf("[Dialogue] Structured reasoning queue call failed after %s: %v", time.Since(startTime), err)
 				return nil, 0, fmt.Errorf("LLM call failed: %w", err)
