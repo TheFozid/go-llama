@@ -36,13 +36,20 @@ type Tagger struct {
 
 // NewTagger creates a new tagger instance
 func NewTagger(llmURL, llmModel string, batchSize int, embedder *Embedder, llmClient interface{}) *Tagger {
-	return &Tagger{
-		llmURL:    llmURL,
-		llmModel:  llmModel,
-		batchSize: batchSize,
-		embedder:  embedder,
-		llmClient: llmClient,
-	}
+    // Clean model name by removing common file extensions (.gguf, .bin, .safetensors)
+    // Discovery service might return filename, but Chat API expects just the model ID.
+    cleanedModel := llmModel
+    cleanedModel = strings.TrimSuffix(cleanedModel, ".gguf")
+    cleanedModel = strings.TrimSuffix(cleanedModel, ".bin")
+    cleanedModel = strings.TrimSuffix(cleanedModel, ".safetensors")
+
+    return &Tagger{
+        llmURL:    llmURL,
+        llmModel:  cleanedModel, // Use cleaned name (removes .gguf)
+        batchSize: batchSize,
+        embedder:  embedder,
+        llmClient: llmClient,
+    }
 }
 
 // TagMemories processes untagged memories and updates them with outcome tags and concepts
