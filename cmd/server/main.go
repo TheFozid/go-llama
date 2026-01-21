@@ -367,17 +367,17 @@ func main() {
                     log.Printf("[Main] Dialogue using legacy direct HTTP calls")
                 }
 
-				engine := dialogue.NewEngine(
-					storage,
-					embedder,
-					stateManager,
-					contextualRegistry,
-					db.DB, // Add DB parameter for principles
-					cfg.GrowerAI.ReasoningModel.URL,
-					cfg.GrowerAI.ReasoningModel.Name,
-					cfg.GrowerAI.ReasoningModel.ContextSize,
-					llmClient, // NEW PARAMETER - insert here
-					cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
+    engine := dialogue.NewEngine(
+                    storage,
+                    embedder,
+                    stateManager,
+                    contextualRegistry,
+                    db.DB, // Add DB parameter for principles
+                    cfg.GrowerAI.ReasoningModel.BaseURL,
+                    "default", // Name field removed from config
+                    8192, // ContextSize field removed from config, using default 8192
+                    llmClient, // NEW PARAMETER - insert here
+                    cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
 					cfg.GrowerAI.Dialogue.MaxDurationMinutes,
 					cfg.GrowerAI.Dialogue.MaxThoughtsPerCycle,
 					cfg.GrowerAI.Dialogue.ActionRequirementInterval,
