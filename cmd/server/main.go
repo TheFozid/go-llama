@@ -338,7 +338,7 @@ func main() {
 				log.Printf("[Main] ✓ Web parser metadata tool registered")
 			}
 
-			generalTool := tools.NewWebParserGeneralTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig)
+            generalTool := tools.NewWebParserGeneralTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig, llmClient)
 			if err := toolRegistry.Register(generalTool); err != nil {
 				log.Printf("[Main] WARNING: Failed to register web_parse_general tool: %v", err)
 			} else {

@@ -829,11 +829,11 @@ Respond ONLY with valid JSON:
 			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
 		}
 		
-		if client, ok := llmClient.(LLMCaller); ok {
-			log.Printf("[Principles] Identity evolution LLM call via queue (prompt length: %d chars)", len(prompt))
-			startTime := time.Now()
-			
-			body, err := client.Call(ctx, llmURL, reqBody)
+        if client, ok := llmClient.(LLMCaller); ok {
+            log.Printf("[Principles] Identity evolution LLM call via queue (prompt length: %d chars)", len(prompt))
+            startTime := time.Now()
+
+            body, err := client.Call(ctx, llmModel, reqBody)
 			if err != nil {
 				log.Printf("[Principles] Identity evolution queue call failed after %s: %v", time.Since(startTime), err)
 				return "", 0, fmt.Errorf("LLM call failed: %w", err)
@@ -1129,11 +1129,11 @@ Respond with ONLY the principle text (10-25 words), nothing else.`,
 			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
 		}
 		
-		if client, ok := llmClient.(LLMCaller); ok {
-			log.Printf("[Principles] Concept pair principle generation LLM call via queue (concepts: %s + %s)", concept1, concept2)
-			startTime := time.Now()
-			
-			body, err := client.Call(ctx, llmURL, reqBody)
+        if client, ok := llmClient.(LLMCaller); ok {
+            log.Printf("[Principles] Concept pair principle generation LLM call via queue (concepts: %s + %s)", concept1, concept2)
+            startTime := time.Now()
+
+            body, err := client.Call(ctx, llmModel, reqBody)
 			if err != nil {
 				log.Printf("[Principles] Concept pair generation queue call failed after %s: %v", time.Since(startTime), err)
 				return "", err

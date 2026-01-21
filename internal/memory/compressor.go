@@ -291,9 +291,9 @@ func (c *Compressor) callLLM(ctx context.Context, prompt string) (string, error)
 				"temperature": 0.3,
 			}
 			
-			log.Printf("[Compressor] Calling LLM via queue (prompt length: %d)", len(prompt))
-			
-			body, err := client.Call(ctx, c.modelURL, reqBody)
+            log.Printf("[Compressor] Calling LLM via queue (prompt length: %d)", len(prompt))
+
+            body, err := client.Call(ctx, c.modelName, reqBody)
 			if err != nil {
 				return "", fmt.Errorf("LLM queue call failed: %w", err)
 			}

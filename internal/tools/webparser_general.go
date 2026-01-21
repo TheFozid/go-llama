@@ -14,36 +14,30 @@ import (
 
 // WebParserGeneralTool provides automatic summarization of web pages
 type WebParserGeneralTool struct {
-	client           *WebParserClient
-	llmURL           string
-	llmModel         string
-	llmClient        *http.Client
-	config           ToolConfig
-	maxPageSizeMB    int
+    client           *WebParserClient
+    llmURL           string
+    llmModel         string
+    llmClient        interface{} // Changed to interface{} to support Queue Client
+    config           ToolConfig
+    maxPageSizeMB    int
 }
 
 // NewWebParserGeneralTool creates a new general summarization tool
-func NewWebParserGeneralTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig) *WebParserGeneralTool {
-	// Use context-appropriate timeout
-	timeout := time.Duration(config.TimeoutIdle) * time.Second
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
-
-	// LLM timeout should be generous for summarization
-	llmTimeout := timeout
-	if llmTimeout < 90*time.Second {
-		llmTimeout = 90 * time.Second // Minimum 90s for LLM processing
-	}
-	
-	return &WebParserGeneralTool{
-		client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
-		llmURL:        llmURL,
-		llmModel:      llmModel,
-		llmClient:     &http.Client{Timeout: llmTimeout},
-		config:        config,
-		maxPageSizeMB: maxPageSizeMB,
-	}
+func NewWebParserGeneralTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig, llmClient interface{}) *WebParserGeneralTool {
+    // Use context-appropriate timeout
+    timeout := time.Duration(config.TimeoutIdle) * time.Second
+    if timeout == 0 {
+        timeout = 30 * time.Second
+    }
+    
+    return &WebParserGeneralTool{
+        client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
+        llmURL:        llmURL,
+        llmModel:      llmModel,
+        llmClient:     llmClient, // Store provided client
+        config:        config,
+        maxPageSizeMB: maxPageSizeMB,
+    }
 }
 
 // Name returns the tool identifier
@@ -157,28 +151,69 @@ Focus on factual information. Be concise and accurate.`,
 		content.URL, 
 		t.truncateForPrompt(content.CleanText, 8000))
 
-	reqBody := map[string]interface{}{
-		"model": t.llmModel,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are a web content summarizer. Extract key information concisely and accurately.",
-			},
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"stream":      false,
-		"temperature": 0.3, // Low temperature for consistent, factual summaries
-	}
+    reqBody := map[string]interface{}{
+        "model": t.llmModel,
+        "messages": []map[string]string{
+            {
+                "role":    "system",
+                "content": "You are a web content summarizer. Extract key information concisely and accurately.",
+            },
+            {
+                "role":    "user",
+                "content": prompt,
+            },
+        },
+        "stream":      false,
+        "temperature": 0.3, // Low temperature for consistent, factual summaries
+    }
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
-	}
+    // Try to use Queue Client if available
+    if t.llmClient != nil {
+        type LLMCaller interface {
+            Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+        }
 
-	req, err := http.NewRequestWithContext(ctx, "POST", t.llmURL, bytes.NewBuffer(jsonData))
+        if client, ok := t.llmClient.(LLMCaller); ok {
+            body, err := client.Call(ctx, t.llmModel, reqBody)
+            if err != nil {
+                return "", 0, fmt.Errorf("LLM queue call failed: %w", err)
+            }
+            
+            var result struct {
+                Choices []struct {
+                    Message struct {
+                        Content string `json:"content"`
+                    } `json:"message"`
+                } `json:"choices"`
+                Usage struct {
+                    TotalTokens int `json:"total_tokens"`
+                } `json:"usage"`
+            }
+
+            if err := json.Unmarshal(body, &result); err != nil {
+                return "", 0, fmt.Errorf("failed to decode response: %w", err)
+            }
+
+            if len(result.Choices) == 0 {
+                return "", 0, fmt.Errorf("no choices returned from LLM")
+            }
+
+            summary := strings.TrimSpace(result.Choices[0].Message.Content)
+            tokensUsed := result.Usage.TotalTokens
+
+            return summary, tokensUsed, nil
+        }
+    }
+
+    // Fallback to Direct HTTP
+    jsonData, err := json.Marshal(reqBody)
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+    }
+
+    // CRITICAL FIX: Append /v1/chat/completions to Base URL
+    fullURL := t.llmURL + "/v1/chat/completions"
+    req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create request: %w", err)
 	}
