@@ -350,9 +350,9 @@ func main() {
 		if cfg.GrowerAI.Dialogue.Enabled {
 			log.Printf("[Main] Initializing GrowerAI dialogue worker...")
 
-			if storage == nil {
-				log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
-            else {
+            if storage == nil {
+                log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
+            } else {
                 // Re-use embeddingName or resolve again
                 dialEmbedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
                 stateManager := dialogue.NewStateManager(db.DB)
