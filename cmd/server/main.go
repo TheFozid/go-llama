@@ -40,20 +40,42 @@ func main() {
     defer discoveryService.Stop()
 
     // Resolve model names globally so they are available to all subsystems (Dialogue, WebParse, etc.)
+    // Note: Discovery runs in background, so we retry briefly to allow it to populate models.
     var reasoningName, embeddingName string
+    
     if cfg.GrowerAI.ReasoningModel.BaseURL != "" {
-        name, err := discoveryService.GetFirstModelName(cfg.GrowerAI.ReasoningModel.BaseURL)
-        if err != nil {
-            log.Fatalf("[Main] Failed to get reasoning model name: %v", err)
+        var name string
+        var err error
+        for i := 0; i < 10; i++ { // Retry for up to 10 seconds
+            name, err = discoveryService.GetFirstModelName(cfg.GrowerAI.ReasoningModel.BaseURL)
+            if err == nil {
+                reasoningName = name
+                log.Printf("[Main] ✓ Resolved reasoning model: %s", name)
+                break
+            }
+            time.Sleep(1 * time.Second)
         }
-        reasoningName = name
+        if err != nil {
+            log.Printf("[Main] WARNING: Failed to resolve reasoning model name after 10s: %v. Falling back to 'default'.", err)
+            reasoningName = "default"
+        }
     }
     if cfg.GrowerAI.EmbeddingModel.BaseURL != "" {
-        name, err := discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
-        if err != nil {
-            log.Fatalf("[Main] Failed to get embedding model name: %v", err)
+        var name string
+        var err error
+        for i := 0; i < 10; i++ { // Retry for up to 10 seconds
+            name, err = discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
+            if err == nil {
+                embeddingName = name
+                log.Printf("[Main] ✓ Resolved embedding model: %s", name)
+                break
+            }
+            time.Sleep(1 * time.Second)
         }
-        embeddingName = name
+        if err != nil {
+            log.Printf("[Main] WARNING: Failed to resolve embedding model name after 10s: %v. Falling back to 'default'.", err)
+            embeddingName = "default"
+        }
     }
 
     // Check if GrowerAI is enabled globally
