@@ -39,6 +39,23 @@ func main() {
     discoveryService.Start()
     defer discoveryService.Stop()
 
+    // Resolve model names globally so they are available to all subsystems (Dialogue, WebParse, etc.)
+    var reasoningName, embeddingName string
+    if cfg.GrowerAI.ReasoningModel.BaseURL != "" {
+        name, err := discoveryService.GetFirstModelName(cfg.GrowerAI.ReasoningModel.BaseURL)
+        if err != nil {
+            log.Fatalf("[Main] Failed to get reasoning model name: %v", err)
+        }
+        reasoningName = name
+    }
+    if cfg.GrowerAI.EmbeddingModel.BaseURL != "" {
+        name, err := discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
+        if err != nil {
+            log.Fatalf("[Main] Failed to get embedding model name: %v", err)
+        }
+        embeddingName = name
+    }
+
     // Check if GrowerAI is enabled globally
     if cfg.GrowerAI.Enabled {
 		log.Printf("[Main] GrowerAI enabled - initializing components...")
@@ -108,22 +125,12 @@ func main() {
 		if cfg.GrowerAI.Compression.Enabled {
 			log.Printf("[Main] Initializing GrowerAI compression worker...")
 
-			if storage == nil {
-				log.Fatalf("[Main] Storage not initialized for compression worker")
-			}
-			
-            // Resolve embedding model name dynamically
-            embeddingName, err := discoveryService.GetFirstModelName(cfg.GrowerAI.EmbeddingModel.BaseURL)
-            if err != nil {
-                log.Fatalf("[Main] Failed to get embedding model name: %v", err)
+            if storage == nil {
+                log.Fatalf("[Main] Storage not initialized for compression worker")
             }
-            embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
 
-            // Resolve reasoning/compression model name dynamically
-            reasoningName, err := discoveryService.GetFirstModelName(cfg.GrowerAI.ReasoningModel.BaseURL)
-            if err != nil {
-                log.Fatalf("[Main] Failed to get reasoning/compression model name: %v", err)
-            }
+            // Use globally resolved model names
+            embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
 
                 linker := memory.NewLinker(
 					storage,
@@ -353,7 +360,7 @@ func main() {
             if storage == nil {
                 log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
             } else {
-                // Re-use embeddingName or resolve again
+                // Use globally resolved embedding name
                 dialEmbedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL, embeddingName)
                 stateManager := dialogue.NewStateManager(db.DB)
 
