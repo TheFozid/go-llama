@@ -9,12 +9,51 @@ import (
     "time"
 )
 
+// LLMConfig represents configuration for an LLM endpoint.
+// We use custom UnmarshalJSON to support string durations like "5m" or "30s".
 type LLMConfig struct {
     URL            string        `json:"url"` // Just base URL like "http://192.168.1.4:11431"
     CacheTTL       time.Duration `json:"cache_ttl"`       // Default: 5 minutes
     RetryInterval  time.Duration `json:"retry_interval"`  // Default: 30 seconds
     MaxRetries     int           `json:"max_retries"`     // Default: 3
     UseCacheOnFail bool          `json:"use_cache_on_fail"` // Default: true
+}
+
+// UnmarshalJSON allows LLMConfig to parse duration strings (e.g., "5m")
+func (lc *LLMConfig) UnmarshalJSON(data []byte) error {
+    // Alias to avoid infinite recursion
+    type Alias LLMConfig
+    aux := &struct {
+        CacheTTL      string `json:"cache_ttl"`
+        RetryInterval string `json:"retry_interval"`
+        *Alias
+    }{
+        Alias: (*Alias)(lc),
+    }
+
+    if err := json.Unmarshal(data, &aux); err != nil {
+        return err
+    }
+
+    // Parse CacheTTL
+    if aux.CacheTTL != "" {
+        d, err := time.ParseDuration(aux.CacheTTL)
+        if err != nil {
+            return fmt.Errorf("invalid cache_ttl format: %w", err)
+        }
+        lc.CacheTTL = d
+    }
+
+    // Parse RetryInterval
+    if aux.RetryInterval != "" {
+        d, err := time.ParseDuration(aux.RetryInterval)
+        if err != nil {
+            return fmt.Errorf("invalid retry_interval format: %w", err)
+        }
+        lc.RetryInterval = d
+    }
+
+    return nil
 }
 
 type GrowerAIConfig struct {

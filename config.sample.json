@@ -124,12 +124,6 @@
       "allow_disagreement": true,
       "trust_learning_rate": 0.05
     },
-    "linking": {
-      "similarity_threshold": 0.70,
-      "max_links_per_memory": 10,
-      "link_decay_rate": 0.02,
-      "co_occurrence_throttle": 60
-    },
     "dialogue": {
       "enabled": false,
       "base_interval_minutes": 15,
