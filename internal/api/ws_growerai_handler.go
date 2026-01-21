@@ -75,9 +75,9 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 		return
 	}
 
-	// Generate embedding for user's message
-	log.Printf("[GrowerAI-WS] Generating embedding for query: %s", truncate(content, 50))
-	queryEmbedding, err := embedder.Embed(ctx, content)
+    // Generate embedding for user's message
+    log.Printf("[GrowerAI-WS] Generating embedding for query: %s", truncate(prompt, 50))
+    queryEmbedding, err := embedder.Embed(ctx, prompt)
 	if err != nil {
 		log.Printf("[GrowerAI-WS] ERROR: Failed to generate embedding: %v", err)
 		conn.WriteJSON(map[string]string{"error": "embedding generation failed"})
@@ -87,9 +87,9 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 
 	// Search memory for relevant context
 	userIDStr := fmt.Sprintf("%d", userID)
-	query := memory.RetrievalQuery{
-		Query:             content,
-		UserID:            &userIDStr,
+    query := memory.RetrievalQuery{
+        Query:             prompt,
+        UserID:            &userIDStr,
 		IncludePersonal:   true,
 		IncludeCollective: false,
 		Limit:             cfg.GrowerAI.Retrieval.MaxMemories,
@@ -303,11 +303,11 @@ if len(allLinkedIDs) > 0 {
 		})
 	}
 	
-	// Add current user message
-	llmMessages = append(llmMessages, map[string]string{
-		"role":    "user",
-		"content": content,
-	})
+    // Add current user message
+    llmMessages = append(llmMessages, map[string]string{
+        "role":    "user",
+        "content": prompt,
+    })
 	
 	log.Printf("[GrowerAI-WS] ✓ Built conversation context: %d messages (%d history + 1 current)",
 		len(llmMessages)-1, len(messages)) // -1 for system message
@@ -388,14 +388,14 @@ err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPe
 		}
 	}
 
-	// Evaluate what to store in memory
-	shouldStore := len(content) > 20 && len(botResponse) > 20
+    // Evaluate what to store in memory
+    shouldStore := len(prompt) > 20 && len(botResponse) > 20
 
 	if shouldStore {
 		log.Printf("[GrowerAI-WS] Evaluating memory storage...")
 
-		memoryContent := fmt.Sprintf("User asked: %s\nAssistant responded: %s",
-			content, truncate(botResponse, 200))
+        memoryContent := fmt.Sprintf("User asked: %s\nAssistant responded: %s",
+            prompt, truncate(botResponse, 200))
 
 		memEmbedding, err := embedder.Embed(ctx, memoryContent)
 		if err != nil {
@@ -414,10 +414,10 @@ err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPe
 		}
 		
 		if err == nil {
-			importanceScore := 0.5
-			if len(content) > 100 {
-				importanceScore += 0.2
-			}
+        importanceScore := 0.5
+        if len(prompt) > 100 {
+            importanceScore += 0.2
+        }
 			if len(allResults) > 0 {
 				importanceScore += 0.1
 			}
@@ -469,10 +469,10 @@ err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPe
 			reflectionCtx, cancel := context.WithTimeout(context.Background(), 1200*time.Second)
 			defer cancel()
 			
-			if err := performPostConversationReflection(
-				reflectionCtx,
-				content,           // User's message
-				botResponse,       // Bot's response
+            if err := performPostConversationReflection(
+                reflectionCtx,
+                prompt,           // User's message
+                botResponse,       // Bot's response
 				userID,
 				cfg,
 				storage,
@@ -562,16 +562,17 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 	
 	// Use queue if available (critical priority - user-triggered reflection)
 	if llmManager != nil {
-		if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
-			llmClient := llm.NewClient(
-				mgr,
-				llm.PriorityCritical,
-				time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
-			)
-			
-			log.Printf("[Reflection] Using LLM queue (priority: CRITICAL)")
-			
-			body, err := llmClient.Call(ctx, cfg.GrowerAI.ReasoningModel.URL, reqBody)
+        if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
+            llmClient := llm.NewClient(
+                mgr,
+                llm.PriorityCritical,
+                time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
+                discoveryService,
+            )
+            
+            log.Printf("[Reflection] Using LLM queue (priority: CRITICAL)")
+            
+            body, err := llmClient.Call(ctx, cfg.GrowerAI.ReasoningModel.BaseURL, reqBody)
 			if err != nil {
 				return fmt.Errorf("LLM call failed: %w", err)
 			}
