@@ -112,7 +112,7 @@ func main() {
 				log.Fatalf("[Main] Storage not initialized for compression worker")
 			}
 			
-			embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+            embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL)
 
 				linker := memory.NewLinker(
 					storage,
@@ -132,10 +132,10 @@ func main() {
                     log.Printf("[Main] ✓ Compressor using LLM queue (priority: background)")
                 }
 
-				compressor := memory.NewCompressor(
-					cfg.GrowerAI.Compression.Model.URL,
-					cfg.GrowerAI.Compression.Model.Name,
-					embedder,
+                compressor := memory.NewCompressor(
+                    cfg.GrowerAI.Compression.Model.BaseURL,
+                    "default", // Name field removed from config, using default
+                    embedder,
 					linker,
 					compressorLLMClient,
 				)
@@ -152,10 +152,10 @@ func main() {
                     log.Printf("[Main] ✓ Tagger using LLM queue (priority: background)")
                 }
 
-				tagger := memory.NewTagger(
-					cfg.GrowerAI.Compression.Model.URL,
-					cfg.GrowerAI.Compression.Model.Name,
-					cfg.GrowerAI.Tagging.BatchSize,
+                tagger := memory.NewTagger(
+                    cfg.GrowerAI.Compression.Model.BaseURL,
+                    "default", // Name field removed from config, using default
+                    cfg.GrowerAI.Tagging.BatchSize,
 					embedder,
 					taggerLLMClient,
 				)
@@ -212,15 +212,15 @@ func main() {
                     log.Printf("[Main] ✓ DecayWorker using LLM queue for principles (priority: background)")
                 }
 
-				worker := memory.NewDecayWorker(
-					storage,
-					compressor,
-					embedder,
-					taggerQueue, // Use tagger queue instead of tagger
-					linker,
-					db.DB,
-					cfg.GrowerAI.Compression.Model.URL,
-					cfg.GrowerAI.Compression.Model.Name,
+                worker := memory.NewDecayWorker(
+                    storage,
+                    compressor,
+                    embedder,
+                    taggerQueue, // Use tagger queue instead of tagger
+                    linker,
+                    db.DB,
+                    cfg.GrowerAI.Compression.Model.BaseURL,
+                    "default", // Name field removed from config, using default
 					decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
 					cfg.GrowerAI.Compression.ScheduleHours,
 					cfg.GrowerAI.Principles.EvolutionScheduleHours,
@@ -292,9 +292,9 @@ func main() {
 
 			userAgent := cfg.GrowerAI.Tools.WebParse.UserAgent
 			maxPageSizeMB := cfg.GrowerAI.Tools.WebParse.MaxPageSizeMB
-			chunkSize := cfg.GrowerAI.Tools.WebParse.ChunkSize
-			llmURL := cfg.GrowerAI.Compression.Model.URL
-			llmModel := cfg.GrowerAI.Compression.Model.Name
+            chunkSize := cfg.GrowerAI.Tools.WebParse.ChunkSize
+            llmURL := cfg.GrowerAI.Compression.Model.BaseURL
+            llmModel := "default" // Name field removed from config
 
 			metadataTool := tools.NewWebParserMetadataTool(userAgent, webParseConfig)
 			if err := toolRegistry.Register(metadataTool); err != nil {
@@ -342,7 +342,7 @@ func main() {
 			if storage == nil {
 				log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
 			} else {
-				embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+                embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL)
 				stateManager := dialogue.NewStateManager(db.DB)
 
 				// Initialize circuit breaker for LLM resilience
