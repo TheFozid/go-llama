@@ -223,10 +223,10 @@ Respond with JSON only (no markdown, no explanation):
 		}
 		
 		if queueClient, ok := t.llmClient.(LLMCaller); ok {
-			log.Printf("[Tagger] Calling LLM via queue for outcome analysis")
-			startTime := time.Now()
-			
-			body, err := queueClient.Call(ctx, t.llmURL, payload)
+            log.Printf("[Tagger] Calling LLM via queue for outcome analysis")
+            startTime := time.Now()
+
+            body, err := queueClient.Call(ctx, t.llmModel, payload)
 			if err != nil {
 				elapsed := time.Since(startTime)
 				if ctx.Err() == context.DeadlineExceeded {
@@ -476,10 +476,10 @@ Respond with JSON array only (no markdown, no explanation).`, content)
 		}
 		
 		if queueClient, ok := t.llmClient.(LLMCaller); ok {
-			log.Printf("[Tagger] Calling LLM via queue for concept extraction")
-			startTime := time.Now()
-			
-			body, err := queueClient.Call(ctx, t.llmURL, payload)
+            log.Printf("[Tagger] Calling LLM via queue for concept extraction")
+            startTime := time.Now()
+
+            body, err := queueClient.Call(ctx, t.llmModel, payload)
 			if err != nil {
 				elapsed := time.Since(startTime)
 				if ctx.Err() == context.DeadlineExceeded {
