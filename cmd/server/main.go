@@ -318,18 +318,29 @@ func main() {
 			}
 		}
 
-		if cfg.GrowerAI.Tools.WebParse.Enabled {
-			webParseConfig := tools.ToolConfig{
-				Enabled:            cfg.GrowerAI.Tools.WebParse.Enabled,
-				TimeoutInteractive: time.Duration(cfg.GrowerAI.Tools.WebParse.Timeout) * time.Second,
-				TimeoutIdle:        time.Duration(cfg.GrowerAI.Tools.WebParse.Timeout) * time.Second,
-			}
+        if cfg.GrowerAI.Tools.WebParse.Enabled {
+            webParseConfig := tools.ToolConfig{
+                Enabled:            cfg.GrowerAI.Tools.WebParse.Enabled,
+                TimeoutInteractive: time.Duration(cfg.GrowerAI.Tools.WebParse.Timeout) * time.Second,
+                TimeoutIdle:        time.Duration(cfg.GrowerAI.Tools.WebParse.TimeoutIdle) * time.Second,
+            }
 
-			userAgent := cfg.GrowerAI.Tools.WebParse.UserAgent
-			maxPageSizeMB := cfg.GrowerAI.Tools.WebParse.MaxPageSizeMB
+            userAgent := cfg.GrowerAI.Tools.WebParse.UserAgent
+            maxPageSizeMB := cfg.GrowerAI.Tools.WebParse.MaxPageSizeMB
             chunkSize := cfg.GrowerAI.Tools.WebParse.ChunkSize
             llmURL := cfg.GrowerAI.Compression.Model.BaseURL
             llmModel := reasoningName // Use discovered name
+
+            // FIX: Create local LLM client for Web Parser tools
+            var webParserLLMClient interface{}
+            if llmManager != nil {
+                webParserLLMClient = llm.NewClient(
+                    llmManager,
+                    llm.PriorityBackground,
+                    time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+                    discoveryService,
+                )
+            }
 
 			metadataTool := tools.NewWebParserMetadataTool(userAgent, webParseConfig)
 			if err := toolRegistry.Register(metadataTool); err != nil {
@@ -338,21 +349,21 @@ func main() {
 				log.Printf("[Main] ✓ Web parser metadata tool registered")
 			}
 
-            generalTool := tools.NewWebParserGeneralTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig, llmClient)
+            generalTool := tools.NewWebParserGeneralTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig, webParserLLMClient)
 			if err := toolRegistry.Register(generalTool); err != nil {
 				log.Printf("[Main] WARNING: Failed to register web_parse_general tool: %v", err)
 			} else {
 				log.Printf("[Main] ✓ Web parser general tool registered")
 			}
 
-			contextualTool := tools.NewWebParserContextualTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig)
+            contextualTool := tools.NewWebParserContextualTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig, webParserLLMClient)
 			if err := toolRegistry.Register(contextualTool); err != nil {
 				log.Printf("[Main] WARNING: Failed to register web_parse_contextual tool: %v", err)
 			} else {
 				log.Printf("[Main] ✓ Web parser contextual tool registered")
 			}
 
-			chunkedTool := tools.NewWebParserChunkedTool(userAgent, maxPageSizeMB, chunkSize, webParseConfig)
+            chunkedTool := tools.NewWebParserChunkedTool(userAgent, maxPageSizeMB, chunkSize, webParseConfig, webParserLLMClient)
 			if err := toolRegistry.Register(chunkedTool); err != nil {
 				log.Printf("[Main] WARNING: Failed to register web_parse_chunked tool: %v", err)
 			} else {
