@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 type LLMConfig struct {
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	ContextSize int    `json:"context_size"`
+    URL            string        `json:"url"` // Just base URL like "http://192.168.1.4:11431"
+    CacheTTL       time.Duration `json:"cache_ttl"`       // Default: 5 minutes
+    RetryInterval  time.Duration `json:"retry_interval"`  // Default: 30 seconds
+    MaxRetries     int           `json:"max_retries"`     // Default: 3
+    UseCacheOnFail bool          `json:"use_cache_on_fail"` // Default: true
 }
 
 type GrowerAIConfig struct {
@@ -26,15 +29,12 @@ type GrowerAIConfig struct {
 		CriticalTimeoutSeconds  int  `json:"critical_timeout_seconds"`
 		BackgroundTimeoutSeconds int  `json:"background_timeout_seconds"`
 	} `json:"llm_queue"`
-	ReasoningModel struct {
-		Name        string `json:"name"`
-		URL         string `json:"url"`
-		ContextSize int    `json:"context_size"`
-	} `json:"reasoning_model"`
-	EmbeddingModel struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
-	} `json:"embedding_model"`
+    ReasoningModel struct {
+        BaseURL string `json:"base_url"` // Just base URL like "http://192.168.1.4:11434"
+    } `json:"reasoning_model"`
+    EmbeddingModel struct {
+        BaseURL string `json:"base_url"` // Just base URL like "http://192.168.1.4:11435"
+    } `json:"embedding_model"
 	Qdrant struct {
 		URL        string `json:"url"`
 		Collection string `json:"collection"`
@@ -73,10 +73,9 @@ type GrowerAIConfig struct {
 	
 	Compression struct {
 		Enabled       bool `json:"enabled"`
-		Model         struct {
-			Name string `json:"name"`
-			URL  string `json:"url"`
-		} `json:"model"`
+        Model         struct {
+            BaseURL string `json:"base_url"` // Just base URL
+        } `json:"model"
 		ScheduleHours int `json:"schedule_hours"`
 		TierRules     struct {
 			RecentToMediumDays int `json:"recent_to_medium_days"`
@@ -214,10 +213,13 @@ func LoadConfig(path string) (*Config, error) {
 			return
 		}
 		
-		// Apply defaults for Phase 4 settings if not provided
-		applyGrowerAIDefaults(&c.GrowerAI)
-		
-		cfg = &c
+        // Apply defaults for Phase 4 settings if not provided
+        applyGrowerAIDefaults(&c.GrowerAI)
+        
+        // Apply defaults for LLM configurations
+        applyLLMDefaults(c.LLMs)
+        
+        cfg = &c
 	})
 	return cfg, cfgErr
 }
@@ -444,9 +446,24 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	}
 }
 
+// applyLLMDefaults sets sensible defaults for LLM configurations
+func applyLLMDefaults(llms []LLMConfig) {
+    for i := range llms {
+        if llms[i].CacheTTL == 0 {
+            llms[i].CacheTTL = 5 * time.Minute
+        }
+        if llms[i].RetryInterval == 0 {
+            llms[i].RetryInterval = 30 * time.Second
+        }
+        if llms[i].MaxRetries == 0 {
+            llms[i].MaxRetries = 3
+        }
+    }
+}
+
 // GetConfig returns the loaded config (must call LoadConfig first)
 func GetConfig() *Config {
-	return cfg
+    return cfg
 }
 
 // ResetConfigForTest resets the singleton state (for testing only)

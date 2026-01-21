@@ -9,22 +9,39 @@ import (
 
 // Client wraps the queue for easy integration
 type Client struct {
-	manager  *Manager
-	priority Priority
-	timeout  time.Duration
+    manager          *Manager
+    priority         Priority
+    timeout          time.Duration
+    discoveryService *DiscoveryService
 }
 
 // NewClient creates a new queue client
-func NewClient(manager *Manager, priority Priority, timeout time.Duration) *Client {
-	return &Client{
-		manager:  manager,
-		priority: priority,
-		timeout:  timeout,
-	}
+func NewClient(manager *Manager, priority Priority, timeout time.Duration, discoveryService *DiscoveryService) *Client {
+    return &Client{
+        manager:          manager,
+        priority:         priority,
+        timeout:          timeout,
+        discoveryService: discoveryService,
+    }
 }
 
 // Call submits a non-streaming request
-func (c *Client) Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error) {
+func (c *Client) Call(ctx context.Context, modelName string, payload map[string]interface{}) ([]byte, error) {
+    // Find which endpoint has this model
+    endpoint := c.discoveryService.FindEndpointForModel(modelName)
+    if endpoint == nil {
+        return nil, fmt.Errorf("model not found: %s", modelName)
+    }
+    
+    // Construct the appropriate URL based on payload type
+    var url string
+    if _, ok := payload["messages"]; ok { // Chat completion
+        url = endpoint.BaseURL + "/v1/chat/completions"
+    } else if _, ok := payload["input"]; ok { // Embedding
+        url = endpoint.BaseURL + "/v1/embeddings"
+    } else {
+        return nil, fmt.Errorf("unable to determine request type from payload")
+    }
 	respCh := make(chan *Response, 1)
 	errCh := make(chan error, 1)
 
@@ -59,7 +76,22 @@ func (c *Client) Call(ctx context.Context, url string, payload map[string]interf
 }
 
 // CallStreaming submits a streaming request and returns the HTTP response
-func (c *Client) CallStreaming(ctx context.Context, url string, payload map[string]interface{}) (*http.Response, error) {
+func (c *Client) CallStreaming(ctx context.Context, modelName string, payload map[string]interface{}) (*http.Response, error) {
+    // Find which endpoint has this model
+    endpoint := c.discoveryService.FindEndpointForModel(modelName)
+    if endpoint == nil {
+        return nil, fmt.Errorf("model not found: %s", modelName)
+    }
+    
+    // Construct the appropriate URL based on payload type
+    var url string
+    if _, ok := payload["messages"]; ok { // Chat completion
+        url = endpoint.BaseURL + "/v1/chat/completions"
+    } else if _, ok := payload["input"]; ok { // Embedding
+        url = endpoint.BaseURL + "/v1/embeddings"
+    } else {
+        return nil, fmt.Errorf("unable to determine request type from payload")
+    }
 	respCh := make(chan *Response, 1)
 	errCh := make(chan error, 1)
 

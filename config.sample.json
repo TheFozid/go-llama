@@ -15,24 +15,32 @@
   },
   "llms": [
     {
-      "name": "qwen3_4b-cpp",
-      "url": "http://192.168.1.4:11431/v1/chat/completions",
-      "context_size": 4096
+      "url": "http://192.168.1.4:11431",
+      "cache_ttl": "5m",
+      "retry_interval": "30s",
+      "max_retries": 3,
+      "use_cache_on_fail": true
     },
     {
-      "name": "qwen3_8b-cpp",
-      "url": "http://192.168.1.4:11432/v1/chat/completions",
-      "context_size": 4096
+      "url": "http://192.168.1.4:11432",
+      "cache_ttl": "5m",
+      "retry_interval": "30s",
+      "max_retries": 3,
+      "use_cache_on_fail": true
     },
     {
-      "name": "qwen3_14b-cpp",
-      "url": "http://192.168.1.4:11433/v1/chat/completions",
-      "context_size": 4096
+      "url": "http://192.168.1.4:11433",
+      "cache_ttl": "5m",
+      "retry_interval": "30s",
+      "max_retries": 3,
+      "use_cache_on_fail": true
     },
     {
-      "name": "qwen3_4b-file",
-      "url": "http://192.168.1.4:11111/v1/chat/completions",
-      "context_size": 4096
+      "url": "http://192.168.1.4:11111",
+      "cache_ttl": "5m",
+      "retry_interval": "30s",
+      "max_retries": 3,
+      "use_cache_on_fail": true
     }
   ],
   "growerai": {
@@ -46,13 +54,10 @@
       "background_timeout_seconds": 180
     },
     "reasoning_model": {
-      "name": "qwen2.5:3b",
-      "url": "http://192.168.1.4:11434/v1/chat/completions",
-      "context_size": 2048
+      "base_url": "http://192.168.1.4:11434"
     },
     "embedding_model": {
-      "name": "all-minilm-l6-v2",
-      "url": "http://192.168.1.4:11435/v1/embeddings"
+      "base_url": "http://192.168.1.4:11435"
     },
     "qdrant": {
       "url": "http://qdrant:6333",
@@ -85,10 +90,9 @@
     },
     "compression": {
       "enabled": true,
-      "model": {
-        "name": "qwen2.5:3b",
-        "url": "http://192.168.1.4:11434/v1/chat/completions"
-      },
+        "model": {
+            "base_url": "http://192.168.1.4:11434"
+        },
       "schedule_hours": 24,
       "tier_rules": {
         "recent_to_medium_days": 7,

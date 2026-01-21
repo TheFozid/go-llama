@@ -5,6 +5,7 @@ import (
 	"go-llama/internal/config"
 	"go-llama/internal/auth"
 	"go-llama/internal/db"
+	"go-llama/internal/llm"
 	"go-llama/internal/user"
 	"github.com/redis/go-redis/v9"
 	"net/http"
@@ -20,7 +21,7 @@ func usersExist() bool {
 	return count > 0
 }
 
-func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}) *gin.Engine {
+func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}, discoveryService *llm.DiscoveryService) *gin.Engine {
 	r := gin.Default()
 	subpath := cfg.Server.Subpath // e.g. "/go-llama" or any custom path, always starts with '/'
 
@@ -86,18 +87,19 @@ func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}) 
 		group.PUT("/users/:id", auth.AuthMiddleware(cfg, rdb, true), UpdateUserByIdHandler())
 		group.DELETE("/users/:id", auth.AuthMiddleware(cfg, rdb, true), DeleteUserByIdHandler())
 
-		// --- LLMs ---
-		group.GET("/llms", ListLLMsHandler(cfg))
+        // --- LLMs ---
+        group.GET("/llms", ListLLMsHandler(discoveryService))
+        group.GET("/models/status", ModelStatusHandler(discoveryService))
 
-		// --- Chat endpoints ---
-		group.POST("/chats", auth.AuthMiddleware(cfg, rdb, false), CreateChatHandler(cfg))
-		group.GET("/chats", auth.AuthMiddleware(cfg, rdb, false), ListChatsHandler())
-		group.GET("/chats/:id", auth.AuthMiddleware(cfg, rdb, false), GetChatHandler())
-		group.GET("/chats/:id/messages", auth.AuthMiddleware(cfg, rdb, false), ListMessagesHandler())
-		group.POST("/chats/:id/messages", auth.AuthMiddleware(cfg, rdb, false), SendMessageHandler(cfg))
+        // --- Chat endpoints ---
+        group.POST("/chats", auth.AuthMiddleware(cfg, rdb, false), CreateChatHandler(cfg, discoveryService))
+        group.GET("/chats", auth.AuthMiddleware(cfg, rdb, false), ListChatsHandler())
+        group.GET("/chats/:id", auth.AuthMiddleware(cfg, rdb, false), GetChatHandler())
+        group.GET("/chats/:id/messages", auth.AuthMiddleware(cfg, rdb, false), ListMessagesHandler())
+        group.POST("/chats/:id/messages", auth.AuthMiddleware(cfg, rdb, false), SendMessageHandler(cfg, discoveryService))
 
-		// --- Streaming WebSocket endpoint ---
-		group.GET("/ws/chat", WSChatHandler(cfg, llmManager))
+        // --- Streaming WebSocket endpoint ---
+        group.GET("/ws/chat", WSChatHandler(cfg, llmManager, discoveryService))
 
 		// --- SearxNG-augmented LLM endpoint ---
 		group.POST("/search", auth.AuthMiddleware(cfg, rdb, false), SearxNGSearchHandler(cfg))
@@ -110,4 +112,16 @@ func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}) 
 		group.DELETE("/chats/:id", auth.AuthMiddleware(cfg, rdb, false), DeleteChatHandler())
 	}
 	return r
+}
+
+// ModelStatusHandler returns the status of all LLM endpoints
+func ModelStatusHandler(discoveryService *llm.DiscoveryService) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        endpoints := discoveryService.GetAllEndpoints()
+        c.JSON(http.StatusOK, gin.H{
+            "endpoints": endpoints,
+            "chat_models": discoveryService.GetChatModels(),
+            "embedding_models": discoveryService.GetEmbeddingModels(),
+        })
+    }
 }

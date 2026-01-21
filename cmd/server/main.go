@@ -31,11 +31,16 @@ func main() {
 
 	rdb := redisdb.NewClient(cfg)
 
-	// Declare llmManager outside the block so it's accessible later
-	var llmManager *llm.Manager
+    // Declare llmManager outside the block so it's accessible later
+    var llmManager *llm.Manager
+    
+    // Initialize discovery service for dynamic model discovery
+    discoveryService := llm.NewDiscoveryService(cfg)
+    discoveryService.Start()
+    defer discoveryService.Stop()
 
-	// Check if GrowerAI is enabled globally
-	if cfg.GrowerAI.Enabled {
+    // Check if GrowerAI is enabled globally
+    if cfg.GrowerAI.Enabled {
 		log.Printf("[Main] GrowerAI enabled - initializing components...")
 
 		// Initialize LLM Queue Manager (if enabled)
@@ -115,16 +120,17 @@ func main() {
 					cfg.GrowerAI.Linking.MaxLinksPerMemory,
 				)
 
-				// Create LLM client for compressor (background priority)
-				var compressorLLMClient interface{}
-				if llmManager != nil {
-					compressorLLMClient = llm.NewClient(
-						llmManager,
-						llm.PriorityBackground,
-						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
-					)
-					log.Printf("[Main] ✓ Compressor using LLM queue (priority: background)")
-				}
+                // Create LLM client for compressor (background priority)
+                var compressorLLMClient interface{}
+                if llmManager != nil {
+                    compressorLLMClient = llm.NewClient(
+                        llmManager,
+                        llm.PriorityBackground,
+                        time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+                        discoveryService,
+                    )
+                    log.Printf("[Main] ✓ Compressor using LLM queue (priority: background)")
+                }
 
 				compressor := memory.NewCompressor(
 					cfg.GrowerAI.Compression.Model.URL,
@@ -134,16 +140,17 @@ func main() {
 					compressorLLMClient,
 				)
 
-				// Create LLM client for tagger (background priority)
-				var taggerLLMClient interface{}
-				if llmManager != nil {
-					taggerLLMClient = llm.NewClient(
-						llmManager,
-						llm.PriorityBackground,
-						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
-					)
-					log.Printf("[Main] ✓ Tagger using LLM queue (priority: background)")
-				}
+                // Create LLM client for tagger (background priority)
+                var taggerLLMClient interface{}
+                if llmManager != nil {
+                    taggerLLMClient = llm.NewClient(
+                        llmManager,
+                        llm.PriorityBackground,
+                        time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+                        discoveryService,
+                    )
+                    log.Printf("[Main] ✓ Tagger using LLM queue (priority: background)")
+                }
 
 				tagger := memory.NewTagger(
 					cfg.GrowerAI.Compression.Model.URL,
@@ -193,16 +200,17 @@ func main() {
 					Access:     cfg.GrowerAI.StorageLimits.CompressionWeights.Access,
 				}
 
-				// Create LLM client for decay worker (background priority, for principles)
-				var decayWorkerLLMClient interface{}
-				if llmManager != nil {
-					decayWorkerLLMClient = llm.NewClient(
-						llmManager,
-						llm.PriorityBackground,
-						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
-					)
-					log.Printf("[Main] ✓ DecayWorker using LLM queue for principles (priority: background)")
-				}
+                // Create LLM client for decay worker (background priority, for principles)
+                var decayWorkerLLMClient interface{}
+                if llmManager != nil {
+                    decayWorkerLLMClient = llm.NewClient(
+                        llmManager,
+                        llm.PriorityBackground,
+                        time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+                        discoveryService,
+                    )
+                    log.Printf("[Main] ✓ DecayWorker using LLM queue for principles (priority: background)")
+                }
 
 				worker := memory.NewDecayWorker(
 					storage,
@@ -344,19 +352,20 @@ func main() {
 				)
 				log.Printf("[Main] ✓ LLM circuit breaker initialized (threshold: 3 failures, timeout: 5m)")
 
-				// Create LLM client for dialogue (background priority)
-				var llmClient interface{}
-				if llmManager != nil {
-					llmClient = llm.NewClient(
-						llmManager,
-						llm.PriorityBackground,
-						time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
-					)
-					log.Printf("[Main] ✓ Dialogue using LLM queue (priority: background, timeout: %ds)",
-						cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)
-				} else {
-					log.Printf("[Main] Dialogue using legacy direct HTTP calls")
-				}
+                // Create LLM client for dialogue (background priority)
+                var llmClient interface{}
+                if llmManager != nil {
+                    llmClient = llm.NewClient(
+                        llmManager,
+                        llm.PriorityBackground,
+                        time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+                        discoveryService,
+                    )
+                    log.Printf("[Main] ✓ Dialogue using LLM queue (priority: background, timeout: %ds)",
+                        cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)
+                } else {
+                    log.Printf("[Main] Dialogue using legacy direct HTTP calls")
+                }
 
 				engine := dialogue.NewEngine(
 					storage,
@@ -403,7 +412,7 @@ func main() {
 		log.Printf("[Main] GrowerAI disabled in config - skipping initialization")
 	}
 
-	r := api.SetupRouter(cfg, rdb, llmManager)
+    r := api.SetupRouter(cfg, rdb, llmManager, discoveryService)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	fmt.Printf("Starting server on %s%s\n", addr, cfg.Server.Subpath)
 	if err := r.Run(addr); err != nil {

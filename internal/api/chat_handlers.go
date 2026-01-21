@@ -1,28 +1,29 @@
 package api
 
 import (
-	"bytes"
-	"encoding/json"
-	"context"
-	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"log"
-	"net/url"
-	"strconv"
-	"strings"
-	"time"
+    "bytes"
+    "encoding/json"
+    "context"
+    "errors"
+    "fmt"
+    "io"
+    "net/http"
+    "log"
+    "net/url"
+    "strconv"
+    "strings"
+    "time"
 
-	"github.com/gin-gonic/gin"
-	"go-llama/internal/chat"
-	"go-llama/internal/config"
-	"go-llama/internal/db"
-	"go-llama/internal/memory"
-	"gorm.io/gorm"
+    "github.com/gin-gonic/gin"
+    "go-llama/internal/chat"
+    "go-llama/internal/config"
+    "go-llama/internal/db"
+    "go-llama/internal/llm"
+    "go-llama/internal/memory"
+    "gorm.io/gorm"
 )
 
-func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Chat, content string, userID uint) {
+func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Chat, content string, userID uint, discoveryService *llm.DiscoveryService) {
 	log.Printf("[GrowerAI] Processing message from user %d in chat %d", userID, chatInst.ID)
 	
 	// Save user's message first
@@ -37,18 +38,30 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
 		return
 	}
 
-	// Validate GrowerAI is configured
-	if cfg.GrowerAI.ReasoningModel.URL == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "GrowerAI not configured"})
-		return
-	}
+    // Find reasoning and embedding models
+    reasoningModels := discoveryService.GetChatModels()
+    embeddingModels := discoveryService.GetEmbeddingModels()
+    
+    if len(reasoningModels) == 0 {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "No reasoning models available for GrowerAI"})
+        return
+    }
+    if len(embeddingModels) == 0 {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "No embedding models available for GrowerAI"})
+        return
+    }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
 
-	// Initialize memory components
-	log.Printf("[GrowerAI] Initializing embedder: %s", cfg.GrowerAI.EmbeddingModel.URL)
-	embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+    // Initialize memory components
+    reasoningModel := reasoningModels[0]
+    embeddingModel := embeddingModels[0]
+    reasoningEndpoint := discoveryService.FindEndpointForModel(reasoningModel.Name)
+    embeddingEndpoint := discoveryService.FindEndpointForModel(embeddingModel.Name)
+    
+    log.Printf("[GrowerAI] Initializing embedder: %s", embeddingModel.Name)
+    embedder := memory.NewEmbedder(embeddingEndpoint.BaseURL + "/v1/embeddings")
 	
 	log.Printf("[GrowerAI] Initializing storage: %s/%s", cfg.GrowerAI.Qdrant.URL, cfg.GrowerAI.Qdrant.Collection)
 	storage, err := memory.NewStorage(
@@ -123,13 +136,14 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
 		},
 	}
 
-	payload := map[string]interface{}{
-		"model":    cfg.GrowerAI.ReasoningModel.Name,
-		"messages": llmMessages,
-	}
+    payload := map[string]interface{}{
+        "model":    reasoningModel.Name,
+        "messages": llmMessages,
+    }
 
-	log.Printf("[GrowerAI] Calling LLM: %s", cfg.GrowerAI.ReasoningModel.URL)
-	llmResp, err := CallLLM(cfg.GrowerAI.ReasoningModel.URL, payload)
+    log.Printf("[GrowerAI] Calling LLM: %s", reasoningModel.Name)
+    llmURL := reasoningEndpoint.BaseURL + "/v1/chat/completions"
+    llmResp, err := CallLLM(llmURL, payload)
 	if err != nil {
 		log.Printf("[GrowerAI] ERROR: LLM call failed: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "llm failure"})
@@ -249,22 +263,27 @@ func getUserIDFromContext(c *gin.Context) (uint, bool) {
 }
 
 // List available LLM models
-func ListLLMsHandler(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		models := make([]map[string]string, len(cfg.LLMs))
-		for i, model := range cfg.LLMs {
-			models[i] = map[string]string{
-				"name": model.Name,
-				"url":  model.URL,
-			}
-		}
-		c.JSON(http.StatusOK, models)
-	}
+func ListLLMsHandler(discoveryService *llm.DiscoveryService) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        chatModels := discoveryService.GetChatModels()
+        models := make([]map[string]interface{}, len(chatModels))
+        for i, model := range chatModels {
+            endpoint := discoveryService.FindEndpointForModel(model.Name)
+            models[i] = map[string]interface{}{
+                "name":   model.Name,
+                "object": model.Object,
+                "created": model.Created,
+                "owned_by": model.OwnedBy,
+                "endpoint": endpoint.BaseURL,
+            }
+        }
+        c.JSON(http.StatusOK, models)
+    }
 }
 
 // Create a new chat, allow model selection
 // In internal/api/chat_handlers.go, update CreateChatHandler:
-func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
+func CreateChatHandler(cfg *config.Config, discoveryService *llm.DiscoveryService) gin.HandlerFunc {
     return func(c *gin.Context) {
         userID, ok := getUserIDFromContext(c)
         if !ok {
@@ -284,31 +303,31 @@ func CreateChatHandler(cfg *config.Config) gin.HandlerFunc {
 
         modelName := req.ModelName
         
-        // If GrowerAI is selected, use the configured reasoning model
+        // If GrowerAI is selected, find a suitable reasoning model
         if req.UseGrowerAI {
-            if cfg.GrowerAI.ReasoningModel.Name == "" {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": "GrowerAI not configured"})
+            reasoningModels := discoveryService.GetChatModels()
+            if len(reasoningModels) == 0 {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "No chat models available for GrowerAI"})
                 return
             }
-            modelName = cfg.GrowerAI.ReasoningModel.Name
+            // Use the first available chat model for reasoning
+            modelName = reasoningModels[0].Name
         } else {
             // Standard mode: use provided model or default
-            if modelName == "" && len(cfg.LLMs) > 0 {
-                modelName = cfg.LLMs[0].Name
+            if modelName == "" {
+                chatModels := discoveryService.GetChatModels()
+                if len(chatModels) == 0 {
+                    c.JSON(http.StatusInternalServerError, gin.H{"error": "No chat models available"})
+                    return
+                }
+                modelName = chatModels[0].Name
             }
         }
 
-        // For GrowerAI, we don't need to check if model exists in LLMs list
         // For standard mode, validate model exists
         if !req.UseGrowerAI {
-            modelExists := false
-            for _, m := range cfg.LLMs {
-                if m.Name == modelName {
-                    modelExists = true
-                    break
-                }
-            }
-            if !modelExists {
+            endpoint := discoveryService.FindEndpointForModel(modelName)
+            if endpoint == nil {
                 c.JSON(http.StatusBadRequest, gin.H{"error": "model not available"})
                 return
             }
@@ -498,7 +517,7 @@ func ListMessagesHandler() gin.HandlerFunc {
 }
 
 // Send a message in a chat (calls LLM, supports optional web search)
-func SendMessageHandler(cfg *config.Config) gin.HandlerFunc {
+func SendMessageHandler(cfg *config.Config, discoveryService *llm.DiscoveryService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, ok := getUserIDFromContext(c)
 		if !ok {
@@ -532,7 +551,7 @@ if chatInst.UseGrowerAI {
     // Route to GrowerAI memory system instead of standard LLM
     // This is where you'll integrate the memory evaluation loop
     // For now, we can add a placeholder or call a separate handler
-    HandleGrowerAIMessage(c, cfg, &chatInst, req.Content, userID)
+    HandleGrowerAIMessage(c, cfg, &chatInst, req.Content, userID, discoveryService)
     return
 }
 
@@ -548,27 +567,22 @@ if chatInst.UseGrowerAI {
 			return
 		}
 
-		// Find the configured model
-		var modelConfig *config.LLMConfig
-		for i := range cfg.LLMs {
-			if cfg.LLMs[i].Name == chatInst.ModelName {
-				modelConfig = &cfg.LLMs[i]
-				break
-			}
-		}
-		modelMigrated := false
-		oldModel := chatInst.ModelName
-		if modelConfig == nil && len(cfg.LLMs) > 0 {
-			// Model was removed, migrate to first available
-			modelConfig = &cfg.LLMs[0]
-			chatInst.ModelName = modelConfig.Name
-			chatInst.LlmSessionID = ""
-			modelMigrated = true
-		}
-		if modelConfig == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "no models available"})
-			return
-		}
+        // Find the model endpoint
+        endpoint := discoveryService.FindEndpointForModel(chatInst.ModelName)
+        modelMigrated := false
+        oldModel := chatInst.ModelName
+        if endpoint == nil {
+            // Model was removed, migrate to first available
+            chatModels := discoveryService.GetChatModels()
+            if len(chatModels) == 0 {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "no models available"})
+                return
+            }
+            chatInst.ModelName = chatModels[0].Name
+            chatInst.LlmSessionID = ""
+            modelMigrated = true
+            endpoint = discoveryService.FindEndpointForModel(chatInst.ModelName)
+        }
 
 		// Build messages history for LLM with sliding window
 		var allMessages []chat.Message
@@ -577,10 +591,17 @@ if chatInst.UseGrowerAI {
 			return
 		}
 
-		contextSize := modelConfig.ContextSize
-		if contextSize == 0 {
-			contextSize = 2048 // Fallback default
-		}
+        // Get context size from model info or use default
+        models, _ := discoveryService.GetModels(endpoint.BaseURL)
+        contextSize := 2048 // Default fallback
+        for _, m := range models {
+            if m.Name == chatInst.ModelName {
+                // For now, we'll use a default context size
+                // In the future, we could parse this from model name or endpoint
+                contextSize = 2048
+                break
+            }
+        }
 		
 		// First estimate: do we need web search?
 		webContextSize := 0
@@ -690,17 +711,18 @@ if chatInst.UseGrowerAI {
 			})
 		}
 
-		// Prepare LLM API payload
-		payload := map[string]interface{}{
-			"model":    modelConfig.Name,
-			"messages": llmMessages,
-		}
-		if chatInst.LlmSessionID != "" && !modelMigrated {
-			payload["session"] = chatInst.LlmSessionID
-		}
+        // Prepare LLM API payload
+        payload := map[string]interface{}{
+            "model":    chatInst.ModelName,
+            "messages": llmMessages,
+        }
+        if chatInst.LlmSessionID != "" && !modelMigrated {
+            payload["session"] = chatInst.LlmSessionID
+        }
 
-		// Call LLM API and handle possible session errors
-		llmResp, sessionErr := CallLLM(modelConfig.URL, payload)
+        // Call LLM API and handle possible session errors
+        llmURL := endpoint.BaseURL + "/v1/chat/completions"
+        llmResp, sessionErr := CallLLM(llmURL, payload)
 
 		// If session error, re-feed entire history as new session
 		if sessionErr == ErrLLMSession {
@@ -725,7 +747,7 @@ if chatInst.UseGrowerAI {
 			}
 
 			payload["messages"] = llmMessages
-			llmResp, sessionErr = CallLLM(modelConfig.URL, payload)
+            llmResp, sessionErr = CallLLM(llmURL, payload)
 			modelMigrated = modelMigrated || sessionErr == nil
 		}
 		if sessionErr != nil {

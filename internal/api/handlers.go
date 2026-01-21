@@ -28,3 +28,15 @@ func configHandler(cfg *config.Config) gin.HandlerFunc {
 		})
 	}
 }
+
+// ModelStatusHandler returns the status of all LLM endpoints
+func ModelStatusHandler(discoveryService *llm.DiscoveryService) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        endpoints := discoveryService.GetAllEndpoints()
+        c.JSON(http.StatusOK, gin.H{
+            "endpoints": endpoints,
+            "chat_models": discoveryService.GetChatModels(),
+            "embedding_models": discoveryService.GetEmbeddingModels(),
+        })
+    }
+}
