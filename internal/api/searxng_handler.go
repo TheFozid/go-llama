@@ -139,12 +139,12 @@ for i := 0; i < keepTop; i++ {
 		}
 
 		// Use first model as default for /search
-		modelName := "default"
-		modelURL := ""
-		if len(cfg.LLMs) > 0 {
-			modelName = cfg.LLMs[0].Name
-			modelURL = cfg.LLMs[0].URL
-		}
+        modelName := "default"
+        modelURL := ""
+        if len(cfg.LLMs) > 0 {
+            // Name field removed from LLMConfig in dynamic migration
+            modelURL = cfg.LLMs[0].URL
+        }
 		payload := map[string]interface{}{
 			"model":    modelName,
 			"messages": llmMessages,

@@ -35,17 +35,17 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 
 	log.Printf("[GrowerAI-WS] Processing message from user %d in chat %d", userID, chatInst.ID)
 
-	if cfg.GrowerAI.ReasoningModel.URL == "" {
-		conn.WriteJSON(map[string]string{"error": "GrowerAI not configured"})
-		return
-	}
+    if cfg.GrowerAI.ReasoningModel.BaseURL == "" {
+        conn.WriteJSON(map[string]string{"error": "GrowerAI not configured"})
+        return
+    }
 
 	ctx, cancel := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancel()
 
 	// Initialize memory components
-	log.Printf("[GrowerAI-WS] Initializing embedder: %s", cfg.GrowerAI.EmbeddingModel.URL)
-	embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+    log.Printf("[GrowerAI-WS] Initializing embedder: %s", cfg.GrowerAI.EmbeddingModel.BaseURL)
+    embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.BaseURL)
 
 	log.Printf("[GrowerAI-WS] Initializing storage: %s/%s", cfg.GrowerAI.Qdrant.URL, cfg.GrowerAI.Qdrant.Collection)
 	storage, err := memory.NewStorage(

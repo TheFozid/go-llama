@@ -112,7 +112,7 @@ func WSChatHandler(cfg *config.Config, llmManager interface{}, discoveryService 
 
         // Route to appropriate handler
         if chatInst.UseGrowerAI {
-            handleGrowerAIWebSocket(conn, cfg, &chatInst, req.Prompt, userID, llmManager, discoveryService)
+            handleGrowerAIWebSocket(conn, cfg, &chatInst, req.Prompt, userID, llmManager)
         } else {
             handleStandardLLMWebSocket(conn, cfg, &chatInst, req, userID, llmManager, discoveryService)
         }
