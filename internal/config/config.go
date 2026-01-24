@@ -698,8 +698,23 @@ func fetchContextFromProps(baseURL string) int {
         return 0
     }
 
+    // Read body for logging
+    bodyBytes, err := io.ReadAll(resp.Body)
+    if err != nil {
+        log.Printf("[Config] Failed to read /props body from %s: %v", baseURL, err)
+        return 0
+    }
+
+    // Log raw JSON for debugging (truncated to avoid spamming logs)
+    rawJSON := string(bodyBytes)
+    if len(rawJSON) > 500 {
+        log.Printf("[Config] Raw /props response from %s (truncated): %s...", baseURL, rawJSON[:500])
+    } else {
+        log.Printf("[Config] Raw /props response from %s: %s", baseURL, rawJSON)
+    }
+
     var props LlamaCppProps
-    if err := json.NewDecoder(resp.Body).Decode(&props); err != nil {
+    if err := json.Unmarshal(bodyBytes, &props); err != nil {
         log.Printf("[Config] Failed to decode /props JSON from %s: %v", baseURL, err)
         return 0
     }
