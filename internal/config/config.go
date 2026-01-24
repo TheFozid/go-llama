@@ -508,9 +508,12 @@ func discoverModels(c *Config) error {
         if dName != "" {
             *name = dName
         }
-        // Update Context if discovered and valid
+        // Update Context if discovered and valid, otherwise fallback to 4096
         if dCtx > 0 {
             *ctx = dCtx
+        } else if *ctx == 0 {
+            log.Printf("[Config] Context size not returned by API for %s, defaulting to 4096", *url)
+            *ctx = 4096 
         }
         return nil
     }
@@ -635,4 +638,29 @@ func fetchModelInfo(endpointURL string) (string, int, error) {
     }
 
     return name, contextSize, nil
+}
+
+// GetChatURL ensures the URL ends with /v1/chat/completions
+func GetChatURL(baseURL string) string {
+    return ensureSuffix(baseURL, "/v1/chat/completions")
+}
+
+// GetEmbeddingsURL ensures the URL ends with /v1/embeddings
+func GetEmbeddingsURL(baseURL string) string {
+    return ensureSuffix(baseURL, "/v1/embeddings")
+}
+
+// ensureSuffix appends the suffix if it's not already present
+func ensureSuffix(baseURL, suffix string) string {
+    // Clean up base URL (remove trailing slash)
+    if strings.HasSuffix(baseURL, "/") {
+        baseURL = baseURL[:len(baseURL)-1]
+    }
+
+    // If the suffix is already there, return as is
+    if strings.HasSuffix(baseURL, suffix) {
+        return baseURL
+    }
+
+    return baseURL + suffix
 }

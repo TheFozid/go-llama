@@ -111,7 +111,7 @@ func main() {
 				log.Fatalf("[Main] Storage not initialized for compression worker")
 			}
 			
-			embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+            embedder := memory.NewEmbedder(config.GetEmbeddingsURL(cfg.GrowerAI.EmbeddingModel.URL))
 
 				linker := memory.NewLinker(
 					storage,
@@ -130,9 +130,9 @@ func main() {
 					log.Printf("[Main] ✓ Compressor using LLM queue (priority: background)")
 				}
 
-				compressor := memory.NewCompressor(
-					cfg.GrowerAI.Compression.Model.URL,
-					cfg.GrowerAI.Compression.Model.Name,
+                compressor := memory.NewCompressor(
+                    config.GetChatURL(cfg.GrowerAI.Compression.Model.URL),
+                    cfg.GrowerAI.Compression.Model.Name,
 					embedder,
 					linker,
 					compressorLLMClient,
@@ -149,9 +149,9 @@ func main() {
 					log.Printf("[Main] ✓ Tagger using LLM queue (priority: background)")
 				}
 
-				tagger := memory.NewTagger(
-					cfg.GrowerAI.Compression.Model.URL,
-					cfg.GrowerAI.Compression.Model.Name,
+                tagger := memory.NewTagger(
+                    config.GetChatURL(cfg.GrowerAI.Compression.Model.URL),
+                    cfg.GrowerAI.Compression.Model.Name,
 					cfg.GrowerAI.Tagging.BatchSize,
 					embedder,
 					taggerLLMClient,
@@ -208,15 +208,15 @@ func main() {
 					log.Printf("[Main] ✓ DecayWorker using LLM queue for principles (priority: background)")
 				}
 
-				worker := memory.NewDecayWorker(
-					storage,
-					compressor,
-					embedder,
-					taggerQueue, // Use tagger queue instead of tagger
-					linker,
-					db.DB,
-					cfg.GrowerAI.Compression.Model.URL,
-					cfg.GrowerAI.Compression.Model.Name,
+                worker := memory.NewDecayWorker(
+                    storage,
+                    compressor,
+                    embedder,
+                    taggerQueue, // Use tagger queue instead of tagger
+                    linker,
+                    db.DB,
+                    config.GetChatURL(cfg.GrowerAI.Compression.Model.URL),
+                    cfg.GrowerAI.Compression.Model.Name,
 					decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
 					cfg.GrowerAI.Compression.ScheduleHours,
 					cfg.GrowerAI.Principles.EvolutionScheduleHours,
@@ -338,7 +338,7 @@ func main() {
 			if storage == nil {
 				log.Printf("[Main] WARNING: Storage not initialized, skipping dialogue worker")
 			} else {
-				embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+            embedder := memory.NewEmbedder(config.GetEmbeddingsURL(cfg.GrowerAI.EmbeddingModel.URL))
 				stateManager := dialogue.NewStateManager(db.DB)
 
 				// Initialize circuit breaker for LLM resilience
@@ -362,14 +362,14 @@ func main() {
 					log.Printf("[Main] Dialogue using legacy direct HTTP calls")
 				}
 
-				engine := dialogue.NewEngine(
-					storage,
-					embedder,
-					stateManager,
-					contextualRegistry,
-					db.DB, // Add DB parameter for principles
-					cfg.GrowerAI.ReasoningModel.URL,
-					cfg.GrowerAI.ReasoningModel.Name,
+                engine := dialogue.NewEngine(
+                    storage,
+                    embedder,
+                    stateManager,
+                    contextualRegistry,
+                    db.DB, // Add DB parameter for principles
+                    config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
+                    cfg.GrowerAI.ReasoningModel.Name,
 					cfg.GrowerAI.ReasoningModel.ContextSize,
 					llmClient, // NEW PARAMETER - insert here
 					cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
