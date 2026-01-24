@@ -674,33 +674,42 @@ func GetEmbeddingsURL(baseURL string) string {
 func fetchContextFromProps(baseURL string) int {
     targetURL := baseURL + "/props"
     
-    req, _ := http.NewRequest("GET", targetURL, nil)
-    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    req, err := http.NewRequest("GET", targetURL, nil)
+    if err != nil {
+        log.Printf("[Config] Failed to create /props request for %s: %v", baseURL, err)
+        return 0
+    }
+    
+    // Increased timeout to 5 seconds to account for Docker network latency
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
     req = req.WithContext(ctx)
 
     client := &http.Client{}
     resp, err := client.Do(req)
     if err != nil {
-        // Endpoint might not exist, ignore error
+        log.Printf("[Config] Failed to fetch /props from %s: %v", baseURL, err)
         return 0
     }
     defer resp.Body.Close()
 
     if resp.StatusCode != http.StatusOK {
+        log.Printf("[Config] /props returned status %d for %s", resp.StatusCode, baseURL)
         return 0
     }
 
     var props LlamaCppProps
     if err := json.NewDecoder(resp.Body).Decode(&props); err != nil {
+        log.Printf("[Config] Failed to decode /props JSON from %s: %v", baseURL, err)
         return 0
     }
 
     if props.DefaultGenerationSettings.Params.NCtx > 0 {
-        log.Printf("[Config] Found context size %d from /props endpoint", props.DefaultGenerationSettings.Params.NCtx)
+        log.Printf("[Config] Found context size %d from /props endpoint for %s", props.DefaultGenerationSettings.Params.NCtx, baseURL)
         return props.DefaultGenerationSettings.Params.NCtx
     }
 
+    log.Printf("[Config] /props endpoint reachable but n_ctx was 0 or missing for %s", baseURL)
     return 0
 }
 
