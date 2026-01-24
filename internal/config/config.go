@@ -712,14 +712,14 @@ func fetchContextFromProps(baseURL string) int {
         return 0
     }
 
-    if props.DefaultGenerationSettings.Params.NCtx > 0 {
-        log.Printf("[Config] Found context size %d from /props endpoint for %s", props.DefaultGenerationSettings.Params.NCtx, baseURL)
-        return props.DefaultGenerationSettings.Params.NCtx
+    // Fixed path: NCtx is now a direct child of DefaultGenerationSettings
+    if props.DefaultGenerationSettings.NCtx > 0 {
+        log.Printf("[Config] Found context size %d from /props endpoint for %s", props.DefaultGenerationSettings.NCtx, baseURL)
+        return props.DefaultGenerationSettings.NCtx
     }
 
     log.Printf("[Config] /props endpoint reachable but n_ctx was 0 or missing for %s", baseURL)
     return 0
-}
 
 // ensureSuffix appends the suffix if it's not already present
 func ensureSuffix(baseURL, suffix string) string {
