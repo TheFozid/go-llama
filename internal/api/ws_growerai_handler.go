@@ -45,7 +45,7 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 
 	// Initialize memory components
 	log.Printf("[GrowerAI-WS] Initializing embedder: %s", cfg.GrowerAI.EmbeddingModel.URL)
-	embedder := memory.NewEmbedder(cfg.GrowerAI.EmbeddingModel.URL)
+	embedder := memory.NewEmbedder(config.GetEmbeddingsURL(cfg.GrowerAI.EmbeddingModel.URL))
 
 	log.Printf("[GrowerAI-WS] Initializing storage: %s/%s", cfg.GrowerAI.Qdrant.URL, cfg.GrowerAI.Qdrant.Collection)
 	storage, err := memory.NewStorage(
