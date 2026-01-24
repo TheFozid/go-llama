@@ -18,11 +18,15 @@ import (
 )
 
 func main() {
-	cfg, err := config.LoadConfig("config.json")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
-		os.Exit(1)
-	}
+    cfg, err := config.LoadConfig("config.json")
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Start dynamic model refresher (every 5 minutes)
+    // This updates model names and context limits without restart
+    cfg.StartModelRefresher(5 * time.Minute)
 
 	if err := db.Init(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "DB init error: %v\n", err)

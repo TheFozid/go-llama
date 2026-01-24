@@ -1,11 +1,17 @@
 package config
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
-	"sync"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "io"
+    "log"
+    "net/http"
+    "net/url"
+    "os"
+    "strings"
+    "sync"
+    "time"
 )
 
 type LLMConfig struct {
@@ -167,26 +173,28 @@ type GrowerAIConfig struct {
 }
 
 type Config struct {
-	Server struct {
-		Host      string `json:"host"`
-		Port      int    `json:"port"`
-		Subpath   string `json:"subpath"`
-		JWTSecret string `json:"jwtSecret"`
-	} `json:"server"`
-	Postgres struct {
-		DSN string `json:"dsn"`
-	} `json:"postgres"`
-	Redis struct {
-		Addr     string `json:"addr"`
-		Password string `json:"password"`
-		DB       int    `json:"db"`
-	} `json:"redis"`
-	LLMs     []LLMConfig    `json:"llms"`
-	GrowerAI GrowerAIConfig `json:"growerai"`
-	SearxNG  struct {
-		URL        string `json:"url"`
-		MaxResults int    `json:"max_results"`
-	} `json:"searxng"`
+    modelsMu sync.RWMutex // Mutex for protecting model updates during refresh
+
+    Server struct {
+        Host      string `json:"host"`
+        Port      int    `json:"port"`
+        Subpath   string `json:"subpath"`
+        JWTSecret string `json:"jwtSecret"`
+    } `json:"server"`
+    Postgres struct {
+        DSN string `json:"dsn"`
+    } `json:"postgres"`
+    Redis struct {
+        Addr     string `json:"addr"`
+        Password string `json:"password"`
+        DB       int    `json:"db"`
+    } `json:"redis"`
+    LLMs     []LLMConfig    `json:"llms"`
+    GrowerAI GrowerAIConfig `json:"growerai"`
+    SearxNG  struct {
+        URL        string `json:"url"`
+        MaxResults int    `json:"max_results"`
+    } `json:"searxng"`
 }
 
 var (
@@ -208,16 +216,26 @@ func LoadConfig(path string) (*Config, error) {
 			cfgErr = fmt.Errorf("invalid config format: %w", err)
 			return
 		}
-		// Minimal validation
-		if c.Server.JWTSecret == "" {
-			cfgErr = errors.New("jwtSecret must be set in config")
-			return
-		}
-		
-		// Apply defaults for Phase 4 settings if not provided
-		applyGrowerAIDefaults(&c.GrowerAI)
-		
-		cfg = &c
+       // Minimal validation
+        if c.Server.JWTSecret == "" {
+            cfgErr = errors.New("jwtSecret must be set in config")
+            return
+        }
+        
+        // Apply defaults for Phase 4 settings if not provided
+        applyGrowerAIDefaults(&c.GrowerAI)
+
+        // Perform initial model discovery
+        // We do this before assigning the global cfg to ensure valid data is exposed
+        log.Println("[Config] Performing initial model discovery...")
+        if err := discoverModels(&c); err != nil {
+            log.Printf("[Config] Warning: Initial model discovery encountered issues: %v", err)
+            // We do not fail hard here; we proceed with potentially static config values
+        } else {
+            log.Println("[Config] Initial model discovery complete.")
+        }
+        
+        cfg = &c
 	})
 	return cfg, cfgErr
 }
@@ -451,7 +469,170 @@ func GetConfig() *Config {
 
 // ResetConfigForTest resets the singleton state (for testing only)
 func ResetConfigForTest() {
-	once = sync.Once{}
-	cfg = nil
-	cfgErr = nil
+    once = sync.Once{}
+    cfg = nil
+    cfgErr = nil
+}
+
+// StartModelRefresher begins a background loop that refreshes model capabilities periodically
+func (c *Config) StartModelRefresher(interval time.Duration) {
+    ticker := time.NewTicker(interval)
+    go func() {
+        for range ticker.C {
+            log.Println("[Config] Running scheduled model refresh...")
+            if err := discoverModels(c); err != nil {
+                log.Printf("[Config] Scheduled refresh failed: %v", err)
+            } else {
+                log.Println("[Config] Scheduled model refresh successful.")
+            }
+        }
+    }()
+}
+
+// discoverModels updates the config with live data from /v1/models endpoints
+func discoverModels(c *Config) error {
+    c.modelsMu.Lock()
+    defer c.modelsMu.Unlock()
+
+    // Helper to update a single model entry
+    updateEntry := func(url *string, name *string, ctx *int) error {
+        if url == nil || *url == "" {
+            return nil
+        }
+        dName, dCtx, err := fetchModelInfo(*url)
+        if err != nil {
+            return fmt.Errorf("failed to fetch info for %s: %w", *url, err)
+        }
+        
+        // Update Name if discovered
+        if dName != "" {
+            *name = dName
+        }
+        // Update Context if discovered and valid
+        if dCtx > 0 {
+            *ctx = dCtx
+        }
+        return nil
+    }
+
+    // 1. Update main LLMs list
+    for i := range c.LLMs {
+        if err := updateEntry(&c.LLMs[i].URL, &c.LLMs[i].Name, &c.LLMs[i].ContextSize); err != nil {
+            log.Printf("[Config] Error updating LLM[%d]: %v", i, err)
+        } else {
+            log.Printf("[Config] Updated LLM[%d]: Name=%s, Context=%d", i, c.LLMs[i].Name, c.LLMs[i].ContextSize)
+        }
+    }
+
+    // 2. Update GrowerAI Reasoning Model
+    if err := updateEntry(&c.GrowerAI.ReasoningModel.URL, &c.GrowerAI.ReasoningModel.Name, &c.GrowerAI.ReasoningModel.ContextSize); err != nil {
+        log.Printf("[Config] Error updating Reasoning Model: %v", err)
+    }
+
+    // 3. Update GrowerAI Embedding Model
+    if err := updateEntry(&c.GrowerAI.EmbeddingModel.URL, &c.GrowerAI.EmbeddingModel.Name, nil); err != nil {
+        log.Printf("[Config] Error updating Embedding Model: %v", err)
+    }
+
+    // 4. Update GrowerAI Compression Model
+    if err := updateEntry(&c.GrowerAI.Compression.Model.URL, &c.GrowerAI.Compression.Model.Name, nil); err != nil {
+        log.Printf("[Config] Error updating Compression Model: %v", err)
+    }
+
+    return nil
+}
+
+// fetchModelInfo queries the OpenAI /v1/models endpoint
+func fetchModelInfo(endpointURL string) (string, int, error) {
+    // 1. Derive Base URL
+    baseURL := endpointURL
+    // Remove known suffixes to get the base URL
+    suffixes := []string{"/v1/chat/completions", "/v1/embeddings", "/v1/completions"}
+    for _, suffix := range suffixes {
+        if strings.HasSuffix(baseURL, suffix) {
+            baseURL = strings.TrimSuffix(baseURL, suffix)
+            break
+        }
+    }
+    
+    // Ensure no double slash if joining
+    if strings.HasSuffix(baseURL, "/") {
+        baseURL = baseURL[:len(baseURL)-1]
+    }
+    
+    targetURL := baseURL + "/v1/models"
+
+    // 2. Create Request
+    req, err := http.NewRequest("GET", targetURL, nil)
+    if err != nil {
+        return "", 0, err
+    }
+    
+    // Set timeout context
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    req = req.WithContext(ctx)
+
+    // 3. Execute Request
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        return "", 0, err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return "", 0, fmt.Errorf("received status %d", resp.StatusCode)
+    }
+
+    // 4. Parse Response
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return "", 0, err
+    }
+
+    var data struct {
+        Object string `json:"object"`
+        Data   []struct {
+            ID      string `json:"id"`
+            Details struct {
+                // Common context limit fields in local providers (Ollama, vLLM, etc.)
+                ContextLength    int `json:"context_length"`
+                MaxModelLen     int `json:"max_model_len"`
+                MaxTokens       int `json:"max_tokens"`
+                TotalContextLen int `json:"total_context_len"` // Some custom implementations
+            } `json:"details,omitempty"`
+            // Some providers put it at root level of model object
+            ContextLength int `json:"context_length,omitempty"`
+        } `json:"data"`
+    }
+
+    if err := json.Unmarshal(body, &data); err != nil {
+        return "", 0, err
+    }
+
+    if len(data.Data) == 0 {
+        return "", 0, fmt.Errorf("no models found in response")
+    }
+
+    // Assume the first model returned is the one we are querying if the endpoint is specific
+    // Or if the list is just one model behind that URL.
+    model := data.Data[0]
+    name := model.ID
+    contextSize := 0
+
+    // Try to find context limit
+    if model.Details.ContextLength > 0 {
+        contextSize = model.Details.ContextLength
+    } else if model.Details.MaxModelLen > 0 {
+        contextSize = model.Details.MaxModelLen
+    } else if model.Details.MaxTokens > 0 {
+        contextSize = model.Details.MaxTokens
+    } else if model.Details.TotalContextLen > 0 {
+        contextSize = model.Details.TotalContextLen
+    } else if model.ContextLength > 0 {
+        contextSize = model.ContextLength
+    }
+
+    return name, contextSize, nil
 }
