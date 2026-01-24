@@ -334,8 +334,9 @@ if len(allLinkedIDs) > 0 {
 			log.Printf("[GrowerAI-WS] Using LLM queue (priority: CRITICAL, timeout: %ds)", 
 				cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)
 			
-			// Get streaming HTTP response from queue
-httpResp, queueErr := llmClient.CallStreaming(ctx, cfg.GrowerAI.ReasoningModel.URL, payload)
+            // Get streaming HTTP response from queue
+            llmURL := config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL)
+            httpResp, queueErr := llmClient.CallStreaming(ctx, llmURL, payload)
 if queueErr != nil {
 	log.Printf("[GrowerAI-WS] ERROR: LLM queue streaming failed: %v", queueErr)
 	conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
@@ -569,7 +570,8 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 			
 			log.Printf("[Reflection] Using LLM queue (priority: CRITICAL)")
 			
-			body, err := llmClient.Call(ctx, cfg.GrowerAI.ReasoningModel.URL, reqBody)
+            llmURL := config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL)
+            body, err := llmClient.Call(ctx, llmURL, reqBody)
 			if err != nil {
 				return fmt.Errorf("LLM call failed: %w", err)
 			}

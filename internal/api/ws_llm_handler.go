@@ -204,8 +204,9 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
 			// Create context for this request
 			ctx := context.Background()
 			
-			// Get streaming HTTP response from queue
-			httpResp, queueErr := llmClient.CallStreaming(ctx, modelConfig.URL, payload)
+            // Get streaming HTTP response from queue
+            llmURL := config.GetChatURL(modelConfig.URL)
+            httpResp, queueErr := llmClient.CallStreaming(ctx, llmURL, payload)
 			if queueErr != nil {
 				conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": queueErr.Error()})
 				return
