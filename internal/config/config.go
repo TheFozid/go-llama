@@ -545,6 +545,15 @@ func discoverModels(c *Config) error {
     return nil
 }
 
+// LlamaCppProps represents the structure of the /props endpoint (llama.cpp)
+type LlamaCppProps struct {
+    DefaultGenerationSettings struct {
+        Params struct {
+            NCtx int `json:"n_ctx"`
+        } `json:"params"`
+    } `json:"default_generation_settings"`
+}
+
 // fetchModelInfo queries the OpenAI /v1/models endpoint
 func fetchModelInfo(endpointURL string) (string, int, error) {
     // 1. Derive Base URL
@@ -637,6 +646,14 @@ func fetchModelInfo(endpointURL string) (string, int, error) {
         contextSize = model.ContextLength
     }
 
+    // Fallback: Try /props endpoint if context is still 0
+    if contextSize == 0 {
+        log.Printf("[Config] Context size not found in /v1/models, attempting /props...")
+        if ctxFromProps := fetchContextFromProps(baseURL); ctxFromProps > 0 {
+            contextSize = ctxFromProps
+        }
+    }
+
     return name, contextSize, nil
 }
 
@@ -648,6 +665,40 @@ func GetChatURL(baseURL string) string {
 // GetEmbeddingsURL ensures the URL ends with /v1/embeddings
 func GetEmbeddingsURL(baseURL string) string {
     return ensureSuffix(baseURL, "/v1/embeddings")
+}
+
+// fetchContextFromProps attempts to get context size from llama.cpp /props endpoint
+func fetchContextFromProps(baseURL string) int {
+    targetURL := baseURL + "/props"
+    
+    req, _ := http.NewRequest("GET", targetURL, nil)
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+    req = req.WithContext(ctx)
+
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        // Endpoint might not exist, ignore error
+        return 0
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return 0
+    }
+
+    var props LlamaCppProps
+    if err := json.NewDecoder(resp.Body).Decode(&props); err != nil {
+        return 0
+    }
+
+    if props.DefaultGenerationSettings.Params.NCtx > 0 {
+        log.Printf("[Config] Found context size %d from /props endpoint", props.DefaultGenerationSettings.Params.NCtx)
+        return props.DefaultGenerationSettings.Params.NCtx
+    }
+
+    return 0
 }
 
 // ensureSuffix appends the suffix if it's not already present
