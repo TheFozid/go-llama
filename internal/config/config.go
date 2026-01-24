@@ -672,6 +672,10 @@ func GetEmbeddingsURL(baseURL string) string {
     return ensureSuffix(baseURL, "/v1/embeddings")
 }
 
+
+
+
+
 // fetchContextFromProps attempts to get context size from llama.cpp /props endpoint
 func fetchContextFromProps(baseURL string) int {
     targetURL := baseURL + "/props"
@@ -720,7 +724,7 @@ func fetchContextFromProps(baseURL string) int {
 
     log.Printf("[Config] /props endpoint reachable but n_ctx was 0 or missing for %s", baseURL)
     return 0
-
+}
 // ensureSuffix appends the suffix if it's not already present
 func ensureSuffix(baseURL, suffix string) string {
     // Clean up base URL (remove trailing slash)
