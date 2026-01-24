@@ -509,11 +509,14 @@ func discoverModels(c *Config) error {
             *name = dName
         }
         // Update Context if discovered and valid, otherwise fallback to 4096
-        if dCtx > 0 {
-            *ctx = dCtx
-        } else if *ctx == 0 {
-            log.Printf("[Config] Context size not returned by API for %s, defaulting to 4096", *url)
-            *ctx = 4096 
+        // Check if ctx is not nil (some models like embeddings don't need context)
+        if ctx != nil {
+            if dCtx > 0 {
+                *ctx = dCtx
+            } else if *ctx == 0 {
+                log.Printf("[Config] Context size not returned by API for %s, defaulting to 4096", *url)
+                *ctx = 4096
+            }
         }
         return nil
     }
