@@ -2,15 +2,17 @@
 package memory
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"strings"
-	"time"
+    "bytes"
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "log"
+    "net/http"
+    "strings"
+    "time"
+
+    "go-llama/internal/config"
 )
 
 // Compressor handles LLM-based memory compression
@@ -291,9 +293,10 @@ func (c *Compressor) callLLM(ctx context.Context, prompt string) (string, error)
 				"temperature": 0.3,
 			}
 			
-			log.Printf("[Compressor] Calling LLM via queue (prompt length: %d)", len(prompt))
-			
-			body, err := client.Call(ctx, c.modelURL, reqBody)
+            log.Printf("[Compressor] Calling LLM via queue (prompt length: %d)", len(prompt))
+
+            llmURL := config.GetChatURL(c.modelURL)
+            body, err := client.Call(ctx, llmURL, reqBody)
 			if err != nil {
 				return "", fmt.Errorf("LLM queue call failed: %w", err)
 			}
@@ -320,6 +323,8 @@ func (c *Compressor) callLLM(ctx context.Context, prompt string) (string, error)
 	
 	// Fallback to direct HTTP (legacy compatibility)
 	log.Printf("[Compressor] WARNING: Using legacy direct HTTP call")
+
+    llmURL := config.GetChatURL(c.modelURL)
 	
 	reqBody := map[string]interface{}{
 		"model": c.modelName,
@@ -342,7 +347,7 @@ func (c *Compressor) callLLM(ctx context.Context, prompt string) (string, error)
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.modelURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
