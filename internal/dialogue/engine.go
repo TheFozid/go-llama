@@ -190,261 +190,12 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		return StopReasonMaxThoughts, nil
 	}
 
-	// Check for extended idle periods and trigger exploration
-	if len(state.ActiveGoals) == 0 {
-		timeSinceLastCycle := time.Since(state.LastCycleTime)
-		
-		// If idle for 1+ hours with no goals, explore proactively
-		if timeSinceLastCycle > 1*time.Hour {
-			log.Printf("[Dialogue] Extended idle period detected (%s), generating exploratory goal",
-				timeSinceLastCycle.Round(time.Minute))
-			
-			userInterests, err := e.analyzeUserInterests(ctx)
-			if err != nil {
-				log.Printf("[Dialogue] WARNING: Failed to analyze user interests: %v", err)
-				userInterests = []string{}
-			}
-			
-			exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, "", []string{})
-			state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
-			metrics.GoalsCreated++
-			
-			log.Printf("[Dialogue] ✓ Created idle-period exploratory goal: %s",
-				truncate(exploratoryGoal.Description, 60))
-		}
-	}
+    // PHASE 2: Reasoning-Driven Goal Management
+    err = e.runPhaseGoalManagement(ctx, state, reasoning, principles, metrics, &totalTokens)
+    if err != nil {
+        return StopReasonNaturalStop, err
+    }
 
-	
-	// PHASE 2: Reasoning-Driven Goal Management
-	log.Printf("[Dialogue] PHASE 2: Reasoning-Driven Goal Management")
-	
-	// Check context before continuing
-	if ctx.Err() != nil {
-		metrics.ThoughtCount = thoughtCount
-		metrics.ActionCount = actionCount
-		metrics.TokensUsed = totalTokens
-		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before goal management: %w", ctx.Err())
-	}
-	
-	// Use insights from reflection to identify gaps
-	gaps := reasoning.KnowledgeGaps.ToSlice()
-	if len(gaps) == 0 {
-		// Fallback to old method if reasoning didn't find any
-		gaps, err = e.identifyKnowledgeGaps(ctx)
-		if err != nil {
-			log.Printf("[Dialogue] WARNING: Failed to identify gaps: %v", err)
-			gaps = []string{}
-		}
-	}
-	
-	failures, err := e.identifyRecentFailures(ctx)
-	if err != nil {
-		log.Printf("[Dialogue] WARNING: Failed to identify failures: %v", err)
-		failures = []string{}
-	}
-	
-	// Update state with findings
-	state.KnowledgeGaps = gaps
-	state.RecentFailures = failures
-	state.Patterns = reasoning.Patterns.ToSlice()
-	
-	if len(gaps) > 0 {
-		log.Printf("[Dialogue] Identified %d knowledge gaps from reasoning", len(gaps))
-	}
-	if len(failures) > 0 {
-		log.Printf("[Dialogue] Identified %d recent failures", len(failures))
-	}
-	if len(reasoning.Patterns) > 0 {
-		log.Printf("[Dialogue] Detected %d patterns", len(reasoning.Patterns))
-	}
-
-	// Check for meta-loops and trigger exploration if needed
-	inMetaLoop, loopTopic := e.detectMetaLoop(state)
-	
-if inMetaLoop {
-		log.Printf("[Dialogue] Meta-loop detected, switching to exploratory mode")
-		
-		// Get user interests for context
-		userInterests, err := e.analyzeUserInterests(ctx)
-		if err != nil {
-			log.Printf("[Dialogue] WARNING: Failed to analyze user interests: %v", err)
-			userInterests = []string{}
-		}
-		
-		if len(userInterests) > 0 {
-			log.Printf("[Dialogue] User interests identified: %v", userInterests)
-		}
-		
-		// Extract recent goal descriptions to avoid repetition
-		recentGoalDescriptions := []string{}
-		recentGoals := state.CompletedGoals
-		if len(recentGoals) > 5 {
-			recentGoals = recentGoals[len(recentGoals)-5:]
-		}
-		for _, goal := range recentGoals {
-			recentGoalDescriptions = append(recentGoalDescriptions, goal.Description)
-		}
-		
-		// Create exploratory goal
-		exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, loopTopic, recentGoalDescriptions)
-		
-		// Add to state immediately
-		state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
-		metrics.GoalsCreated++
-		
-		log.Printf("[Dialogue] ✓ Created exploratory goal to break meta-loop: %s", 
-			truncate(exploratoryGoal.Description, 60))
-	}
-	
-// Try to create user-aligned goal if we have capacity and no recent user-aligned goals
-	if len(state.ActiveGoals) < 3 {
-		// Check if we recently created a user-aligned goal
-		hasRecentUserGoal := false
-		for _, goal := range state.ActiveGoals {
-			if goal.Source == "user_interest" {
-				hasRecentUserGoal = true
-				break
-			}
-		}
-		
-		if !hasRecentUserGoal {
-			// Build user profile
-			userProfile, err := e.BuildUserProfile(ctx)
-			if err != nil {
-				log.Printf("[Dialogue] WARNING: Failed to build user profile: %v", err)
-			} else if len(userProfile.TopTopics) > 0 {
-				// Get recent goal descriptions to avoid duplication
-				recentTopics := []string{}
-				for _, goal := range state.ActiveGoals {
-					recentTopics = append(recentTopics, goal.Description)
-				}
-				for _, goal := range state.CompletedGoals {
-					if len(recentTopics) < 10 {
-						recentTopics = append(recentTopics, goal.Description)
-					}
-				}
-				
-				// Generate user-aligned goal
-				userGoal, err := e.GenerateUserAlignedGoal(ctx, userProfile, recentTopics)
-				if err != nil {
-					log.Printf("[Dialogue] WARNING: Failed to generate user-aligned goal: %v", err)
-				} else {
-					state.ActiveGoals = append(state.ActiveGoals, userGoal)
-					metrics.GoalsCreated++
-					log.Printf("[Dialogue] ✓ Created user-aligned goal: %s", 
-						truncate(userGoal.Description, 60))
-				}
-			}
-		}
-	}
-	
-	// Create goals from LLM proposals if available (but not if we have too many already)
-	newGoals := []Goal{}
-	if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 15 { // Increased limit for tier system
-		log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
-		
-		// Get recently abandoned goals (last 10)
-		recentlyAbandoned := []Goal{}
-		if len(state.CompletedGoals) > 0 {
-			startIdx := len(state.CompletedGoals) - 10
-			if startIdx < 0 {
-				startIdx = 0
-			}
-			for i := startIdx; i < len(state.CompletedGoals); i++ {
-				if state.CompletedGoals[i].Status == GoalStatusAbandoned {
-					recentlyAbandoned = append(recentlyAbandoned, state.CompletedGoals[i])
-				}
-			}
-		}
-		
-		for _, proposal := range reasoning.GoalsToCreate.ToSlice() {
-			// Check for duplicates against active goals
-			if e.isGoalDuplicate(ctx, proposal.Description, state.ActiveGoals) {
-				log.Printf("[Dialogue] Skipping duplicate goal (matches active): %s", truncate(proposal.Description, 40))
-				continue
-			}
-			
-			// Check for duplicates against recently abandoned goals
-			if len(recentlyAbandoned) > 0 && e.isGoalDuplicate(ctx, proposal.Description, recentlyAbandoned) {
-				log.Printf("[Dialogue] Skipping duplicate goal (matches recently abandoned): %s", truncate(proposal.Description, 40))
-				continue
-			}
-			
-			goal := e.createGoalFromProposal(proposal)
-			
-			// TIER VALIDATION: If secondary, validate linkage to primary goals
-			if goal.Tier == "secondary" {
-				primaryGoals := e.getPrimaryGoals(state.ActiveGoals)
-				if len(primaryGoals) == 0 {
-					log.Printf("[Dialogue] No primary goals exist, promoting secondary to primary: %s",
-						truncate(goal.Description, 60))
-					goal.Tier = "primary"
-				} else {
-					// Validate linkage to at least one primary
-					validation, err := e.validateGoalSupport(ctx, &goal, primaryGoals)
-					if err != nil {
-						log.Printf("[Dialogue] WARNING: Failed to validate goal support: %v", err)
-						// Allow goal but mark as unvalidated
-						goal.DependencyScore = 0.5
-					} else if !validation.IsValid {
-						log.Printf("[Dialogue] Secondary goal does not support any primary, converting to tactical: %s",
-							truncate(goal.Description, 60))
-						goal.Tier = "tactical"
-					} else {
-						// Link to primary
-						goal.SupportsGoals = []string{validation.SupportsGoalID}
-						goal.DependencyScore = validation.Confidence
-						
-						log.Printf("[Dialogue] Secondary goal validated: supports %s (confidence: %.2f)",
-							truncate(validation.SupportsGoalID, 20), validation.Confidence)
-						log.Printf("[Dialogue]   Reasoning: %s", truncate(validation.Reasoning, 80))
-					}
-				}
-			}
-			
-			newGoals = append(newGoals, goal)
-			log.Printf("[Dialogue] Created goal [%s]: %s (priority: %d)", 
-				goal.Tier, truncate(goal.Description, 60), goal.Priority)
-			log.Printf("[Dialogue]   Reasoning: %s", truncate(proposal.Reasoning, 80))
-		}
-	} else {
-		// Fallback to old goal formation
-		newGoals = e.formGoals(state)
-	}
-	
-	if len(newGoals) > 0 {
-		state.ActiveGoals = append(state.ActiveGoals, newGoals...)
-		metrics.GoalsCreated = len(newGoals)
-		log.Printf("[Dialogue] Created %d new goals total", len(newGoals))
-	}
-	
-	// NEW: Metacognitive evaluation - should we modify our thinking principles?
-	if e.enableMetaLearning {
-		log.Printf("[Dialogue] Evaluating principle effectiveness (metacognitive check)...")
-		principleFeedback, feedbackTokens, err := e.evaluatePrincipleEffectiveness(ctx, principles, state)
-		if err != nil {
-			log.Printf("[Dialogue] WARNING: Principle evaluation failed: %v", err)
-		} else {
-			totalTokens += feedbackTokens
-			
-			if principleFeedback.ShouldModify {
-				log.Printf("[Dialogue] ✓ Principle modification recommended:")
-				log.Printf("[Dialogue]   Target: Slot %d", principleFeedback.TargetSlot)
-				log.Printf("[Dialogue]   Current: %s", truncate(principleFeedback.CurrentPrinciple, 60))
-				log.Printf("[Dialogue]   Proposed: %s", truncate(principleFeedback.ProposedPrinciple, 60))
-				log.Printf("[Dialogue]   Justification: %s", truncate(principleFeedback.Justification, 100))
-				
-				// Create self-modification goal
-				modGoal := e.createSelfModificationGoal(principleFeedback)
-				state.ActiveGoals = append(state.ActiveGoals, modGoal)
-				metrics.GoalsCreated++
-				log.Printf("[Dialogue] ✓ Created self-modification goal: %s", truncate(modGoal.Description, 60))
-			} else {
-				log.Printf("[Dialogue] Current principles are working well, no modification needed")
-			}
-		}
-	}
-	
 	// PHASE 3: Goal Pursuit (if we have active goals)
 	if len(state.ActiveGoals) > 0 {
 		log.Printf("[Dialogue] PHASE 3: Goal Pursuit (%d active goals)", len(state.ActiveGoals))
@@ -1749,6 +1500,262 @@ func (e *Engine) runPhaseReflection(ctx context.Context, state *InternalState) (
     }
 
     return reasoning, principles, tokens, reasoning.Reflection, nil
+}
+
+// runPhaseGoalManagement handles goal creation, validation, and metacognitive checks.
+func (e *Engine) runPhaseGoalManagement(ctx context.Context, state *InternalState, reasoning *ReasoningResponse, principles []memory.Principle, metrics *CycleMetrics, totalTokens *int) error {
+    // Check for extended idle periods and trigger exploration
+    if len(state.ActiveGoals) == 0 {
+        timeSinceLastCycle := time.Since(state.LastCycleTime)
+
+        // If idle for 1+ hours with no goals, explore proactively
+        if timeSinceLastCycle > 1*time.Hour {
+            log.Printf("[Dialogue] Extended idle period detected (%s), generating exploratory goal",
+                timeSinceLastCycle.Round(time.Minute))
+
+            userInterests, err := e.analyzeUserInterests(ctx)
+            if err != nil {
+                log.Printf("[Dialogue] WARNING: Failed to analyze user interests: %v", err)
+                userInterests = []string{}
+            }
+
+            exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, "", []string{})
+            state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
+            metrics.GoalsCreated++
+
+            log.Printf("[Dialogue] ✓ Created idle-period exploratory goal: %s",
+                truncate(exploratoryGoal.Description, 60))
+        }
+    }
+
+    log.Printf("[Dialogue] PHASE 2: Reasoning-Driven Goal Management")
+
+    // Check context before continuing
+    if ctx.Err() != nil {
+        return fmt.Errorf("cycle cancelled before goal management: %w", ctx.Err())
+    }
+
+    // Use insights from reflection to identify gaps
+    gaps := reasoning.KnowledgeGaps.ToSlice()
+    if len(gaps) == 0 {
+        // Fallback to old method if reasoning didn't find any
+        var err error
+        gaps, err = e.identifyKnowledgeGaps(ctx)
+        if err != nil {
+            log.Printf("[Dialogue] WARNING: Failed to identify gaps: %v", err)
+            gaps = []string{}
+        }
+    }
+
+    failures, err := e.identifyRecentFailures(ctx)
+    if err != nil {
+        log.Printf("[Dialogue] WARNING: Failed to identify failures: %v", err)
+        failures = []string{}
+    }
+
+    // Update state with findings
+    state.KnowledgeGaps = gaps
+    state.RecentFailures = failures
+    state.Patterns = reasoning.Patterns.ToSlice()
+
+    if len(gaps) > 0 {
+        log.Printf("[Dialogue] Identified %d knowledge gaps from reasoning", len(gaps))
+    }
+    if len(failures) > 0 {
+        log.Printf("[Dialogue] Identified %d recent failures", len(failures))
+    }
+    if len(reasoning.Patterns) > 0 {
+        log.Printf("[Dialogue] Detected %d patterns", len(reasoning.Patterns))
+    }
+
+    // Check for meta-loops and trigger exploration if needed
+    inMetaLoop, loopTopic := e.detectMetaLoop(state)
+
+    if inMetaLoop {
+        log.Printf("[Dialogue] Meta-loop detected, switching to exploratory mode")
+
+        // Get user interests for context
+        userInterests, err := e.analyzeUserInterests(ctx)
+        if err != nil {
+            log.Printf("[Dialogue] WARNING: Failed to analyze user interests: %v", err)
+            userInterests = []string{}
+        }
+
+        if len(userInterests) > 0 {
+            log.Printf("[Dialogue] User interests identified: %v", userInterests)
+        }
+
+        // Extract recent goal descriptions to avoid repetition
+        recentGoalDescriptions := []string{}
+        recentGoals := state.CompletedGoals
+        if len(recentGoals) > 5 {
+            recentGoals = recentGoals[len(recentGoals)-5:]
+        }
+        for _, goal := range recentGoals {
+            recentGoalDescriptions = append(recentGoalDescriptions, goal.Description)
+        }
+
+        // Create exploratory goal
+        exploratoryGoal := e.generateExploratoryGoal(ctx, userInterests, loopTopic, recentGoalDescriptions)
+
+        // Add to state immediately
+        state.ActiveGoals = append(state.ActiveGoals, exploratoryGoal)
+        metrics.GoalsCreated++
+
+        log.Printf("[Dialogue] ✓ Created exploratory goal to break meta-loop: %s",
+            truncate(exploratoryGoal.Description, 60))
+    }
+
+    // Try to create user-aligned goal if we have capacity and no recent user-aligned goals
+    if len(state.ActiveGoals) < 3 {
+        // Check if we recently created a user-aligned goal
+        hasRecentUserGoal := false
+        for _, goal := range state.ActiveGoals {
+            if goal.Source == "user_interest" {
+                hasRecentUserGoal = true
+                break
+            }
+        }
+
+        if !hasRecentUserGoal {
+            // Build user profile
+            userProfile, err := e.BuildUserProfile(ctx)
+            if err != nil {
+                log.Printf("[Dialogue] WARNING: Failed to build user profile: %v", err)
+            } else if len(userProfile.TopTopics) > 0 {
+                // Get recent goal descriptions to avoid duplication
+                recentTopics := []string{}
+                for _, goal := range state.ActiveGoals {
+                    recentTopics = append(recentTopics, goal.Description)
+                }
+                for _, goal := range state.CompletedGoals {
+                    if len(recentTopics) < 10 {
+                        recentTopics = append(recentTopics, goal.Description)
+                    }
+                }
+
+                // Generate user-aligned goal
+                userGoal, err := e.GenerateUserAlignedGoal(ctx, userProfile, recentTopics)
+                if err != nil {
+                    log.Printf("[Dialogue] WARNING: Failed to generate user-aligned goal: %v", err)
+                } else {
+                    state.ActiveGoals = append(state.ActiveGoals, userGoal)
+                    metrics.GoalsCreated++
+                    log.Printf("[Dialogue] ✓ Created user-aligned goal: %s",
+                        truncate(userGoal.Description, 60))
+                }
+            }
+        }
+    }
+
+    // Create goals from LLM proposals if available (but not if we have too many already)
+    newGoals := []Goal{}
+    if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 15 { // Increased limit for tier system
+        log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
+
+        // Get recently abandoned goals (last 10)
+        recentlyAbandoned := []Goal{}
+        if len(state.CompletedGoals) > 0 {
+            startIdx := len(state.CompletedGoals) - 10
+            if startIdx < 0 {
+                startIdx = 0
+            }
+            for i := startIdx; i < len(state.CompletedGoals); i++ {
+                if state.CompletedGoals[i].Status == GoalStatusAbandoned {
+                    recentlyAbandoned = append(recentlyAbandoned, state.CompletedGoals[i])
+                }
+            }
+        }
+
+        for _, proposal := range reasoning.GoalsToCreate.ToSlice() {
+            // Check for duplicates against active goals
+            if e.isGoalDuplicate(ctx, proposal.Description, state.ActiveGoals) {
+                log.Printf("[Dialogue] Skipping duplicate goal (matches active): %s", truncate(proposal.Description, 40))
+                continue
+            }
+
+            // Check for duplicates against recently abandoned goals
+            if len(recentlyAbandoned) > 0 && e.isGoalDuplicate(ctx, proposal.Description, recentlyAbandoned) {
+                log.Printf("[Dialogue] Skipping duplicate goal (matches recently abandoned): %s", truncate(proposal.Description, 40))
+                continue
+            }
+
+            goal := e.createGoalFromProposal(proposal)
+
+            // TIER VALIDATION: If secondary, validate linkage to primary goals
+            if goal.Tier == "secondary" {
+                primaryGoals := e.getPrimaryGoals(state.ActiveGoals)
+                if len(primaryGoals) == 0 {
+                    log.Printf("[Dialogue] No primary goals exist, promoting secondary to primary: %s",
+                        truncate(goal.Description, 60))
+                    goal.Tier = "primary"
+                } else {
+                    // Validate linkage to at least one primary
+                    validation, err := e.validateGoalSupport(ctx, &goal, primaryGoals)
+                    if err != nil {
+                        log.Printf("[Dialogue] WARNING: Failed to validate goal support: %v", err)
+                        // Allow goal but mark as unvalidated
+                        goal.DependencyScore = 0.5
+                    } else if !validation.IsValid {
+                        log.Printf("[Dialogue] Secondary goal does not support any primary, converting to tactical: %s",
+                            truncate(goal.Description, 60))
+                        goal.Tier = "tactical"
+                    } else {
+                        // Link to primary
+                        goal.SupportsGoals = []string{validation.SupportsGoalID}
+                        goal.DependencyScore = validation.Confidence
+
+                        log.Printf("[Dialogue] Secondary goal validated: supports %s (confidence: %.2f)",
+                            truncate(validation.SupportsGoalID, 20), validation.Confidence)
+                        log.Printf("[Dialogue]   Reasoning: %s", truncate(validation.Reasoning, 80))
+                    }
+                }
+            }
+
+            newGoals = append(newGoals, goal)
+            log.Printf("[Dialogue] Created goal [%s]: %s (priority: %d)",
+                goal.Tier, truncate(goal.Description, 60), goal.Priority)
+            log.Printf("[Dialogue]   Reasoning: %s", truncate(proposal.Reasoning, 80))
+        }
+    } else {
+        // Fallback to old goal formation
+        newGoals = e.formGoals(state)
+    }
+
+    if len(newGoals) > 0 {
+        state.ActiveGoals = append(state.ActiveGoals, newGoals...)
+        metrics.GoalsCreated += len(newGoals) // Increment properly
+        log.Printf("[Dialogue] Created %d new goals total", len(newGoals))
+    }
+
+    // NEW: Metacognitive evaluation - should we modify our thinking principles?
+    if e.enableMetaLearning {
+        log.Printf("[Dialogue] Evaluating principle effectiveness (metacognitive check)...")
+        principleFeedback, feedbackTokens, err := e.evaluatePrincipleEffectiveness(ctx, principles, state)
+        if err != nil {
+            log.Printf("[Dialogue] WARNING: Principle evaluation failed: %v", err)
+        } else {
+            *totalTokens += feedbackTokens
+
+            if principleFeedback.ShouldModify {
+                log.Printf("[Dialogue] ✓ Principle modification recommended:")
+                log.Printf("[Dialogue]   Target: Slot %d", principleFeedback.TargetSlot)
+                log.Printf("[Dialogue]   Current: %s", truncate(principleFeedback.CurrentPrinciple, 60))
+                log.Printf("[Dialogue]   Proposed: %s", truncate(principleFeedback.ProposedPrinciple, 60))
+                log.Printf("[Dialogue]   Justification: %s", truncate(principleFeedback.Justification, 100))
+
+                // Create self-modification goal
+                modGoal := e.createSelfModificationGoal(principleFeedback)
+                state.ActiveGoals = append(state.ActiveGoals, modGoal)
+                metrics.GoalsCreated++
+                log.Printf("[Dialogue] ✓ Created self-modification goal: %s", truncate(modGoal.Description, 60))
+            } else {
+                log.Printf("[Dialogue] Current principles are working well, no modification needed")
+            }
+        }
+    }
+
+    return nil
 }
 
 // reflectOnRecentActivity analyzes recent memory patterns
