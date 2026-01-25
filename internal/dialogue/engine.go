@@ -3047,108 +3047,14 @@ func (e *Engine) storeLearning(ctx context.Context, learning Learning) (string, 
 // Misc helpers (generateJitter, truncateResponse) moved to utils.go
 
 // assessProgress evaluates if the current plan is still optimal after completing an action
-func (e *Engine) assessProgress(ctx context.Context, goal *Goal) (*PlanAssessment, int, error) {
-	// Gather completed and pending actions
-	completedActions := []Action{}
-	pendingActions := []Action{}
 
-	for _, action := range goal.Actions {
-		if action.Status == ActionStatusCompleted {
-			completedActions = append(completedActions, action)
-		} else if action.Status == ActionStatusPending {
-			pendingActions = append(pendingActions, action)
-		}
-	}
+// Gather completed and pending actions
 
-	// Build action summaries
-	completedSummary := ""
-	for i, action := range completedActions {
-		resultPreview := action.Result
-		if len(resultPreview) > 200 {
-			resultPreview = resultPreview[:200] + "..."
-		}
-		completedSummary += fmt.Sprintf("%d. %s [%s]\n   Result: %s\n",
-			i+1, action.Tool, action.Description, resultPreview)
-	}
+// Build action summaries
 
-	pendingSummary := ""
-	for i, action := range pendingActions {
-		pendingSummary += fmt.Sprintf("%d. %s [%s]\n",
-			i+1, action.Tool, action.Description)
-	}
+// Build research plan summary if exists
 
-	// Build research plan summary if exists
-	planSummary := ""
-	if goal.ResearchPlan != nil {
-		planSummary = fmt.Sprintf("Root Question: %s\n", goal.ResearchPlan.RootQuestion)
-		planSummary += fmt.Sprintf("Total Questions: %d\n", len(goal.ResearchPlan.SubQuestions))
-		planSummary += fmt.Sprintf("Current Step: %d\n", goal.ResearchPlan.CurrentStep+1)
-	}
-
-	prompt := fmt.Sprintf(`Assess progress toward this goal after completing an action.
-
-GOAL: %s
-
-COMPLETED ACTIONS (most recent last):
-%s
-
-PENDING ACTIONS:
-%s
-
-CURRENT RESEARCH PLAN:
-%s
-
-EVALUATION CRITERIA:
-1. Did the last action produce useful, relevant results?
-2. Are we making progress toward the goal?
-3. Is the remaining plan still optimal given what we learned?
-4. Do we need to change direction?
-
-RESPOND ONLY with S-expression (no markdown):
-
-(assessment
-  (progress_quality "good|partial|poor")
-  (plan_validity "valid|needs_adjustment|needs_replan")
-  (reasoning "1-2 sentence explanation of current state and why")
-  (recommendation "continue|adjust|replan"))
-
-DECISION RULES:
-- progress_quality "good" = action produced relevant, useful information
-- progress_quality "partial" = action produced some info but not ideal
-- progress_quality "poor" = action failed or produced irrelevant info
-
-- plan_validity "valid" = current plan will achieve goal
-- plan_validity "needs_adjustment" = plan mostly works but needs tweaks
-- plan_validity "needs_replan" = current approach won't work, need new strategy
-
-- recommendation "continue" = keep executing current plan
-- recommendation "adjust" = modify next actions but keep general approach
-- recommendation "replan" = abandon current plan, generate completely new one
-
-CRITICAL: Recommend "replan" if:
-- Search returned no relevant results
-- Parse found content unrelated to goal
-- We're clearly on wrong track from first action
-- Results don't match what we need for the goal`,
-		goal.Description,
-		completedSummary,
-		pendingSummary,
-		planSummary)
-
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
-	if err != nil {
-		return nil, tokens, fmt.Errorf("assessment LLM call failed: %w", err)
-	}
-
-	// Parse S-expression response
-	assessment, err := e.parseAssessmentSExpr(response.RawResponse)
-	if err != nil {
-		return nil, tokens, fmt.Errorf("failed to parse assessment: %w", err)
-	}
-
-	assessment.Timestamp = time.Now()
-	return assessment, tokens, nil
-}
+// Parse S-expression response
 
 // parseAssessmentSExpr extracts assessment from S-expression response
 
@@ -3199,66 +3105,14 @@ CRITICAL: Recommend "replan" if:
 // Parse response
 
 // PrincipleFeedback represents LLM's evaluation of whether to modify principles
-type PrincipleFeedback struct {
-	ShouldModify		bool
-	TargetSlot		int
-	CurrentPrinciple	string
-	ProposedPrinciple	string
-	Justification		string
-	TestStrategy		string
-}
 
 // parsePrincipleFeedback extracts feedback from S-expression
-func (e *Engine) parsePrincipleFeedback(rawResponse string) (*PrincipleFeedback, error) {
-	content := strings.TrimSpace(rawResponse)
-	content = strings.TrimPrefix(content, "```lisp")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
 
-	blocks := findBlocksRecursive(content, "principle_evaluation")
-	if len(blocks) == 0 {
-		return nil, fmt.Errorf("no principle_evaluation block found")
-	}
+// Extract modification details
 
-	block := blocks[0]
+// Validate slot range
 
-	shouldModifyStr := extractFieldContent(block, "should_modify")
-	shouldModify := (shouldModifyStr == "true" || shouldModifyStr == "t")
-
-	feedback := &PrincipleFeedback{
-		ShouldModify: shouldModify,
-	}
-
-	if !shouldModify {
-		return feedback, nil
-	}
-
-	// Extract modification details
-	targetSlotStr := extractFieldContent(block, "target_slot")
-	if targetSlotStr != "" {
-		if slot, err := strconv.Atoi(targetSlotStr); err == nil {
-			feedback.TargetSlot = slot
-		}
-	}
-
-	feedback.CurrentPrinciple = extractFieldContent(block, "current_principle")
-	feedback.ProposedPrinciple = extractFieldContent(block, "proposed_principle")
-	feedback.Justification = extractFieldContent(block, "justification")
-	feedback.TestStrategy = extractFieldContent(block, "test_strategy")
-
-	// Validate slot range
-	if feedback.TargetSlot < 4 || feedback.TargetSlot > 10 {
-		return nil, fmt.Errorf("invalid target slot: %d (must be 4-10)", feedback.TargetSlot)
-	}
-
-	// Validate required fields
-	if feedback.ProposedPrinciple == "" {
-		return nil, fmt.Errorf("proposed_principle is required when should_modify=true")
-	}
-
-	return feedback, nil
-}
+// Validate required fields
 
 // createSelfModificationGoal creates a goal to test and potentially commit a principle change
 
