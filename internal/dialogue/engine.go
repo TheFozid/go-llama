@@ -162,94 +162,25 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	}
 	e.adaptiveConfig.UpdateMetrics(ctx, state, totalMemories)
 	
-	// PHASE 1: Enhanced Reflection with Structured Reasoning
-	log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
-	
-	// Check context before expensive operation
-	if ctx.Err() != nil {
-		return StopReasonNaturalStop, fmt.Errorf("cycle cancelled before reflection: %w", ctx.Err())
-	}
-	
-	reasoning, principles, tokens, err := e.performEnhancedReflection(ctx, state)
-	if err != nil {
-		return StopReasonNaturalStop, fmt.Errorf("reflection failed: %w", err)
-	}
-	
-	thoughtCount++
-	totalTokens += tokens
-	recentThoughts = append(recentThoughts, reasoning.Reflection)
-	
-	// Save thought record
-	e.stateManager.SaveThought(ctx, &ThoughtRecord{
-		CycleID:     state.CycleCount,
-		ThoughtNum:  thoughtCount,
-		Content:     reasoning.Reflection,
-		TokensUsed:  tokens,
-		ActionTaken: false,
-		Timestamp:   time.Now(),
-	})
-	
-    if reasoning.Reflection == "" {
-        log.Printf("[Dialogue] Reflection: (Empty - LLM did not provide reflection text)")
-    } else {
-        log.Printf("[Dialogue] Reflection: %s", truncate(reasoning.Reflection, 80))
+    // PHASE 1: Enhanced Reflection with Structured Reasoning
+    reasoning, principles, phaseTokens, reflectionText, err := e.runPhaseReflection(ctx, state)
+    if err != nil {
+        return StopReasonNaturalStop, err
     }
-	
-	// Log insights
-	insights := reasoning.Insights.ToSlice()
-	if len(insights) > 0 {
-		log.Printf("[Dialogue] Generated %d insights", len(insights))
-		for i, insight := range insights {
-			log.Printf("[Dialogue]   Insight %d: %s", i+1, truncate(insight, 80))
-		}
-	}
-	
-	// Log self-assessment if enabled
-	if e.enableSelfAssessment && reasoning.SelfAssessment != nil {
-		log.Printf("[Dialogue] Self-Assessment:")
-		log.Printf("[Dialogue]   Confidence: %.2f", reasoning.SelfAssessment.Confidence)
-		if len(reasoning.SelfAssessment.RecentSuccesses) > 0 {
-			log.Printf("[Dialogue]   Successes: %d", len(reasoning.SelfAssessment.RecentSuccesses))
-		}
-		if len(reasoning.SelfAssessment.RecentFailures) > 0 {
-			log.Printf("[Dialogue]   Failures: %d", len(reasoning.SelfAssessment.RecentFailures))
-		}
-		if len(reasoning.SelfAssessment.FocusAreas) > 0 {
-			log.Printf("[Dialogue]   Focus Areas: %v", reasoning.SelfAssessment.FocusAreas)
-		}
-	}
-	
-	// Store learnings as memories if enabled
-	if e.storeInsights && len(reasoning.Learnings.ToSlice()) > 0 {
-		storedCount := 0
-		storedIDs := []string{}
-		for _, learning := range reasoning.Learnings.ToSlice() {
-			memID, err := e.storeLearning(ctx, learning)
-			if err != nil {
-				log.Printf("[Dialogue] ERROR: Failed to store learning: %v", err)
-			} else {
-				storedCount++
-				storedIDs = append(storedIDs, memID)
-			}
-		}
-		log.Printf("[Dialogue] Stored %d/%d learnings in memory (collective=true)", storedCount, len(reasoning.Learnings))
-		
-		// Give Qdrant time to index the new embeddings
-		if storedCount > 0 {
-			log.Printf("[Dialogue] Waiting 2s for Qdrant to index %d new learnings...", storedCount)
-			time.Sleep(2 * time.Second)
-			
-			// Verify learnings are searchable
-			for _, memID := range storedIDs {
-				mem, err := e.storage.GetMemoryByID(ctx, memID)
-				if err != nil {
-					log.Printf("[Dialogue] WARNING: Stored learning %s not immediately retrievable: %v", memID, err)
-				} else {
-					log.Printf("[Dialogue] ✓ Verified learning %s is retrievable", truncate(mem.Content, 60))
-				}
-			}
-		}
-	}
+
+    thoughtCount++
+    totalTokens += phaseTokens
+    recentThoughts = append(recentThoughts, reflectionText)
+
+    // Save thought record
+    e.stateManager.SaveThought(ctx, &ThoughtRecord{
+        CycleID:     state.CycleCount,
+        ThoughtNum:  thoughtCount,
+        Content:     reflectionText,
+        TokensUsed:  phaseTokens,
+        ActionTaken: false,
+        Timestamp:   time.Now(),
+    })
 	
 	// Check token budget
 	if totalTokens >= e.maxTokensPerCycle {
@@ -1738,6 +1669,86 @@ if topGoal.Progress >= 1.0 && !hasPendingActions {
 	}
 	
 	return StopReasonNaturalStop, nil
+}
+
+// runPhaseReflection handles the initial reflection, thought recording, and learning storage.
+func (e *Engine) runPhaseReflection(ctx context.Context, state *InternalState) (*ReasoningResponse, []memory.Principle, int, string, error) {
+    log.Printf("[Dialogue] PHASE 1: Enhanced Reflection")
+
+    // Check context before expensive operation
+    if ctx.Err() != nil {
+        return nil, nil, 0, "", fmt.Errorf("cycle cancelled before reflection: %w", ctx.Err())
+    }
+
+    reasoning, principles, tokens, err := e.performEnhancedReflection(ctx, state)
+    if err != nil {
+        return nil, nil, 0, "", fmt.Errorf("reflection failed: %w", err)
+    }
+
+    // Log reflection content
+    if reasoning.Reflection == "" {
+        log.Printf("[Dialogue] Reflection: (Empty - LLM did not provide reflection text)")
+    } else {
+        log.Printf("[Dialogue] Reflection: %s", truncate(reasoning.Reflection, 80))
+    }
+
+    // Log insights
+    insights := reasoning.Insights.ToSlice()
+    if len(insights) > 0 {
+        log.Printf("[Dialogue] Generated %d insights", len(insights))
+        for i, insight := range insights {
+            log.Printf("[Dialogue]   Insight %d: %s", i+1, truncate(insight, 80))
+        }
+    }
+
+    // Log self-assessment if enabled
+    if e.enableSelfAssessment && reasoning.SelfAssessment != nil {
+        log.Printf("[Dialogue] Self-Assessment:")
+        log.Printf("[Dialogue]   Confidence: %.2f", reasoning.SelfAssessment.Confidence)
+        if len(reasoning.SelfAssessment.RecentSuccesses) > 0 {
+            log.Printf("[Dialogue]   Successes: %d", len(reasoning.SelfAssessment.RecentSuccesses))
+        }
+        if len(reasoning.SelfAssessment.RecentFailures) > 0 {
+            log.Printf("[Dialogue]   Failures: %d", len(reasoning.SelfAssessment.RecentFailures))
+        }
+        if len(reasoning.SelfAssessment.FocusAreas) > 0 {
+            log.Printf("[Dialogue]   Focus Areas: %v", reasoning.SelfAssessment.FocusAreas)
+        }
+    }
+
+    // Store learnings as memories if enabled
+    if e.storeInsights && len(reasoning.Learnings.ToSlice()) > 0 {
+        storedCount := 0
+        storedIDs := []string{}
+        for _, learning := range reasoning.Learnings.ToSlice() {
+            memID, err := e.storeLearning(ctx, learning)
+            if err != nil {
+                log.Printf("[Dialogue] ERROR: Failed to store learning: %v", err)
+            } else {
+                storedCount++
+                storedIDs = append(storedIDs, memID)
+            }
+        }
+        log.Printf("[Dialogue] Stored %d/%d learnings in memory (collective=true)", storedCount, len(reasoning.Learnings))
+
+        // Give Qdrant time to index the new embeddings
+        if storedCount > 0 {
+            log.Printf("[Dialogue] Waiting 2s for Qdrant to index %d new learnings...", storedCount)
+            time.Sleep(2 * time.Second)
+
+            // Verify learnings are searchable
+            for _, memID := range storedIDs {
+                mem, err := e.storage.GetMemoryByID(ctx, memID)
+                if err != nil {
+                    log.Printf("[Dialogue] WARNING: Stored learning %s not immediately retrievable: %v", memID, err)
+                } else {
+                    log.Printf("[Dialogue] ✓ Verified learning %s is retrievable", truncate(mem.Content, 60))
+                }
+            }
+        }
+    }
+
+    return reasoning, principles, tokens, reasoning.Reflection, nil
 }
 
 // reflectOnRecentActivity analyzes recent memory patterns
