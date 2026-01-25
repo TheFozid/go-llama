@@ -20,7 +20,7 @@ type SearchEvaluation struct {
 // evaluateSearchResults uses LLM to analyze search results and select best URLs
 func (e *Engine) evaluateSearchResults(ctx context.Context, searchOutput string, goalDescription string) (*SearchEvaluation, error) {
 	// Extract URLs and metadata from search output
-	urls := e.extractURLsFromSearchResults(searchOutput)
+	urls := extractURLsFromSearchResults(searchOutput)
 	
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("no URLs found in search results")
