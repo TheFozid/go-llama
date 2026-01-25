@@ -3,7 +3,6 @@ package dialogue
 import (
     "encoding/json"
     "fmt"
-    "time"
 )
 
 // ReasoningResponse represents structured LLM reasoning output
