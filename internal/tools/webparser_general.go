@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+    "go-llama/internal/config"
 )
 
 // WebParserGeneralTool provides automatic summarization of web pages
@@ -173,12 +175,12 @@ Focus on factual information. Be concise and accurate.`,
 		"temperature": 0.3, // Low temperature for consistent, factual summaries
 	}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
-	}
+    jsonData, err := json.Marshal(reqBody)
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+    }
 
-	req, err := http.NewRequestWithContext(ctx, "POST", t.llmURL, bytes.NewBuffer(jsonData))
+    req, err := http.NewRequestWithContext(ctx, "POST", config.GetChatURL(t.llmURL), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create request: %w", err)
 	}

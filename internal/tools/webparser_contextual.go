@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+    "go-llama/internal/config"
 )
 
 // WebParserContextualTool provides purpose-driven summarization of web pages
@@ -262,12 +264,12 @@ func (t *WebParserContextualTool) extractContextualInfo(ctx context.Context, con
 		"temperature": 0.3, // Low temperature for accurate extraction
 	}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
-	}
+    jsonData, err := json.Marshal(reqBody)
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+    }
 
-req, err := http.NewRequestWithContext(ctx, "POST", t.llmURL, bytes.NewBuffer(jsonData))
+req, err := http.NewRequestWithContext(ctx, "POST", config.GetChatURL(t.llmURL), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create request: %w", err)
 	}
