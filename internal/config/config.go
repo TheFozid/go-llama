@@ -45,7 +45,7 @@ type GrowerAIConfig struct {
         Name        string `json:"name"`
         URL         string `json:"url"`
         ContextSize int    `json:"context_size"`
-    } `json:"simple_model"
+    } `json:"simple_model"`
 	Qdrant struct {
 		URL        string `json:"url"`
 		Collection string `json:"collection"`
