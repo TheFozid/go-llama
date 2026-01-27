@@ -1398,7 +1398,7 @@ func (e *Engine) handleLargePageFallback(ctx context.Context, url string, goal *
     // Step 2: Ask LLM to select chunks based on metadata and goal
     // We use callLLMWithStructuredReasoning to ensure we get a clean list of indices
     prompt := fmt.Sprintf(`We are researching a large web page but cannot parse it fully in one go.
-We have retrieved the METADATA for the page.
+We have retrieved METADATA for the page.
 
 GOAL: %s
 
@@ -1430,7 +1430,8 @@ Rules:
 - Prioritize relevance over completeness.
 - If metadata is vague, estimate start (0) and subsequent indices.`, goal.Description, url, metadataResult.Output)
 
-    response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+    // FIX: Use _ to ignore unused 'tokens' return value
+    response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
     if err != nil {
         return nil, fmt.Errorf("fallback failed: LLM selection failed: %w", err)
     }
