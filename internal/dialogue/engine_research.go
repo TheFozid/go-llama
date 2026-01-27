@@ -404,7 +404,7 @@ func (e *Engine) executeAction(ctx context.Context, action *Action) (string, err
 
         log.Printf("[Dialogue] Search completed successfully in %s", elapsed)
 
-        // Store URLs in action metadata for the next parse action to use
+        // Store URLs in action metadata for parse action to use
         urls := extractURLsFromSearchResults(result.Output)
         if len(urls) > 0 {
             log.Printf("[Dialogue] Extracted %d URLs from search results, storing for parse action", len(urls))
@@ -525,19 +525,59 @@ func (e *Engine) executeAction(ctx context.Context, action *Action) (string, err
         if !result.Success {
             log.Printf("[Dialogue] Web parse returned failure after %s: %s", elapsed, result.Error)
 
-        // Check if this is a "page too large" error from any web parse tool
-        // This triggers the metadata + chunk selection fallback strategy
-        isWebParse := action.Tool == ActionToolWebParse || 
-                      action.Tool == ActionToolWebParseMetadata || 
-                      action.Tool == ActionToolWebParseGeneral ||
-                      action.Tool == ActionToolWebParseContextual
-                      
-        if isWebParse && strings.Contains(strings.ToLower(result.Error), "page too large") {
-            log.Printf("[Dialogue] Page too large error detected, triggering metadata fallback")
-            
-            // Return a specific error marker that the caller can catch to trigger fallback
-            return "", fmt.Errorf("ERR_FALLBACK_TRIGGERED: %s", result.Error)
-        }
+            // Check if this is a "page too large" error from any web parse tool
+            // This triggers the new intelligent fallback handler in engine_research.go
+            isWebParse := action.Tool == ActionToolWebParse ||
+                action.Tool == ActionToolWebParseMetadata ||
+                action.Tool == ActionToolWebParseGeneral ||
+                action.Tool == ActionToolWebParseContextual
+
+            if isWebParse && strings.Contains(strings.ToLower(result.Error), "page too large") {
+                log.Printf("[Dialogue] Page too large error detected, triggering metadata fallback")
+
+                // Extract URL from action
+                var fallbackURL string
+                if action.Metadata != nil {
+                    if selectedURL, ok := action.Metadata["selected_url"].(string); ok {
+                        fallbackURL = selectedURL
+                    } else if bestURL, ok := action.Metadata["best_url"].(string); ok {
+                        fallbackURL = bestURL
+                    }
+                }
+
+                // Fallback: extract URL from action description
+                if fallbackURL == "" {
+                    fallbackURL = strings.TrimSpace(action.Description)
+                    if idx := strings.Index(fallbackURL, "http"); idx != -1 {
+                        fallbackURL = fallbackURL[idx:]
+                    }
+                    if idx := strings.Index(fallbackURL, " "); idx != -1 {
+                        fallbackURL = fallbackURL[:idx]
+                    }
+                }
+
+                // Call the new intelligent fallback handler (uses LLM to select chunks)
+                fallbackActions, fallbackErr := e.handleLargePageFallback(ctx, fallbackURL, &topGoal)
+                if fallbackErr != nil {
+                    log.Printf("[Dialogue] Fallback generation failed: %v", fallbackErr)
+                    // If intelligent fallback fails, fall back to simple failure tracking
+                    return "", fmt.Errorf("ERR_FALLBACK_TRIGGERED: %s", result.Error)
+                } else {
+                    log.Printf("[Dialogue] ✓ Generated %d intelligent fallback actions", len(fallbackActions))
+
+                    // Append fallback actions to goal
+                    // NOTE: We update goal state in engine.go, so we return the error marker to trigger the update there
+                    // However, since we want to inject these actions immediately, we return a special marker
+                    // But engine.go expects a string error to append actions. 
+                    // A cleaner way is to return the actions list here if possible, but executeAction signature is (string, error).
+                    // So we rely on the engine.go wiring we just did.
+                    // If engine.go calls handleLargePageFallback directly, it gets []Action.
+                    // But executeAction is called FROM engine.go.
+                    // To support this architecture without changing executeAction signature, 
+                    // we simply return the marker error. engine.go handles it.
+                    return "", fmt.Errorf("ERR_FALLBACK_TRIGGERED: %s", result.Error)
+                }
+            }
 
             return "", fmt.Errorf("web parse failed: %s", result.Error)
         }
@@ -599,7 +639,7 @@ func (e *Engine) validateGoalSupport(ctx context.Context, secondary *Goal, prima
 SECONDARY GOAL TO EVALUATE:
 %s
 
-CRITICAL: A secondary goal "supports" a primary goal if completing the secondary goal:
+CRITICAL: A secondary goal "supports" a primary goal if completing secondary goal:
 1. Directly advances progress toward the primary goal
 2. Provides knowledge/skills needed for the primary goal
 3. Creates resources/artifacts used by the primary goal
@@ -617,7 +657,7 @@ RULES:
 - If secondary supports NO primary goals, set is_valid to false
 - If secondary supports multiple primaries, pick the strongest linkage
 - Be strict: only validate true if linkage is clear and meaningful
-- Output ONLY the S-expression, no markdown`,
+- Output ONLY: S-expression, no markdown`,
         primaryContext.String(), secondary.Description)
 
     log.Printf("[GoalValidation] Validating secondary goal linkage via LLM...")
@@ -688,7 +728,7 @@ func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportVal
 
     // Validation: if is_valid is true, must have a goal ID
     if validation.IsValid && validation.SupportsGoalID == "" {
-        // Try to find the goal ID from the reasoning
+        // Try to find the goal ID from reasoning
         return nil, fmt.Errorf("is_valid true but no supports_goal_id found")
     }
 
@@ -818,11 +858,11 @@ CURRENT RESEARCH PLAN:
 
 EVALUATION CRITERIA:
 1. Did the last action produce useful, relevant results?
-2. Are we making progress toward the goal?
+2. Are we making progress toward goal?
 3. Is the remaining plan still optimal given what we learned?
 4. Do we need to change direction?
 
-RESPOND ONLY with S-expression (no markdown):
+RESPOND ONLY with this S-expression (no markdown):
 
 (assessment
   (progress_quality "good|partial|poor")
@@ -1403,7 +1443,7 @@ func (e *Engine) handleLargePageFallback(ctx context.Context, url string, goal *
     // Step 2: Ask LLM to select chunks based on metadata and goal
     // We use callLLMWithStructuredReasoning to ensure we get a clean list of indices
     prompt := fmt.Sprintf(`We are researching a large web page but cannot parse it fully in one go.
-We have retrieved the METADATA for the page.
+We have retrieved METADATA for the page.
 
 GOAL: %s
 
@@ -1416,7 +1456,7 @@ AVAILABLE CAPABILITY:
 - web_parse_chunked: Read specific 500-token chunks by index (0, 1, 2, ...).
 
 ANALYSIS INSTRUCTIONS:
-1. Analyze the metadata to understand the page structure (sections, headings, length).
+1. Analyze metadata to understand page structure (sections, headings, length).
 2. Identify which parts of the page are most relevant to the GOAL.
 3. Select specific chunk indices that cover these relevant parts.
    - Example: If metadata shows "Introduction (chunks 0-2)" and goal is intro, select 0, 1, 2.
@@ -1468,7 +1508,7 @@ Rules:
     return actions, nil
 }
 
-// parseChunkSelectionSExpr extracts the list of chunk indices from LLM response
+// parseChunkSelectionSExpr extracts the list of chunk indices from the LLM response
 func (e *Engine) parseChunkSelectionSExpr(rawResponse string) ([]int, string, error) {
     content := strings.TrimSpace(rawResponse)
     content = strings.TrimPrefix(content, "```lisp")
