@@ -79,10 +79,6 @@ type GrowerAIConfig struct {
 	
 	Compression struct {
 		Enabled       bool `json:"enabled"`
-		Model         struct {
-			Name string `json:"name"`
-			URL  string `json:"url"`
-		} `json:"model"`
 		ScheduleHours int `json:"schedule_hours"`
 		TierRules     struct {
 			RecentToMediumDays int `json:"recent_to_medium_days"`
@@ -538,11 +534,6 @@ func discoverModels(c *Config) error {
     // 3. Update GrowerAI Embedding Model
     if err := updateEntry(&c.GrowerAI.EmbeddingModel.URL, &c.GrowerAI.EmbeddingModel.Name, nil); err != nil {
         log.Printf("[Config] Error updating Embedding Model: %v", err)
-    }
-
-    // 4. Update GrowerAI Compression Model
-    if err := updateEntry(&c.GrowerAI.Compression.Model.URL, &c.GrowerAI.Compression.Model.Name, nil); err != nil {
-        log.Printf("[Config] Error updating Compression Model: %v", err)
     }
 
     return nil

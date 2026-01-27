@@ -131,9 +131,9 @@ func main() {
 				}
 
                 compressor := memory.NewCompressor(
-                    config.GetChatURL(cfg.GrowerAI.Compression.Model.URL),
-                    cfg.GrowerAI.Compression.Model.Name,
-					embedder,
+                    config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
+                    cfg.GrowerAI.ReasoningModel.Name,
+                    embedder,
 					linker,
 					compressorLLMClient,
 				)
@@ -150,9 +150,9 @@ func main() {
 				}
 
                 tagger := memory.NewTagger(
-                    config.GetChatURL(cfg.GrowerAI.Compression.Model.URL),
-                    cfg.GrowerAI.Compression.Model.Name,
-					cfg.GrowerAI.Tagging.BatchSize,
+                    config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
+                    cfg.GrowerAI.ReasoningModel.Name,
+                    cfg.GrowerAI.Tagging.BatchSize,
 					embedder,
 					taggerLLMClient,
 				)
@@ -215,9 +215,9 @@ func main() {
                     taggerQueue, // Use tagger queue instead of tagger
                     linker,
                     db.DB,
-                    config.GetChatURL(cfg.GrowerAI.Compression.Model.URL),
-                    cfg.GrowerAI.Compression.Model.Name,
-					decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
+                    config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
+                    cfg.GrowerAI.ReasoningModel.Name,
+                    decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
 					cfg.GrowerAI.Compression.ScheduleHours,
 					cfg.GrowerAI.Principles.EvolutionScheduleHours,
 					cfg.GrowerAI.Principles.MinRatingThreshold,
@@ -286,11 +286,11 @@ func main() {
 				TimeoutIdle:        time.Duration(cfg.GrowerAI.Tools.WebParse.Timeout) * time.Second,
 			}
 
-			userAgent := cfg.GrowerAI.Tools.WebParse.UserAgent
-			maxPageSizeMB := cfg.GrowerAI.Tools.WebParse.MaxPageSizeMB
-			chunkSize := cfg.GrowerAI.Tools.WebParse.ChunkSize
-			llmURL := cfg.GrowerAI.Compression.Model.URL
-			llmModel := cfg.GrowerAI.Compression.Model.Name
+            userAgent := cfg.GrowerAI.Tools.WebParse.UserAgent
+            maxPageSizeMB := cfg.GrowerAI.Tools.WebParse.MaxPageSizeMB
+            chunkSize := cfg.GrowerAI.Tools.WebParse.ChunkSize
+            llmURL := cfg.GrowerAI.ReasoningModel.URL
+            llmModel := cfg.GrowerAI.ReasoningModel.Name
 
 			metadataTool := tools.NewWebParserMetadataTool(userAgent, webParseConfig)
 			if err := toolRegistry.Register(metadataTool); err != nil {
