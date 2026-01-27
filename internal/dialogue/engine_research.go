@@ -1379,6 +1379,7 @@ RESPOND with S-expression:
         return false, fmt.Sprintf("Rejected: %s", reasoning)
     }
 }
+
 // handleLargePageFallback attempts to recover from a "page too large" error by
 // fetching metadata and asking the LLM to select relevant chunks to parse.
 func (e *Engine) handleLargePageFallback(ctx context.Context, url string, goal *Goal) ([]Action, error) {
@@ -1434,7 +1435,7 @@ Rules:
 - Prioritize relevance over completeness.
 - If metadata is vague, estimate start (0) and subsequent indices.`, goal.Description, url, metadataResult.Output)
 
-    response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+    response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
     if err != nil {
         return nil, fmt.Errorf("fallback failed: LLM selection failed: %w", err)
     }
