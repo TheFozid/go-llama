@@ -17,9 +17,8 @@ type Engine struct {
 	storage				*memory.Storage
 	embedder			*memory.Embedder
 	stateManager			*StateManager
-	toolRegistry			*tools.ContextualRegistry
-	llmURL				string
-	llmURL				string
+    toolRegistry			*tools.ContextualRegistry
+    llmURL				string
     llmModel			string
     simpleLLMURL			string
     simpleLLMModel			string
