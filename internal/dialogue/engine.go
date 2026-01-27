@@ -445,99 +445,61 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 						action.Result = fmt.Sprintf("ERROR: %v", err)
 						action.Status = ActionStatusCompleted
 
-						// Check if this is a "page too large" error from web_parse_general
-						if action.Tool == ActionToolWebParseGeneral &&
-							strings.Contains(strings.ToLower(err.Error()), "page too large") {
-							log.Printf("[Dialogue] Creating fallback actions for large page")
+            // Check if this is a "page too large" error from ANY web parse tool
+            // This triggers the new intelligent fallback handler in engine_research.go
+            isWebParse := action.Tool == ActionToolWebParse ||
+                action.Tool == ActionToolWebParseMetadata ||
+                action.Tool == ActionToolWebParseGeneral ||
+                action.Tool == ActionToolWebParseContextual
 
-							// Get the URL from the action
-							var url string
-							if action.Metadata != nil {
-								if selectedURL, ok := action.Metadata["selected_url"].(string); ok {
-									url = selectedURL
-								} else if bestURL, ok := action.Metadata["best_url"].(string); ok {
-									url = bestURL
-								}
-							}
+            if isWebParse && strings.Contains(strings.ToLower(err.Error()), "page too large") {
+                log.Printf("[Dialogue] Page too large error detected, triggering metadata fallback in engine.go")
 
-							// Fallback: extract URL from action description
-							if url == "" {
-								url = strings.TrimSpace(action.Description)
-								if idx := strings.Index(url, "http"); idx != -1 {
-									url = url[idx:]
-								}
-								if idx := strings.Index(url, " "); idx != -1 {
-									url = url[:idx]
-								}
-							}
+                // Extract URL from action
+                var url string
+                if action.Metadata != nil {
+                    if selectedURL, ok := action.Metadata["selected_url"].(string); ok {
+                        url = selectedURL
+                    } else if bestURL, ok := action.Metadata["best_url"].(string); ok {
+                        url = bestURL
+                    }
+                }
 
-							// Create metadata action to get page structure
-							metadataAction := Action{
-								Description:	url,
-								Tool:		ActionToolWebParseMetadata,
-								Status:		ActionStatusPending,
-								Timestamp:	time.Now(),
-								Metadata: map[string]interface{}{
-									"selected_url":		url,
-									"original_goal":	topGoal.Description,
-									"fallback_for":		"page_too_large",
-								},
-							}
+                // Fallback: extract URL from action description
+                if url == "" {
+                    url = strings.TrimSpace(action.Description)
+                    if idx := strings.Index(url, "http"); idx != -1 {
+                        url = url[idx:]
+                    }
+                    if idx := strings.Index(url, " "); idx != -1 {
+                        url = url[:idx]
+                    }
+                }
 
-							// Create contextual action with purpose
-							purpose := "Extract information relevant to: " + topGoal.Description
-							contextualAction := Action{
-								Description:	url,
-								Tool:		ActionToolWebParseContextual,
-								Status:		ActionStatusPending,
-								Timestamp:	time.Now(),
-								Metadata: map[string]interface{}{
-									"selected_url":		url,
-									"purpose":		purpose,
-									"original_goal":	topGoal.Description,
-									"fallback_for":		"page_too_large",
-								},
-							}
+                // Call the new intelligent fallback handler (uses LLM to select chunks)
+                fallbackActions, fallbackErr := e.handleLargePageFallback(ctx, url, &topGoal)
+                if fallbackErr != nil {
+                    log.Printf("[Dialogue] Fallback generation failed: %v", fallbackErr)
+                    // If intelligent fallback fails, fall back to simple failure tracking
+                    topGoal.FailureCount++
+                } else {
+                    log.Printf("[Dialogue] ✓ Generated %d intelligent fallback actions", len(fallbackActions))
+                    
+                    // Append fallback actions to goal
+                    topGoal.Actions = append(topGoal.Actions, fallbackActions...)
 
-							// Create chunked action as final fallback with intelligent chunk selection
-							chunkIndex := 0	// Default
-							if topGoal.Metadata != nil {
-								if suggestedChunk, ok := topGoal.Metadata["suggested_chunk"].(int); ok {
-									chunkIndex = suggestedChunk
-									log.Printf("[Dialogue] Using suggested chunk %d from metadata analysis", chunkIndex)
-								}
-							}
+                    // Update goal in state
+                    for k := range state.ActiveGoals {
+                        if state.ActiveGoals[k].ID == topGoal.ID {
+                            state.ActiveGoals[k] = topGoal
+                            break
+                        }
+                    }
 
-							chunkedAction := Action{
-								Description:	url,
-								Tool:		ActionToolWebParseChunked,
-								Status:		ActionStatusPending,
-								Timestamp:	time.Now(),
-								Metadata: map[string]interface{}{
-									"selected_url":			url,
-									"chunk_index":			chunkIndex,
-									"original_goal":		topGoal.Description,
-									"fallback_for":			"page_too_large",
-									"intelligent_selection":	true,
-								},
-							}
-
-							// Add actions to goal in order: metadata -> contextual -> chunked
-							topGoal.Actions = append(topGoal.Actions, metadataAction, contextualAction, chunkedAction)
-
-							log.Printf("[Dialogue] ✓ Created 3 fallback actions for large page (metadata -> contextual -> chunked)")
-
-							// Update goal in state
-							for k := range state.ActiveGoals {
-								if state.ActiveGoals[k].ID == topGoal.ID {
-									state.ActiveGoals[k] = topGoal
-									break
-								}
-							}
-
-							// Don't increment failure count for this specific error
-							// since we're handling it with fallback actions
-						} else {
+                    // Ensure goal is marked as having pending work so it continues next cycle
+                    topGoal.HasPendingWork = hasPendingActions(&topGoal)
+                }
+            } else {
 							// Track failures - don't abandon on first failure
 							topGoal.FailureCount++
 						}

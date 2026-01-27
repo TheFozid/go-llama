@@ -525,14 +525,19 @@ func (e *Engine) executeAction(ctx context.Context, action *Action) (string, err
         if !result.Success {
             log.Printf("[Dialogue] Web parse returned failure after %s: %s", elapsed, result.Error)
 
-            // Check if this is a "page too large" error from web_parse_general
-            if action.Tool == ActionToolWebParseGeneral &&
-                strings.Contains(strings.ToLower(result.Error), "page too large") {
-                log.Printf("[Dialogue] Page too large for general parsing, creating fallback actions")
-
-                // Create a special error that will be handled by the goal pursuit system
-                return "", fmt.Errorf("page too large for general summary: %s", result.Error)
-            }
+        // Check if this is a "page too large" error from any web parse tool
+        // This triggers the metadata + chunk selection fallback strategy
+        isWebParse := action.Tool == ActionToolWebParse || 
+                      action.Tool == ActionToolWebParseMetadata || 
+                      action.Tool == ActionToolWebParseGeneral ||
+                      action.Tool == ActionToolWebParseContextual
+                      
+        if isWebParse && strings.Contains(strings.ToLower(result.Error), "page too large") {
+            log.Printf("[Dialogue] Page too large error detected, triggering metadata fallback")
+            
+            // Return a specific error marker that the caller can catch to trigger fallback
+            return "", fmt.Errorf("ERR_FALLBACK_TRIGGERED: %s", result.Error)
+        }
 
             return "", fmt.Errorf("web parse failed: %s", result.Error)
         }
@@ -1373,4 +1378,144 @@ RESPOND with S-expression:
     } else {
         return false, fmt.Sprintf("Rejected: %s", reasoning)
     }
+}
+// handleLargePageFallback attempts to recover from a "page too large" error by
+// fetching metadata and asking the LLM to select relevant chunks to parse.
+func (e *Engine) handleLargePageFallback(ctx context.Context, url string, goal *Goal) ([]Action, error) {
+    log.Printf("[Dialogue] Initiating fallback strategy for large page (URL: %s)", truncate(url, 60))
+
+    // Step 1: Get Metadata
+    params := map[string]interface{}{
+        "url": url,
+    }
+
+    metadataResult, err := e.toolRegistry.ExecuteIdle(ctx, ActionToolWebParseMetadata, params)
+    if err != nil {
+        return nil, fmt.Errorf("fallback failed: metadata tool error: %w", err)
+    }
+    if !metadataResult.Success {
+        return nil, fmt.Errorf("fallback failed: metadata tool returned failure: %s", metadataResult.Error)
+    }
+
+    log.Printf("[Dialogue] ✓ Metadata retrieved (%d chars), analyzing with LLM...", len(metadataResult.Output))
+
+    // Step 2: Ask LLM to select chunks based on metadata and goal
+    // We use callLLMWithStructuredReasoning to ensure we get a clean list of indices
+    prompt := fmt.Sprintf(`We are researching a large web page but cannot parse it fully in one go.
+We have retrieved the METADATA for the page.
+
+GOAL: %s
+
+URL: %s
+
+PAGE METADATA:
+%s
+
+AVAILABLE CAPABILITY:
+- web_parse_chunked: Read specific 500-token chunks by index (0, 1, 2, ...).
+
+ANALYSIS INSTRUCTIONS:
+1. Analyze the metadata to understand the page structure (sections, headings, length).
+2. Identify which parts of the page are most relevant to the GOAL.
+3. Select specific chunk indices that cover these relevant parts.
+   - Example: If metadata shows "Introduction (chunks 0-2)" and goal is intro, select 0, 1, 2.
+   - Example: If metadata shows "Conclusion (chunk 9)" and goal is summary, select 9.
+4. Estimate indices if metadata implies location (e.g., start/middle/end).
+5. Limit selection to 3-5 chunks to stay efficient.
+
+RESPOND ONLY with this S-expression (no markdown):
+
+(chunk_selection_plan
+  (selected_chunks (0 3 4))  ; List of integers (e.g., 0 3 4)
+  (reasoning "Brief explanation of why these chunks are relevant"))
+
+Rules:
+- selected_chunks must be a list of integers.
+- Prioritize relevance over completeness.
+- If metadata is vague, estimate start (0) and subsequent indices.`, goal.Description, url, metadataResult.Output)
+
+    response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+    if err != nil {
+        return nil, fmt.Errorf("fallback failed: LLM selection failed: %w", err)
+    }
+
+    // Step 3: Parse the chunk indices
+    chunks, reasoning, err := parseChunkSelectionSExpr(response.RawResponse)
+    if err != nil {
+        log.Printf("[Dialogue] Failed to parse chunk selection: %v", err)
+        return nil, fmt.Errorf("fallback failed: parsing error: %w", err)
+    }
+
+    log.Printf("[Dialogue] ✓ LLM selected %d chunks: %v. Reasoning: %s", len(chunks), chunks, truncate(reasoning, 100))
+
+    // Step 4: Create actions for the selected chunks
+    var actions []Action
+    for _, idx := range chunks {
+        actions = append(actions, Action{
+            Description: fmt.Sprintf("Read chunk %d from %s", idx, url),
+            Tool:        ActionToolWebParseChunked,
+            Status:      ActionStatusPending,
+            Timestamp:   time.Now(),
+            Metadata: map[string]interface{}{
+                "url":         url,
+                "chunk_index": idx,
+                "recovery":    "metadata_driven_chunking",
+            },
+        })
+    }
+
+    return actions, nil
+}
+
+// parseChunkSelectionSExpr extracts the list of chunk indices from LLM response
+func (e *Engine) parseChunkSelectionSExpr(rawResponse string) ([]int, string, error) {
+    content := strings.TrimSpace(rawResponse)
+    content = strings.TrimPrefix(content, "```lisp")
+    content = strings.TrimPrefix(content, "```")
+    content = strings.TrimSuffix(content, "```")
+    content = strings.TrimSpace(content)
+
+    // Find chunk_selection_plan block
+    blocks := findBlocksRecursive(content, "chunk_selection_plan")
+    if len(blocks) == 0 {
+        return nil, "", fmt.Errorf("no chunk_selection_plan block found")
+    }
+
+    block := blocks[0]
+
+    // Extract reasoning
+    reasoning := extractFieldContent(block, "reasoning")
+
+    // Extract selected_chunks list
+    // We expect format: (selected_chunks (0 3 4))
+    indicesPattern := "(selected_chunks "
+    start := strings.Index(block, indicesPattern)
+    if start == -1 {
+        return nil, reasoning, fmt.Errorf("selected_chunks field not found")
+    }
+
+    start += len(indicesPattern)
+
+    // Extract content until closing paren
+    contentEnd := strings.Index(block[start:], ")")
+    if contentEnd == -1 {
+        return nil, reasoning, fmt.Errorf("malformed selected_chunks list")
+    }
+
+    listContent := strings.TrimSpace(block[start : start+contentEnd])
+
+    // Parse integers from the list
+    var indices []int
+    parts := strings.Fields(listContent)
+    for _, part := range parts {
+        if idx, err := strconv.Atoi(part); err == nil {
+            indices = append(indices, idx)
+        }
+    }
+
+    if len(indices) == 0 {
+        return nil, reasoning, fmt.Errorf("no indices found in selected_chunks")
+    }
+
+    return indices, reasoning, nil
 }
