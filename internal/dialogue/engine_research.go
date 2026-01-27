@@ -1462,6 +1462,7 @@ Rules:
 	}
 	return actions, nil
 }
+}
 
 // parseChunkSelectionSExpr extracts the list of chunk indices from LLM response
 func (e *Engine) parseChunkSelectionSExpr(rawResponse string) ([]int, string, error) {
