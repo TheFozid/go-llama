@@ -9,8 +9,6 @@ import (
     "time"
 
     "go-llama/internal/memory"
-    "go-llama/internal/tools"
-    "gorm.io/gorm"
 )
 
 func (e *Engine) detectPatterns(ctx context.Context) ([]string, error) {
