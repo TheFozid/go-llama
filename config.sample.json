@@ -43,6 +43,9 @@
     "embedding_model": {
       "url": "http://192.168.1.4:11435"
     },
+    "simple_model": {
+      "url": "http://192.168.1.4:11436"
+    },
     "qdrant": {
       "url": "http://qdrant:6333",
       "collection": "growerai_memory",
@@ -99,7 +102,7 @@
       "link_decay_rate": 0.02,
       "co_occurrence_throttle": 60,
       "worker_schedule_hours": 6
-	}
+	},
     "personality": {
       "good_behavior_bias": 0.60,
       "allow_disagreement": true,

@@ -19,10 +19,13 @@ type Engine struct {
 	stateManager			*StateManager
 	toolRegistry			*tools.ContextualRegistry
 	llmURL				string
-	llmModel			string
-	llmClient			interface{}	// Will be *llm.Client but avoid import cycle
-	db				*gorm.DB	// For loading principles
-	contextSize			int
+	llmURL				string
+    llmModel			string
+    simpleLLMURL			string
+    simpleLLMModel			string
+    llmClient			interface{}	// Will be *llm.Client but avoid import cycle
+    db				*gorm.DB	// For loading principles
+    contextSize			int
 	maxTokensPerCycle		int
 	maxDurationMinutes		int
 	maxThoughtsPerCycle		int
@@ -41,38 +44,42 @@ type Engine struct {
 
 // NewEngine creates a new dialogue engine
 func NewEngine(
-	storage *memory.Storage,
-	embedder *memory.Embedder,
-	stateManager *StateManager,
-	toolRegistry *tools.ContextualRegistry,
-	db *gorm.DB,	// Add DB for principles
-	llmURL string,
-	llmModel string,
-	contextSize int,
-	llmClient interface{},	// Accept queue client
-	maxTokensPerCycle int,
-	maxDurationMinutes int,
-	maxThoughtsPerCycle int,
-	actionRequirementInterval int,
-	noveltyWindowHours int,
-	reasoningDepth string,
-	enableSelfAssessment bool,
-	enableMetaLearning bool,
-	enableStrategyTracking bool,
-	storeInsights bool,
-	dynamicActionPlanning bool,
-	circuitBreaker *tools.CircuitBreaker,
+    storage *memory.Storage,
+    embedder *memory.Embedder,
+    stateManager *StateManager,
+    toolRegistry *tools.ContextualRegistry,
+    db *gorm.DB,	// Add DB for principles
+    llmURL string,
+    llmModel string,
+    contextSize int,
+    llmClient interface{},	// Accept queue client
+    simpleLLMURL string,
+    simpleLLMModel string,
+    maxTokensPerCycle int,
+    maxDurationMinutes int,
+    maxThoughtsPerCycle int,
+    actionRequirementInterval int,
+    noveltyWindowHours int,
+    reasoningDepth string,
+    enableSelfAssessment bool,
+    enableMetaLearning bool,
+    enableStrategyTracking bool,
+    storeInsights bool,
+    dynamicActionPlanning bool,
+    circuitBreaker *tools.CircuitBreaker,
 ) *Engine {
-	return &Engine{
-		storage:			storage,
-		embedder:			embedder,
-		stateManager:			stateManager,
-		toolRegistry:			toolRegistry,
-		db:				db,	// Store DB
-		llmURL:				llmURL,
-		llmModel:			llmModel,
-		llmClient:			llmClient,	// Store client
-		contextSize:			contextSize,
+    return &Engine{
+        storage:			storage,
+        embedder:			embedder,
+        stateManager:			stateManager,
+        toolRegistry:			toolRegistry,
+        db:				db,	// Store DB
+        llmURL:				llmURL,
+        llmModel:			llmModel,
+        simpleLLMURL:			simpleLLMURL,
+        simpleLLMModel:			simpleLLMModel,
+        llmClient:			llmClient,	// Store client
+        contextSize:			contextSize,
 		maxTokensPerCycle:		maxTokensPerCycle,
 		maxDurationMinutes:		maxDurationMinutes,
 		maxThoughtsPerCycle:		maxThoughtsPerCycle,

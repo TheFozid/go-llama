@@ -381,9 +381,11 @@ func main() {
                     db.DB, // Add DB parameter for principles
                     config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
                     cfg.GrowerAI.ReasoningModel.Name,
-					cfg.GrowerAI.ReasoningModel.ContextSize,
-					llmClient, // NEW PARAMETER - insert here
-					cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
+                    cfg.GrowerAI.ReasoningModel.ContextSize,
+                    llmClient,
+                    config.GetChatURL(cfg.GrowerAI.SimpleModel.URL),
+                    cfg.GrowerAI.SimpleModel.Name,
+                    cfg.GrowerAI.Dialogue.MaxTokensPerCycle,
 					cfg.GrowerAI.Dialogue.MaxDurationMinutes,
 					cfg.GrowerAI.Dialogue.MaxThoughtsPerCycle,
 					cfg.GrowerAI.Dialogue.ActionRequirementInterval,

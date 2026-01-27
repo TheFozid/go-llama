@@ -17,8 +17,23 @@ func (e *Engine) detectPatterns(ctx context.Context) ([]string, error) {
     return []string{}, nil
 }
 
-// callLLM makes a request to the reasoning model
-func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error) {
+// callLLM makes a request to the reasoning or simple model
+func (e *Engine) callLLM(ctx context.Context, prompt string, useSimpleModel bool) (string, int, error) {
+    // Determine target URL and Model based on routing flag
+    targetURL := e.llmURL
+    targetModel := e.llmModel
+
+    if useSimpleModel {
+        if e.simpleLLMURL != "" {
+            targetURL = e.simpleLLMURL
+            targetModel = e.simpleLLMModel
+            log.Printf("[Dialogue] Routing to Simple Model (1B)")
+        } else {
+            // Fallback to reasoning model if simple model not configured
+            log.Printf("[Dialogue] Simple Model requested but not configured, using Reasoning Model (8B)")
+        }
+    }
+
     // If queue client is available, use it
     if e.llmClient != nil {
         // Type assertion (safe because we control initialization)
@@ -28,7 +43,7 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
 
         if client, ok := e.llmClient.(LLMCaller); ok {
             reqBody := map[string]interface{}{
-                "model":	e.llmModel,
+                "model":	targetModel,
                 "max_tokens":	e.contextSize,
                 "messages": []map[string]string{
                     {
@@ -47,7 +62,7 @@ func (e *Engine) callLLM(ctx context.Context, prompt string) (string, int, error
             log.Printf("[Dialogue] LLM call via queue (prompt length: %d chars)", len(prompt))
             startTime := time.Now()
 
-            body, err := client.Call(ctx, e.llmURL, reqBody)
+            body, err := client.Call(ctx, targetURL, reqBody)
             if err != nil {
                 log.Printf("[Dialogue] LLM queue call failed after %s: %v", time.Since(startTime), err)
                 return "", 0, fmt.Errorf("LLM call failed: %w", err)

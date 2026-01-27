@@ -37,10 +37,15 @@ type GrowerAIConfig struct {
 		URL         string `json:"url"`
 		ContextSize int    `json:"context_size"`
 	} `json:"reasoning_model"`
-	EmbeddingModel struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
-	} `json:"embedding_model"`
+    EmbeddingModel struct {
+        Name string `json:"name"`
+        URL  string `json:"url"`
+    } `json:"embedding_model"`
+    SimpleModel struct {
+        Name        string `json:"name"`
+        URL         string `json:"url"`
+        ContextSize int    `json:"context_size"`
+    } `json:"simple_model"
 	Qdrant struct {
 		URL        string `json:"url"`
 		Collection string `json:"collection"`
@@ -534,6 +539,11 @@ func discoverModels(c *Config) error {
     // 3. Update GrowerAI Embedding Model
     if err := updateEntry(&c.GrowerAI.EmbeddingModel.URL, &c.GrowerAI.EmbeddingModel.Name, nil); err != nil {
         log.Printf("[Config] Error updating Embedding Model: %v", err)
+    }
+
+    // 4. Update GrowerAI Simple Model
+    if err := updateEntry(&c.GrowerAI.SimpleModel.URL, &c.GrowerAI.SimpleModel.Name, &c.GrowerAI.SimpleModel.ContextSize); err != nil {
+        log.Printf("[Config] Error updating Simple Model: %v", err)
     }
 
     return nil

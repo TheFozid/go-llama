@@ -314,7 +314,7 @@ Create a comprehensive synthesis (3-5 paragraphs) that:
 
 Write synthesis as plain text (no JSON, no markdown):`, findingsBuilder.String())
 
-    synthesis, tokens, err := e.callLLM(ctx, prompt)
+    synthesis, tokens, err := e.callLLM(ctx, prompt, false) // Use Reasoning Model for synthesis
     if err != nil {
         return "", tokens, fmt.Errorf("synthesis failed: %w", err)
     }

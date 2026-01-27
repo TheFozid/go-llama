@@ -381,7 +381,7 @@ func (e *Engine) reflectOnRecentActivity(ctx context.Context) (string, int, erro
     prompt += "\nProvide a brief 2-3 sentence reflection."
 
     // Call LLM
-    reflection, tokens, err := e.callLLM(ctx, prompt)
+    reflection, tokens, err := e.callLLM(ctx, prompt, true) // Use Simple Model
     if err != nil {
         return "", 0, fmt.Errorf("LLM call failed: %w", err)
     }
@@ -871,7 +871,7 @@ func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []st
 func (e *Engine) thinkAboutGoal(ctx context.Context, goal *Goal) (string, int, error) {
     prompt := fmt.Sprintf("You are pursuing this goal: %s\n\nThink about how to approach this. What should you do next? Keep it brief (2-3 sentences).", goal.Description)
 
-    thought, tokens, err := e.callLLM(ctx, prompt)
+    thought, tokens, err := e.callLLM(ctx, prompt, true) // Use Simple Model
     if err != nil {
         return "", 0, err
     }
