@@ -1459,7 +1459,6 @@ Rules:
                 "recovery":    "metadata_driven_chunking",
             },
         })
-    }
 
     return actions, nil
 }
