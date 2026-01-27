@@ -15,7 +15,6 @@ import (
 	"go-llama/internal/chat"
 	"go-llama/internal/config"
 	"go-llama/internal/db"
-	"go-llama/internal/llm"
 )
 
 // handleStandardLLMWebSocket processes standard LLM messages via WebSocket with streaming
