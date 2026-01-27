@@ -471,8 +471,9 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
                             }
                         }
 
-                        // Call the intelligent recovery handler in engine_research.go
-                        fallbackActions, fallbackErr := e.handleLargePageFallback(ctx, url, topGoal)
+                        // Call intelligent recovery handler in engine_research.go
+                        // We pass &topGoal because the function expects a pointer (*Goal)
+                        fallbackActions, fallbackErr := e.handleLargePageFallback(ctx, url, &topGoal)
                         
                         if fallbackErr != nil {
                             log.Printf("[Dialogue] ⚠ Intelligent fallback failed: %v. Falling back to default behavior.", fallbackErr)
