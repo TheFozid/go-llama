@@ -19,7 +19,7 @@ import (
 )
 
 // handleStandardLLMWebSocket processes standard LLM messages via WebSocket with streaming
-func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, req WSChatPrompt, userID uint, llmManager interface{}) {
+func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *chat.Chat, req WSChatPrompt, userID uint, llmClient interface{}) {
 	// Save user message
 	userMsg := chat.Message{
 		ChatID:    chatInst.ID,
@@ -184,45 +184,34 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
 		payload["session"] = chatInst.LlmSessionID
 	}
 
-	// Stream LLM response
-	var botResponse string
-	var toksPerSec float64
-	var err error
-	
-	// Use queue if available (critical priority for user messages)
-	if llmManager != nil {
-		if mgr, ok := llmManager.(*llm.Manager); ok && cfg.GrowerAI.LLMQueue.Enabled {
-			llmClient := llm.NewClient(
-				mgr,
-				llm.PriorityCritical,
-				time.Duration(cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)*time.Second,
-			)
-			
-			log.Printf("[LLM-WS] Using LLM queue (priority: CRITICAL, timeout: %ds)", 
-				cfg.GrowerAI.LLMQueue.CriticalTimeoutSeconds)
-			
-			// Create context for this request
-			ctx := context.Background()
-			
-            // Get streaming HTTP response from queue
-            llmURL := config.GetChatURL(modelConfig.URL)
-            httpResp, queueErr := llmClient.CallStreaming(ctx, llmURL, payload)
-			if queueErr != nil {
-				conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": queueErr.Error()})
-				return
-			}
-			
-			// Use the streamLLMResponseFromHTTP helper from ws_growerai_handler.go
-			// Note: This requires the helper function to be accessible or duplicated
-			err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
-		} else {
-			log.Printf("[LLM-WS] Using legacy direct LLM call")
-			err = streamLLMResponseWS(conn, conn.conn, modelConfig.URL, payload, &botResponse, &toksPerSec)
-		}
-	} else {
-		log.Printf("[LLM-WS] Using legacy direct LLM call (no queue manager)")
-		err = streamLLMResponseWS(conn, conn.conn, modelConfig.URL, payload, &botResponse, &toksPerSec)
-	}
+    // Stream LLM response
+    var botResponse string
+    var toksPerSec float64
+    var err error
+
+    // Use injected critical client
+    if llmClient != nil {
+        log.Printf("[LLM-WS] Using critical LLM client for streaming")
+
+        // Create context for this request
+        ctx := context.Background()
+
+        // Get streaming HTTP response from queue
+        llmURL := config.GetChatURL(modelConfig.URL)
+        httpResp, queueErr := llmClient.CallStreaming(ctx, llmURL, payload)
+        if queueErr != nil {
+            conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": queueErr.Error()})
+            return
+        }
+
+        // Use existing streaming logic from ws_streaming.go
+        // We pass conn.conn (the raw *websocket.Conn) because streamLLMResponseWS expects it
+        err = streamLLMResponseWS(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
+    } else {
+        log.Printf("[LLM-WS] ERROR: Critical LLM client not available")
+        conn.WriteJSON(map[string]string{"error": "server misconfiguration: queue client missing"})
+        return
+    }
 	
 	if err != nil {
 		conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": err.Error()})

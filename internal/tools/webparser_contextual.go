@@ -17,48 +17,30 @@ import (
 
 // WebParserContextualTool provides purpose-driven summarization of web pages
 type WebParserContextualTool struct {
-	client           *WebParserClient
-	llmURL           string
-	llmModel         string
-	llmClient        *http.Client
-	config           ToolConfig
-	maxPageSizeMB    int
+    client           *WebParserClient
+    llmURL           string
+    llmModel         string
+    llmClient        interface{} // Queue client
+    config           ToolConfig
+    maxPageSizeMB    int
 }
 
 // NewWebParserContextualTool creates a new contextual summarization tool
-func NewWebParserContextualTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig) *WebParserContextualTool {
-	// Use idle timeout (longer for thorough extraction)
-	timeout := time.Duration(config.TimeoutIdle) * time.Second
-	if timeout == 0 {
-		timeout = 241 * time.Second
-	}
-
-	// LLM timeout should be 80% of tool timeout to allow cleanup time
-	llmTimeout := timeout * 8 / 10
-	if llmTimeout < 360*time.Second {
-		llmTimeout = 360 * time.Second // Minimum 2 minutes for contextual analysis
-	}
-	
-	// Configure HTTP transport for better timeout handling
-	transport := &http.Transport{
-		MaxIdleConns:          10,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 360 * time.Second, // Fail fast if LLM doesn't start responding
-		DisableKeepAlives:     false,
-	}
-	
-	return &WebParserContextualTool{
-		client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
-		llmURL:        llmURL,
-		llmModel:      llmModel,
-		llmClient:     &http.Client{
-			Timeout:   llmTimeout,
-			Transport: transport,
-		},
-		config:        config,
-		maxPageSizeMB: maxPageSizeMB,
-	}
+func NewWebParserContextualTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig, llmClient interface{}) *WebParserContextualTool {
+    // Use idle timeout (longer for thorough extraction)
+    timeout := time.Duration(config.TimeoutIdle) * time.Second
+    if timeout == 0 {
+        timeout = 241 * time.Second
+    }
+    
+    return &WebParserContextualTool{
+        client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
+        llmURL:        llmURL,
+        llmModel:      llmModel,
+        llmClient:     llmClient, // Inject queue client
+        config:        config,
+        maxPageSizeMB: maxPageSizeMB,
+    }
 }
 
 // Name returns the tool identifier
@@ -204,126 +186,121 @@ func (t *WebParserContextualTool) Execute(ctx context.Context, params map[string
 
 // extractContextualInfo uses LLM to extract relevant information based on purpose
 func (t *WebParserContextualTool) extractContextualInfo(ctx context.Context, content *ParsedContent, purpose string, focusAreas string) (string, int, error) {
-	log.Printf("[WebParser] Starting contextual extraction (URL: %s, purpose: %s)", 
-		content.URL, truncateString(purpose, 60))
-	startTime := time.Now()
-	
-	// Build contextual prompt
-	var promptBuilder strings.Builder
-	
-	promptBuilder.WriteString(fmt.Sprintf("Extract information from this web page relevant to the following purpose:\n\n"))
-	promptBuilder.WriteString(fmt.Sprintf("PURPOSE: %s\n\n", purpose))
-	
-	if focusAreas != "" {
-		promptBuilder.WriteString(fmt.Sprintf("FOCUS ON: %s\n\n", focusAreas))
-	}
-	
-	promptBuilder.WriteString(fmt.Sprintf("PAGE TITLE: %s\n", content.Title))
-	promptBuilder.WriteString(fmt.Sprintf("PAGE URL: %s\n\n", content.URL))
-	
-	// Include headings for context
-	if len(content.Headings) > 0 {
-		promptBuilder.WriteString("PAGE STRUCTURE:\n")
-		for i, heading := range content.Headings {
-			promptBuilder.WriteString(fmt.Sprintf("  %d. %s\n", i+1, heading))
-			if i >= 9 { // Limit headings in prompt
-				promptBuilder.WriteString(fmt.Sprintf("  ... and %d more sections\n", len(content.Headings)-10))
-				break
-			}
-		}
-		promptBuilder.WriteString("\n")
-	}
-	
-	promptBuilder.WriteString("CONTENT:\n")
-	promptBuilder.WriteString(t.truncateForPrompt(content.CleanText, 12000))
-	promptBuilder.WriteString("\n\n")
-	
-	promptBuilder.WriteString("Extract the following:\n")
-	promptBuilder.WriteString("1. All facts, data, and claims directly relevant to the purpose\n")
-	promptBuilder.WriteString("2. Supporting evidence or examples\n")
-	promptBuilder.WriteString("3. Any contradictions or alternative viewpoints mentioned\n")
-	promptBuilder.WriteString("4. Key technical details or methodologies if applicable\n")
-	promptBuilder.WriteString("5. Conclusions or implications related to the purpose\n\n")
-	promptBuilder.WriteString("Maximum 1500 tokens. Be thorough but focused. If information isn't present, say so clearly.")
+    log.Printf("[WebParser] Starting contextual extraction (URL: %s, purpose: %s)",
+        content.URL, truncateString(purpose, 60))
+    startTime := time.Now()
 
-	prompt := promptBuilder.String()
+    // Build contextual prompt
+    var promptBuilder strings.Builder
 
-	reqBody := map[string]interface{}{
-		"model": t.llmModel,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are a targeted information extractor. Extract only information relevant to the user's stated purpose. Be precise, thorough, and cite specific claims from the source.",
-			},
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"stream":      false,
-		"temperature": 0.3, // Low temperature for accurate extraction
-	}
+    promptBuilder.WriteString(fmt.Sprintf("Extract information from this web page relevant to the following purpose:\n\n"))
+    promptBuilder.WriteString(fmt.Sprintf("PURPOSE: %s\n\n", purpose))
 
-    jsonData, err := json.Marshal(reqBody)
-    if err != nil {
-        return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+    if focusAreas != "" {
+        promptBuilder.WriteString(fmt.Sprintf("FOCUS ON: %s\n\n", focusAreas))
     }
 
-req, err := http.NewRequestWithContext(ctx, "POST", config.GetChatURL(t.llmURL), bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+    promptBuilder.WriteString(fmt.Sprintf("PAGE TITLE: %s\n", content.Title))
+    promptBuilder.WriteString(fmt.Sprintf("PAGE URL: %s\n\n", content.URL))
 
-	log.Printf("[WebParser] Sending LLM request (timeout: %s)", t.llmClient.Timeout)
-	llmStartTime := time.Now()
-	
-	resp, err := t.llmClient.Do(req)
-	if err != nil {
-		elapsed := time.Since(llmStartTime)
-		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("[WebParser] LLM request timed out after %s", elapsed)
-			return "", 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
-		}
-		log.Printf("[WebParser] LLM request failed after %s: %v", elapsed, err)
-		return "", 0, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-	
-	log.Printf("[WebParser] LLM response received in %s", time.Since(llmStartTime))
+    // Include headings for context
+    if len(content.Headings) > 0 {
+        promptBuilder.WriteString("PAGE STRUCTURE:\n")
+        for i, heading := range content.Headings {
+            promptBuilder.WriteString(fmt.Sprintf("  %d. %s\n", i+1, heading))
+            if i >= 9 { // Limit headings in prompt
+                promptBuilder.WriteString(fmt.Sprintf("  ... and %d more sections\n", len(content.Headings)-10))
+                break
+            }
+        }
+        promptBuilder.WriteString("\n")
+    }
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", 0, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-	}
+    promptBuilder.WriteString("CONTENT:\n")
+    promptBuilder.WriteString(t.truncateForPrompt(content.CleanText, 12000))
+    promptBuilder.WriteString("\n\n")
 
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage struct {
-			TotalTokens int `json:"total_tokens"`
-		} `json:"usage"`
-	}
+    promptBuilder.WriteString("Extract the following:\n")
+    promptBuilder.WriteString("1. All facts, data, and claims directly relevant to purpose\n")
+    promptBuilder.WriteString("2. Supporting evidence or examples\n")
+    promptBuilder.WriteString("3. Any contradictions or alternative viewpoints mentioned\n")
+    promptBuilder.WriteString("4. Key technical details or methodologies if applicable\n")
+    promptBuilder.WriteString("5. Conclusions or implications related to purpose\n\n")
+    promptBuilder.WriteString("Maximum 1500 tokens. Be thorough but focused. If information isn't present, say so clearly.")
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, fmt.Errorf("failed to decode response: %w", err)
-	}
+    prompt := promptBuilder.String()
 
-	if len(result.Choices) == 0 {
-		return "", 0, fmt.Errorf("no choices returned from LLM")
-	}
+    reqBody := map[string]interface{}{
+        "model": t.llmModel,
+        "messages": []map[string]string{
+            {
+                "role":    "system",
+                "content": "You are a targeted information extractor. Extract only information relevant to user's stated purpose. Be precise, thorough, and cite specific claims from the source.",
+            },
+            {
+                "role":    "user",
+                "content": prompt,
+            },
+        },
+        "stream":      false,
+        "temperature": 0.3, // Low temperature for accurate extraction
+    }
 
-extracted := strings.TrimSpace(result.Choices[0].Message.Content)
-	tokensUsed := result.Usage.TotalTokens
+    // Use queue client
+    if t.llmClient != nil {
+        type LLMCaller interface {
+            Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+        }
 
-	totalDuration := time.Since(startTime)
-	log.Printf("[WebParser] Contextual extraction complete in %s (%d tokens)", 
-		totalDuration, tokensUsed)
+        if client, ok := t.llmClient.(LLMCaller); ok {
+            log.Printf("[WebParser] Sending LLM request via queue")
+            llmStartTime := time.Now()
 
-	return extracted, tokensUsed, nil
+            llmURL := config.GetChatURL(t.llmURL)
+            body, err := client.Call(ctx, llmURL, reqBody)
+            if err != nil {
+                elapsed := time.Since(llmStartTime)
+                if ctx.Err() == context.DeadlineExceeded {
+                    log.Printf("[WebParser] LLM request timed out after %s", elapsed)
+                    return "", 0, fmt.Errorf("LLM timeout after %s: %w", elapsed, err)
+                }
+                log.Printf("[WebParser] LLM request failed after %s: %v", elapsed, err)
+                return "", 0, fmt.Errorf("failed to send request: %w", err)
+            }
+
+            log.Printf("[WebParser] LLM response received in %s", time.Since(llmStartTime))
+
+            var result struct {
+                Choices []struct {
+                    Message struct {
+                        Content string `json:"content"`
+                    } `json:"message"`
+                } `json:"choices"`
+                Usage struct {
+                    TotalTokens int `json:"total_tokens"`
+                } `json:"usage"`
+            }
+
+            if err := json.Unmarshal(body, &result); err != nil {
+                return "", 0, fmt.Errorf("failed to decode response: %w", err)
+            }
+
+            if len(result.Choices) == 0 {
+                return "", 0, fmt.Errorf("no choices returned from LLM")
+            }
+
+            extracted := strings.TrimSpace(result.Choices[0].Message.Content)
+            tokensUsed := result.Usage.TotalTokens
+
+            totalDuration := time.Since(startTime)
+            log.Printf("[WebParser] Contextual extraction complete in %s (%d tokens)",
+                totalDuration, tokensUsed)
+
+            return extracted, tokensUsed, nil
+        }
+    }
+
+    return "", 0, fmt.Errorf("LLM queue client not available for WebParserContextualTool")
 }
 
 // truncateString helper for logging

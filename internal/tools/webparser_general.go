@@ -16,36 +16,30 @@ import (
 
 // WebParserGeneralTool provides automatic summarization of web pages
 type WebParserGeneralTool struct {
-	client           *WebParserClient
-	llmURL           string
-	llmModel         string
-	llmClient        *http.Client
-	config           ToolConfig
-	maxPageSizeMB    int
+    client           *WebParserClient
+    llmURL           string
+    llmModel         string
+    llmClient        interface{} // Queue client
+    config           ToolConfig
+    maxPageSizeMB    int
 }
 
 // NewWebParserGeneralTool creates a new general summarization tool
-func NewWebParserGeneralTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig) *WebParserGeneralTool {
-	// Use context-appropriate timeout
-	timeout := time.Duration(config.TimeoutIdle) * time.Second
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
-
-	// LLM timeout should be generous for summarization
-	llmTimeout := timeout
-	if llmTimeout < 90*time.Second {
-		llmTimeout = 90 * time.Second // Minimum 90s for LLM processing
-	}
-	
-	return &WebParserGeneralTool{
-		client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
-		llmURL:        llmURL,
-		llmModel:      llmModel,
-		llmClient:     &http.Client{Timeout: llmTimeout},
-		config:        config,
-		maxPageSizeMB: maxPageSizeMB,
-	}
+func NewWebParserGeneralTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig, llmClient interface{}) *WebParserGeneralTool {
+    // Use context-appropriate timeout
+    timeout := time.Duration(config.TimeoutIdle) * time.Second
+    if timeout == 0 {
+        timeout = 30 * time.Second
+    }
+    
+    return &WebParserGeneralTool{
+        client:        NewWebParserClient(timeout, userAgent, maxPageSizeMB),
+        llmURL:        llmURL,
+        llmModel:      llmModel,
+        llmClient:     llmClient, // Inject queue client
+        config:        config,
+        maxPageSizeMB: maxPageSizeMB,
+    }
 }
 
 // Name returns the tool identifier
@@ -140,8 +134,8 @@ func (t *WebParserGeneralTool) Execute(ctx context.Context, params map[string]in
 
 // summarizeContent generates a summary using the compression LLM
 func (t *WebParserGeneralTool) summarizeContent(ctx context.Context, content *ParsedContent) (string, int, error) {
-	// Build prompt
-	prompt := fmt.Sprintf(`Summarize this web page in 2-3 clear paragraphs (maximum 500 tokens).
+    // Build prompt
+    prompt := fmt.Sprintf(`Summarize this web page in 2-3 clear paragraphs (maximum 500 tokens).
 
 Title: %s
 URL: %s
@@ -154,72 +148,67 @@ Provide:
 2. Key points (3-5 bullet points)
 3. Important details or conclusions (1 paragraph)
 
-Focus on factual information. Be concise and accurate.`, 
-		content.Title, 
-		content.URL, 
-		t.truncateForPrompt(content.CleanText, 8000))
+Focus on factual information. Be concise and accurate.`,
+        content.Title,
+        content.URL,
+        t.truncateForPrompt(content.CleanText, 8000))
 
-	reqBody := map[string]interface{}{
-		"model": t.llmModel,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are a web content summarizer. Extract key information concisely and accurately.",
-			},
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"stream":      false,
-		"temperature": 0.3, // Low temperature for consistent, factual summaries
-	}
-
-    jsonData, err := json.Marshal(reqBody)
-    if err != nil {
-        return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+    reqBody := map[string]interface{}{
+        "model": t.llmModel,
+        "messages": []map[string]string{
+            {
+                "role":    "system",
+                "content": "You are a web content summarizer. Extract key information concisely and accurately.",
+            },
+            {
+                "role":    "user",
+                "content": prompt,
+            },
+        },
+        "stream":      false,
+        "temperature": 0.3, // Low temperature for consistent, factual summaries
     }
 
-    req, err := http.NewRequestWithContext(ctx, "POST", config.GetChatURL(t.llmURL), bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+    // Use queue client
+    if t.llmClient != nil {
+        type LLMCaller interface {
+            Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+        }
 
-	resp, err := t.llmClient.Do(req)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
+        if client, ok := t.llmClient.(LLMCaller); ok {
+            llmURL := config.GetChatURL(t.llmURL)
+            body, err := client.Call(ctx, llmURL, reqBody)
+            if err != nil {
+                return "", 0, fmt.Errorf("LLM queue call failed: %w", err)
+            }
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", 0, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-	}
+            var result struct {
+                Choices []struct {
+                    Message struct {
+                        Content string `json:"content"`
+                    } `json:"message"`
+                } `json:"choices"`
+                Usage struct {
+                    TotalTokens int `json:"total_tokens"`
+                } `json:"usage"`
+            }
 
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage struct {
-			TotalTokens int `json:"total_tokens"`
-		} `json:"usage"`
-	}
+            if err := json.Unmarshal(body, &result); err != nil {
+                return "", 0, fmt.Errorf("failed to decode response: %w", err)
+            }
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, fmt.Errorf("failed to decode response: %w", err)
-	}
+            if len(result.Choices) == 0 {
+                return "", 0, fmt.Errorf("no choices returned from LLM")
+            }
 
-	if len(result.Choices) == 0 {
-		return "", 0, fmt.Errorf("no choices returned from LLM")
-	}
+            summary := strings.TrimSpace(result.Choices[0].Message.Content)
+            tokensUsed := result.Usage.TotalTokens
 
-	summary := strings.TrimSpace(result.Choices[0].Message.Content)
-	tokensUsed := result.Usage.TotalTokens
+            return summary, tokensUsed, nil
+        }
+    }
 
-	return summary, tokensUsed, nil
+    return "", 0, fmt.Errorf("LLM queue client not available for WebParserGeneralTool")
 }
 
 // truncateForPrompt limits content size for LLM prompt

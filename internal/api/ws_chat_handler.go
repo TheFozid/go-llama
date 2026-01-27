@@ -56,7 +56,7 @@ func (s *safeWSConn) Close() error {
 }
 
 // WSChatHandler is the main WebSocket entry point - routes to standard LLM or GrowerAI
-func WSChatHandler(cfg *config.Config, llmManager interface{}) gin.HandlerFunc {
+func WSChatHandler(cfg *config.Config, llmManager interface{}, criticalLLMClient interface{}) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Authenticate
 		token := c.GetHeader("Authorization")
@@ -110,12 +110,12 @@ func WSChatHandler(cfg *config.Config, llmManager interface{}) gin.HandlerFunc {
 			return
 		}
 
-		// Route to appropriate handler
-		if chatInst.UseGrowerAI {
-			handleGrowerAIWebSocket(conn, cfg, &chatInst, req.Prompt, userID, llmManager)
-		} else {
-			handleStandardLLMWebSocket(conn, cfg, &chatInst, req, userID, llmManager)
-		}
+        // Route to appropriate handler
+        if chatInst.UseGrowerAI {
+            handleGrowerAIWebSocket(conn, cfg, &chatInst, req.Prompt, userID, llmManager)
+        } else {
+            handleStandardLLMWebSocket(conn, cfg, &chatInst, req, userID, criticalLLMClient)
+        }
 	}
 }
 

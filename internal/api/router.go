@@ -20,7 +20,7 @@ func usersExist() bool {
 	return count > 0
 }
 
-func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}) *gin.Engine {
+func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}, criticalLLMClient interface{}) *gin.Engine {
 	r := gin.Default()
 	subpath := cfg.Server.Subpath // e.g. "/go-llama" or any custom path, always starts with '/'
 
@@ -96,8 +96,8 @@ func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}) 
 		group.GET("/chats/:id/messages", auth.AuthMiddleware(cfg, rdb, false), ListMessagesHandler())
 		group.POST("/chats/:id/messages", auth.AuthMiddleware(cfg, rdb, false), SendMessageHandler(cfg))
 
-		// --- Streaming WebSocket endpoint ---
-		group.GET("/ws/chat", WSChatHandler(cfg, llmManager))
+        // --- Streaming WebSocket endpoint ---
+        group.GET("/ws/chat", WSChatHandler(cfg, llmManager, criticalLLMClient))
 
 		// --- SearxNG-augmented LLM endpoint ---
 		group.POST("/search", auth.AuthMiddleware(cfg, rdb, false), SearxNGSearchHandler(cfg))
