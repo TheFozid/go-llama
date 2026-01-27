@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"bufio"
 	"log"
 	"net/http"
 	"net/url"
@@ -195,22 +196,85 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
         // Create context for this request
         ctx := context.Background()
 
+        // Type assert for streaming client
+        type LLMStreamCaller interface {
+            CallStreaming(ctx context.Context, url string, payload map[string]interface{}) (*http.Response, error)
+        }
+
+        streamClient, ok := llmClient.(LLMStreamCaller)
+        if !ok {
+            conn.WriteJSON(map[string]string{"error": "invalid LLM client type for streaming"})
+            return
+        }
+
         // Get streaming HTTP response from queue
         llmURL := config.GetChatURL(modelConfig.URL)
-        httpResp, queueErr := llmClient.CallStreaming(ctx, llmURL, payload)
+        httpResp, queueErr := streamClient.CallStreaming(ctx, llmURL, payload)
         if queueErr != nil {
             conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": queueErr.Error()})
             return
         }
+        defer httpResp.Body.Close()
 
-        // Use existing streaming logic from ws_streaming.go
-        // We pass conn.conn (the raw *websocket.Conn) because streamLLMResponseWS expects it
-        err = streamLLMResponseWS(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
-    } else {
-        log.Printf("[LLM-WS] ERROR: Critical LLM client not available")
-        conn.WriteJSON(map[string]string{"error": "server misconfiguration: queue client missing"})
-        return
-    }
+        if httpResp.StatusCode != http.StatusOK {
+            conn.WriteJSON(map[string]string{"error": "llm returned error", "detail": httpResp.StatusCode})
+            return
+        }
+
+        // --- Direct Streaming Implementation ---
+        // Since the queue returns an active http.Response, we must read the stream
+        // and write to WebSocket directly here.
+        reader := bufio.NewReader(httpResp.Body)
+        index := 0
+        var responseBuilder strings.Builder
+        var startTime time.Time
+        firstToken := true
+        inReasoning := false
+
+        for {
+            line, err := reader.ReadString('\n')
+            if err != nil {
+                break
+            }
+            line = strings.TrimSpace(line)
+            if len(line) < 7 || !strings.HasPrefix(line, "data: ") {
+                continue
+            }
+            data := line[6:]
+            if data == "[DONE]" {
+                break
+            }
+
+            var chunk struct {
+                Choices []struct {
+                    Delta struct {
+                        Content          string `json:"content"`
+                        ReasoningContent string `json:"reasoning_content"`
+                    } `json:"delta"`
+                } `json:"choices"`
+                FinishReason string `json:"finish_reason"`
+            }
+
+            if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+                log.Printf("stream decode error: %v", err)
+                continue
+            }
+
+            if len(chunk.Choices) > 0 {
+                delta := chunk.Choices[0].Delta
+
+                // Handle reasoning_content
+                if delta.ReasoningContent != "" {
+                    token := delta.ReasoningContent
+
+                    if firstToken {
+                        startTime = time.Now()
+                        firstToken = false
+                    }
+
+                    if !inReasoning {
+                        inReasoning = true
+                        token = "
 	
 	if err != nil {
 		conn.WriteJSON(map[string]string{"error": "llm streaming failed", "detail": err.Error()})
