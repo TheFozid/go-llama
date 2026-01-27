@@ -1437,7 +1437,7 @@ Rules:
 	}
 
 	// Step 3: Parse the chunk indices
-	chunks, reasoning, err := parseChunkSelectionSExpr(response.RawResponse)
+	chunks, reasoning, err := e.parseChunkSelectionSExpr(response.RawResponse)
 	if err != nil {
 		log.Printf("[Dialogue] Failed to parse chunk selection: %v", err)
 		return nil, fmt.Errorf("fallback failed: parsing error: %w", err)
@@ -1462,7 +1462,7 @@ Rules:
 	}
 	return actions, nil
 }
-}
+
 
 // parseChunkSelectionSExpr extracts the list of chunk indices from LLM response
 func (e *Engine) parseChunkSelectionSExpr(rawResponse string) ([]int, string, error) {
