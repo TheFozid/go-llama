@@ -15,7 +15,6 @@ import (
     "go-llama/internal/chat"
     "go-llama/internal/config"
     "go-llama/internal/db"
-    "go-llama/internal/llm"
 )
 
 // handleStandardLLMWebSocket processes standard LLM messages via WebSocket with streaming
@@ -217,7 +216,7 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
         defer httpResp.Body.Close()
 
         if httpResp.StatusCode != http.StatusOK {
-            conn.WriteJSON(map[string]string{"error": "llm returned error", "detail": httpResp.StatusCode})
+            conn.WriteJSON(map[string]string{"error": "llm returned error", "detail": fmt.Sprintf("%d", httpResp.StatusCode)})
             return
         }
 
