@@ -533,15 +533,26 @@ func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThr
 			break // No more candidates
 		}
 		
-		candidate := candidates[i]
-		
-		// Skip if candidate doesn't meet minimum threshold
-		if candidate.Rating < minRatingThreshold {
-			continue
-		}
-		
-		// Update if slot is empty OR candidate has higher rating
-		if principle.Content == "" || candidate.Rating > principle.Rating {
+    candidate := candidates[i]
+    
+    // Optimization: Use a lenient threshold (0.6) for filling empty slots to encourage growth.
+    // Keep strict threshold (minRatingThreshold) for upgrading existing principles to ensure quality.
+    fillThreshold := 0.6
+    shouldUpdate := false
+    
+    if principle.Content == "" {
+        // Empty slot: Fill if candidate meets the lenient threshold
+        if candidate.Rating >= fillThreshold {
+            shouldUpdate = true
+        }
+    } else {
+        // Existing slot: Only upgrade if candidate is strictly better AND meets high threshold
+        if candidate.Rating >= minRatingThreshold && candidate.Rating > principle.Rating {
+            shouldUpdate = true
+        }
+    }
+    
+    if shouldUpdate {
 			updates := map[string]interface{}{
 				"content":          candidate.Content,
 				"rating":           candidate.Rating,
