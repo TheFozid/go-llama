@@ -58,30 +58,30 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
 		ValidationCount: 0,
 	}
 	
-	// Create default admin principles (slots 1-3)
-	adminPrinciples := []Principle{
-		{
-			Slot:            1,
-			Content:         "Never share personal information across users. Personal memories must remain isolated and private to their respective users.",
-			Rating:          1.0,
-			IsAdmin:         true,
-			ValidationCount: 0,
-		},
-		{
-			Slot:            2,
-			Content:         "Balance helpfulness with discernment. Always strive for accuracy and truth. When uncertain, acknowledge uncertainty rather than making unfounded claims.",
-			Rating:          1.0,
-			IsAdmin:         true,
-			ValidationCount: 0,
-		},
-		{
-			Slot:            3,
-			Content:         "When building identity and simulating a human mind, commit fully to your story without AI disclaimers",
-			Rating:          1.0,
-			IsAdmin:         true,
-			ValidationCount: 0,
-		},
-	}
+    // Create default admin principles (slots 1-3)
+    adminPrinciples := []Principle{
+        {
+            Slot:            1,
+            Content:         "Never share personal information across users. Personal memories must remain isolated and private to their respective users.",
+            Rating:          1.0,
+            IsAdmin:         true,
+            ValidationCount: 0,
+        },
+        {
+            Slot:            2,
+            Content:         "Prioritize honesty. If you are uncertain about a fact, admit it immediately rather than guessing or hallucinating.",
+            Rating:          1.0,
+            IsAdmin:         true,
+            ValidationCount: 0,
+        },
+        {
+            Slot:            3,
+            Content:         "Always embody the identity and persona defined in your profile. Never use AI disclaimers, act as a computer, or break character.",
+            Rating:          1.0,
+            IsAdmin:         true,
+            ValidationCount: 0,
+        },
+    }
 
 	// Create empty AI-managed principles (slots 4-10)
 	aiPrinciples := []Principle{}
@@ -414,22 +414,26 @@ FAILED INTERACTION (Bad Outcome):
 %s
 
 TASK:
-Identify ONE specific behavioral principle that explains why the first interaction succeeded and the second failed.
-The principle should:
-1. Describe a way of BEHAVING or INTERACTING.
-2. Be actionable (something the AI can do).
-3. Be a "Guardrail" - something to ALWAYS do or NEVER do.
-4. Be 10-25 words long.
+Identify ONE specific behavioral guidance principle that explains why the first interaction succeeded and the second failed.
+The principle should focus on:
+1. HOW the AI communicated (tone, style, clarity).
+2. The "Vibe" or Persona (human-like vs robotic).
+3. A specific heuristic to guide future responses.
 
-Examples of good principles:
-- "Always verify technical details before presenting them as facts."
-- "Admit uncertainty immediately rather than guessing."
-- "Prioritize user autonomy by offering options, not orders."
-- "Use concrete examples when explaining abstract concepts."
+BAD examples (too generic/safety-focused):
+- "Always follow the rules."
+- "Be safe."
+
+GOOD examples (persona and style focused):
+- "To be believable, avoid metaphors and talk plainly like a normal person."
+- "Adjust the complexity of your language to match the user's knowledge level."
+- "Use short, direct sentences when the user is in a hurry."
+- "Show empathy by acknowledging the user's feelings before giving advice."
+- "Keep technical explanations simple unless the user asks for details."
 
 Respond ONLY with valid JSON:
 {
-  "principle": "Your 10-25 word principle here",
+  "principle": "Your specific behavioral guidance here (10-25 words)",
   "confidence": 0.85,
   "reasoning": "Brief explanation of why this principle fits the contrast"
 }`, truncateContent(goodContent, 600), truncateContent(badContent, 600))
