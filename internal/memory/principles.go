@@ -431,12 +431,8 @@ GOOD examples (persona and style focused):
 - "Show empathy by acknowledging the user's feelings before giving advice."
 - "Keep technical explanations simple unless the user asks for details."
 
-Respond ONLY with valid JSON:
-{
-  "principle": "Your specific behavioral guidance here (10-25 words)",
-  "confidence": 0.85,
-  "reasoning": "Brief explanation of why this principle fits the contrast"
-}`, truncateContent(goodContent, 600), truncateContent(badContent, 600))
+Respond ONLY with a valid S-expression (Lisp-style):
+(principle "Your specific behavioral guidance here (10-25 words)" confidence 0.85 reasoning "Brief explanation of why this principle fits the contrast")`, truncateContent(goodContent, 600), truncateContent(badContent, 600))
 
     reqBody := map[string]interface{}{
         "model": llmModel,
@@ -826,37 +822,45 @@ Respond ONLY with valid JSON:
 				return "", 0, fmt.Errorf("no choices returned from LLM")
 			}
 			
-			content := strings.TrimSpace(result.Choices[0].Message.Content)
-			
-			// Continue with existing parsing logic...
-			content = strings.TrimPrefix(content, "```json")
-			content = strings.TrimPrefix(content, "```")
-			content = strings.TrimSuffix(content, "```")
-			content = strings.TrimSpace(content)
-			
-			var proposal struct {
-				ProposedName string  `json:"proposed_name"`
-				Confidence   float64 `json:"confidence"`
-				Reasoning    string  `json:"reasoning"`
-			}
-			
-			if err := json.Unmarshal([]byte(content), &proposal); err != nil {
-				return "", 0, fmt.Errorf("failed to parse identity proposal: %w", err)
-			}
-			
-			if len(proposal.ProposedName) < 10 || len(proposal.ProposedName) > 250 {
-				return "", 0, fmt.Errorf("proposed identity profile length invalid (%d chars): %s", 
-					len(proposal.ProposedName), proposal.ProposedName)
-			}
-			
-			if proposal.Confidence < 0 || proposal.Confidence > 1 {
-				proposal.Confidence = 0.5
-			}
-			
-			log.Printf("[Principles] Identity proposal: '%s' (confidence: %.2f) - %s", 
-				proposal.ProposedName, proposal.Confidence, proposal.Reasoning)
-			
-			return proposal.ProposedName, proposal.Confidence, nil
+            content := strings.TrimSpace(result.Choices[0].Message.Content)
+            
+            // Remove markdown fences (handling lisp, json, or plain)
+            content = strings.TrimPrefix(content, "```lisp")
+            content = strings.TrimPrefix(content, "```json")
+            content = strings.TrimPrefix(content, "```")
+            content = strings.TrimSuffix(content, "```")
+            content = strings.TrimSpace(content)
+            
+            // Parse S-expression: (principle "..." confidence 0.85 reasoning "...")
+            // Using regex for reliable extraction from flat S-expressions
+            re := regexp.MustCompile(`\(principle\s+"(?P<principle>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
+            matches := re.FindStringSubmatch(content)
+            
+            if matches == nil {
+                return "", 0, fmt.Errorf("failed to parse S-expression")
+            }
+            
+            resultMap := make(map[string]string)
+            for i, name := range re.SubexpNames() {
+                if i != 0 && name != "" {
+                    resultMap[name] = matches[i]
+                }
+            }
+            
+            principleText := resultMap["principle"]
+            confidenceStr := resultMap["confidence"]
+            
+            var confidence float64
+            _, err := fmt.Sscanf(confidenceStr, "%f", &confidence)
+            if err != nil {
+                return "", 0, fmt.Errorf("failed to parse confidence: %w", err)
+            }
+
+            if len(principleText) < 10 || len(principleText) > 200 {
+                return "", 0, fmt.Errorf("invalid principle length")
+            }
+
+            return principleText, confidence, nil
 		}
 	}
 	
