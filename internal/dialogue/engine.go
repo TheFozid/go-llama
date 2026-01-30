@@ -875,24 +875,28 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 
 		// If no actions were executed, check if we should create new actions
 		if !actionExecuted {
-			// Check for stale in-progress actions with adaptive timeouts
-			now := time.Now()
-			for i := range topGoal.Actions {
-				action := &topGoal.Actions[i]
-				if action.Status == ActionStatusInProgress {
-					age := now.Sub(action.Timestamp)
+            // Check for stale in-progress actions with adaptive timeouts
+            now := time.Now()
+            for i := range topGoal.Actions {
+                action := &topGoal.Actions[i]
+                if action.Status == ActionStatusInProgress {
+                    age := now.Sub(action.Timestamp)
 
-					// Adaptive timeout based on action type (accounting for slow CPU inference)
-					timeout := 10 * time.Minute	// Default: 10 minutes for search/general actions
+                    // Use adaptive timeout calculated by the system, with 1.5x multiplier for LLM parsing
+                    baseTimeout := 10 * time.Minute // Fallback if adaptive config is nil/unavailable
+                    if e.adaptiveConfig != nil {
+                        baseTimeout = time.Duration(e.adaptiveConfig.toolTimeout) * time.Second
+                    }
+                    timeout := baseTimeout
 
-					// Web parsing can take significantly longer due to LLM processing
-					if action.Tool == ActionToolWebParseContextual ||
-						action.Tool == ActionToolWebParseGeneral ||
-						action.Tool == ActionToolWebParseChunked {
-						timeout = 15 * time.Minute	// 15 minutes for parse actions
-					}
+                    // Web parsing can take significantly longer due to LLM processing
+                    if action.Tool == ActionToolWebParseContextual ||
+                        action.Tool == ActionToolWebParseGeneral ||
+                        action.Tool == ActionToolWebParseChunked {
+                        timeout = baseTimeout * 3 / 2 // 1.5x multiplier for parse actions
+                    }
 
-					if age > timeout {
+                    if age > timeout {
 						log.Printf("[Dialogue] Found stale in-progress action (age: %s, timeout: %s), marking as failed: %s",
 							age.Round(time.Second), timeout, truncate(action.Description, 60))
 						action.Status = ActionStatusCompleted
@@ -1143,29 +1147,35 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 			hasFailures := false
 			totalOutputLength := 0
 
-			for _, action := range topGoal.Actions {
-				if action.Status == ActionStatusCompleted {
-					resultLower := strings.ToLower(action.Result)
+            for _, action := range topGoal.Actions {
+                if action.Status == ActionStatusCompleted {
+                    resultLower := strings.ToLower(action.Result)
 
-					// Check if action ACTUALLY failed (not just mentioned errors in parsed content)
-					// Only check first 100 chars where real error messages appear
-					// This prevents false positives from phrases like "error handling" in parsed articles
-					resultPrefix := resultLower
-					if len(resultPrefix) > 100 {
-						resultPrefix = resultPrefix[:100]
-					}
+                    // Filter out abandoned/stale actions to avoid noise in reflection
+                    // These are environment/timeout issues, not strategic tool failures
+                    if strings.HasPrefix(action.Result, "TIMEOUT: Action abandoned") {
+                        continue
+                    }
 
-					// Only mark as failure if error appears at the START of the result
-					if strings.HasPrefix(resultPrefix, "error:") ||
-						strings.HasPrefix(resultPrefix, "failed:") ||
-						strings.HasPrefix(resultPrefix, "timeout:") ||
-						strings.Contains(resultPrefix, "no suitable urls") ||
-						strings.Contains(resultPrefix, "parse failed:") ||
-						strings.Contains(resultPrefix, "action failed:") {
-						hasFailures = true
-						log.Printf("[Dialogue] Detected actual failure in action result: %s",
-							truncate(action.Result, 80))
-					}
+                    // Check if action ACTUALLY failed (not just mentioned errors in parsed content)
+                    // Only check first 100 chars where real error messages appear
+                    // This prevents false positives from phrases like "error handling" in parsed articles
+                    resultPrefix := resultLower
+                    if len(resultPrefix) > 100 {
+                        resultPrefix = resultPrefix[:100]
+                    }
+
+                    // Only mark as failure if error appears at the START of the result
+                    if strings.HasPrefix(resultPrefix, "error:") ||
+                        strings.HasPrefix(resultPrefix, "failed:") ||
+                        strings.HasPrefix(resultPrefix, "timeout:") ||
+                        strings.Contains(resultPrefix, "no suitable urls") ||
+                        strings.Contains(resultPrefix, "parse failed:") ||
+                        strings.Contains(resultPrefix, "action failed:") {
+                        hasFailures = true
+                        log.Printf("[Dialogue] Detected actual failure in action result: %s",
+                            truncate(action.Result, 80))
+                    }
 
 					// Accumulate output length
 					totalOutputLength += len(action.Result)
