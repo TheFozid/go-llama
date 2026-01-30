@@ -196,7 +196,6 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
     // Stream LLM response
     var botResponse string
     var toksPerSec float64
-    var err error
 
     // Use injected critical client
     if llmClient != nil {
