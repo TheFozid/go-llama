@@ -10,13 +10,21 @@ import (
 // ParseReasoningSExpr parses S-expression format reasoning
 func ParseReasoningSExpr(input string) (*ReasoningResponse, error) {
     input = strings.TrimSpace(input)
-    
+
+    // FIX: Handle global quote wrapping (e.g., LLM returns "(...)" as a string)
+    if len(input) >= 2 && strings.HasPrefix(input, "\"") && strings.HasSuffix(input, "\"") {
+        // If it looks like a quoted S-Expr (contains parens), unwrap it
+        if strings.Contains(input, "(") || strings.Contains(input, ")") {
+            input = input[1 : len(input)-1]
+        }
+    }
+
     // Remove markdown fences
     input = strings.TrimPrefix(input, "```lisp")
     input = strings.TrimPrefix(input, "```")
     input = strings.TrimSuffix(input, "```")
     input = strings.TrimSpace(input)
-    
+
     // CRITICAL FIX: Remove problematic outer quotes
     // LLM sometimes generates: (reasoning "(insights ...)")
     // Instead of: (reasoning (insights ...))
@@ -414,61 +422,38 @@ func fixMalformedQuotedSexpr(input string) string {
 }
 
 // ENHANCED FUNCTION: Better auto-balancing of parentheses
+// Strategy: Count depth during a forward scan and append missing closers.
+// This preserves the maximum amount of generated content instead of truncating backwards.
 func autoBalanceParens(input string) string {
-    // First, try to find the last complete S-expression
-    // This helps when the LLM output was cut off mid-expression
-    
-    // Find the position of the last complete expression
-    // by counting parentheses from the end
     depth := 0
-    lastCompletePos := -1
-    
-    for i := len(input) - 1; i >= 0; i-- {
-        if input[i] == ')' {
+    for _, ch := range input {
+        if ch == '(' {
             depth++
-        } else if input[i] == '(' {
-            depth--
-            if depth == 0 {
-                lastCompletePos = i
-                break
-            }
-        }
-    }
-    
-    // If we found a complete expression, truncate to that point
-    if lastCompletePos > 0 {
-        // Find the end of this expression
-        depth = 0
-        for i := lastCompletePos; i < len(input); i++ {
-            if input[i] == '(' {
-                depth++
-            } else if input[i] == ')' {
+        } else if ch == ')' {
+            if depth > 0 {
                 depth--
-                if depth == 0 {
-                    // Found the end of the complete expression
-                    input = input[:i+1]
-                    break
-                }
             }
         }
     }
-    
-    // Now balance any remaining unbalanced parentheses
+
+    // If we have unclosed opens, append the required closing parens
+    if depth > 0 {
+        input = input + strings.Repeat(")", depth)
+    }
+
+    // Simple cleanup: Remove excess closing parens from the very end
+    // This handles cases where the model might have hallucinated extra closers
     openCount := strings.Count(input, "(")
     closeCount := strings.Count(input, ")")
     
-    if openCount > closeCount {
-        // Add missing closing parens
-        missing := openCount - closeCount
-        input = input + strings.Repeat(")", missing)
-    } else if closeCount > openCount {
-        // Remove extra closing parens (trim from end)
-        for closeCount > openCount && strings.HasSuffix(input, ")") {
-            input = strings.TrimSuffix(input, ")")
-            closeCount--
+    if closeCount > openCount {
+        diff := closeCount - openCount
+        // Only trim if the excess is at the very end
+        if strings.HasSuffix(input, strings.Repeat(")", diff)) {
+            input = input[:len(input)-diff]
         }
     }
-    
+
     return input
 }
 
