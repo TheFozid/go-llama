@@ -14,6 +14,7 @@ import (
 
     "go-llama/internal/chat"
     "go-llama/internal/config"
+    "go-llama/internal/memory"
     "go-llama/internal/db"
 )
 
@@ -103,17 +104,26 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
         })
     }
 
-    // Build context-aware system instruction
-    var systemInstruction string
-    currentTime := time.Now().UTC().Format("2006-01-02 15:04")
+   // Build System Prompt with Principles
+    principles, err := memory.LoadPrinciples(db.DB)
+    if err != nil {
+        log.Printf("[WS-Chat] WARNING: Failed to load principles: %v", err)
+        // Fallback to generic prompt if loading fails
+        principles = []memory.Principle{} 
+    }
 
+    // Get the bias for dynamic config values
+    goodBehaviorBias := cfg.GrowerAI.Personality.GoodBehaviorBias
+
+    // Generate system prompt (includes Date, Identity, and Principles)
+    systemInstruction := memory.FormatAsSystemPrompt(principles, goodBehaviorBias)
+
+    // If web search is active, append specific instructions to the principles
     if willSearch {
-        systemInstruction = fmt.Sprintf(
-            "Today is %s UTC. You are a helpful assistant with access to current web search results retrieved today. The search results below contain facts you need. Answer using ONLY provided information and cite sources as [1], [2]. Do not say you cannot access information that is explicitly provided.",
-            currentTime,
-        )
-    } else {
-        systemInstruction = fmt.Sprintf("Today is %s UTC. Be direct and helpful.", currentTime)
+        systemInstruction += "\n\n=== ADDITIONAL INSTRUCTIONS ===\n"
+        systemInstruction += "You have access to current web search results retrieved today. "
+        systemInstruction += "The search results contain facts you need. Answer using ONLY provided information and cite sources as [1], [2]. "
+        systemInstruction += "Do not say you cannot access information that is explicitly provided."
     }
 
     llmMessages = append([]map[string]string{

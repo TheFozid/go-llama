@@ -91,37 +91,52 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
 	}
 	log.Printf("[GrowerAI] ✓ Found %d relevant memories", len(results))
 
-	// STEP 3: Build context with retrieved memories
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString("You are GrowerAI, an AI system that learns and improves from conversations.\n\n")
-	
-	if len(results) > 0 {
-		contextBuilder.WriteString("=== RELEVANT MEMORIES ===\n")
-		for i, result := range results {
-			log.Printf("[GrowerAI]   Memory %d: score=%.3f, tier=%s, age=%s", 
-				i+1, result.Score, result.Memory.Tier, 
-				time.Since(result.Memory.CreatedAt).Round(time.Minute))
-			contextBuilder.WriteString(fmt.Sprintf("[Memory %d - %.0f%% relevant - from %s ago]\n%s\n\n",
-				i+1,
-				result.Score*100,
-				time.Since(result.Memory.CreatedAt).Round(time.Minute),
-				result.Memory.Content))
-		}
-		contextBuilder.WriteString("=== END MEMORIES ===\n\n")
-	} else {
-		log.Printf("[GrowerAI]   No relevant memories found")
-	}
+    // STEP 3: Load Principles and Build System Prompt
+    principles, err := memory.LoadPrinciples(e.db)
+    if err != nil {
+        log.Printf("[GrowerAI] WARNING: Failed to load principles: %v", err)
+        // Fallback to default if principles fail
+        principles = []memory.Principle{} 
+    }
 
-	contextBuilder.WriteString(fmt.Sprintf("User's current message: %s\n\n", content))
-	contextBuilder.WriteString("Respond naturally, incorporating relevant context from memories if available.")
+    // Get the bias for dynamic config values
+    goodBehaviorBias := cfg.GrowerAI.Personality.GoodBehaviorBias
 
-	// STEP 4: Call LLM with enhanced context
-	llmMessages := []map[string]string{
-		{
-			"role":    "system",
-			"content": contextBuilder.String(),
-		},
-	}
+    // Build the core system prompt with principles
+    systemPrompt := memory.FormatAsSystemPrompt(principles, goodBehaviorBias)
+
+    // Append memory context to the system prompt
+    var contextBuilder strings.Builder
+    contextBuilder.WriteString(systemPrompt)
+    contextBuilder.WriteString("\n\n")
+
+    if len(results) > 0 {
+        contextBuilder.WriteString("=== RELEVANT MEMORIES ===\n")
+        for i, result := range results {
+            log.Printf("[GrowerAI]   Memory %d: score=%.3f, tier=%s, age=%s", 
+                i+1, result.Score, result.Memory.Tier, 
+                time.Since(result.Memory.CreatedAt).Round(time.Minute))
+            contextBuilder.WriteString(fmt.Sprintf("[Memory %d - %.0f%% relevant - from %s ago]\n%s\n\n",
+                i+1,
+                result.Score*100,
+                time.Since(result.Memory.CreatedAt).Round(time.Minute),
+                result.Memory.Content))
+        }
+        contextBuilder.WriteString("=== END MEMORIES ===\n\n")
+    } else {
+        log.Printf("[GrowerAI]   No relevant memories found")
+    }
+
+    contextBuilder.WriteString(fmt.Sprintf("User's current message: %s\n\n", content))
+    contextBuilder.WriteString("Respond naturally, incorporating relevant context from memories if available.")
+
+    // STEP 4: Call LLM with enhanced context
+    llmMessages := []map[string]string{
+        {
+            "role":    "system",
+            "content": contextBuilder.String(),
+        },
+    }
 
 	payload := map[string]interface{}{
 		"model":    cfg.GrowerAI.ReasoningModel.Name,
