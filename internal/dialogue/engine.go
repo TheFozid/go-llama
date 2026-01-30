@@ -861,17 +861,42 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 							log.Printf("[Dialogue] ⚠ Goal reached max replans (3), marking as failed")
 							topGoal.Status = GoalStatusAbandoned
 							topGoal.Outcome = "bad"
-						} else if assessment.Recommendation == "adjust" {
-							log.Printf("[Dialogue] Plan needs minor adjustment, will naturally adapt on next action")
-							// No action needed - system will adjust when creating next action
-						}
-					}
+                        } else if assessment.Recommendation == "adjust" {
+                            log.Printf("[Dialogue] Plan needs minor adjustment, will naturally adapt on next action")
+                            // No action needed - system will adjust when creating next action
+                        } else if assessment.Recommendation == "complete" {
+                            log.Printf("[Dialogue] Goal completed successfully!")
+                            topGoal.Status = GoalStatusCompleted
+                            topGoal.Outcome = "good"
+                            topGoal.Progress = 1.0
 
-					// Only execute one action per cycle
-					break
-				}
-			}
-		}	// Close the "if !actionExecuted" block from line 643
+                            // Find the goal index in ActiveGoals
+                            completedGoalIndex := -1
+                            for i, g := range state.ActiveGoals {
+                                if g.ID == topGoal.ID {
+                                    completedGoalIndex = i
+                                    break
+                                }
+                            }
+
+                            // Move from Active to Completed
+                            if completedGoalIndex != -1 {
+                                // Remove from active
+                                state.ActiveGoals = append(state.ActiveGoals[:completedGoalIndex], state.ActiveGoals[completedGoalIndex+1:]...)
+                                // Add to completed
+                                state.CompletedGoals = append(state.CompletedGoals, topGoal)
+                                log.Printf("[Dialogue] ✓ Moved goal to CompletedGoals: %s", truncate(topGoal.Description, 60))
+                            } else {
+                                log.Printf("[Dialogue] WARNING: Could not find goal in ActiveGoals to move: %s", topGoal.ID)
+                            }
+                        }
+                    }
+
+                    // Only execute one action per cycle
+                    break
+                }
+            }
+        }	// Close the "if !actionExecuted" block from line 643
 
 		// If no actions were executed, check if we should create new actions
 		if !actionExecuted {

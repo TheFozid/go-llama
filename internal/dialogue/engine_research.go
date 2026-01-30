@@ -817,13 +817,13 @@ EVALUATION CRITERIA:
 3. Is the remaining plan still optimal given what we learned?
 4. Do we need to change direction?
 
-RESPOND ONLY with S-expression (no markdown):
+        RESPOND ONLY with S-expression (no markdown):
 
 (assessment
   (progress_quality "good|partial|poor")
   (plan_validity "valid|needs_adjustment|needs_replan")
   (reasoning "1-2 sentence explanation of current state and why")
-  (recommendation "continue|adjust|replan"))
+  (recommendation "continue|adjust|replan|complete"))
 
 DECISION RULES:
 - progress_quality "good" = action produced relevant, useful information
@@ -834,13 +834,14 @@ DECISION RULES:
 - plan_validity "needs_replan" = generate entirely new plan
 - recommendation "continue" = proceed to next action
 - recommendation "adjust" = modify next action parameters
-- recommendation "replan" = call replan function`,
-		goal.Description, completedSummary, pendingSummary, planSummary)
+- recommendation "replan" = call replan function
+- recommendation "complete" = goal achieved, mark as successful`,
+        goal.Description, completedSummary, pendingSummary, planSummary)
 
     // Specific system prompt to avoid schema conflict with default reasoning prompt
     assessmentSystemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
-Format: (assessment (progress_quality "good|partial|poor") (plan_validity "valid|needs_adjustment|needs_replan") (reasoning "...") (recommendation "continue|adjust|replan"))
-Example: (assessment (progress_quality "partial") (plan_validity "needs_adjustment") (reasoning "Some info found but need more.") (recommendation "adjust"))`
+Format: (assessment (progress_quality "good|partial|poor") (plan_validity "valid|needs_adjustment|needs_replan") (reasoning "...") (recommendation "continue|adjust|replan|complete"))
+Example: (assessment (progress_quality "good") (plan_validity "valid") (reasoning "Goal achieved successfully.") (recommendation "complete"))`
 
     response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false, assessmentSystemPrompt)
     if err != nil {
