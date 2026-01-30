@@ -135,7 +135,7 @@ Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to
         "messages": []map[string]string{
             {
                 "role":		"system",
-                "content":	systemPrompt,
+                "content": finalSystemPrompt,
             },
             {
                 "role":		"user",
