@@ -243,8 +243,8 @@ func (e *Engine) runPhaseGoalManagement(ctx context.Context, state *InternalStat
     // HEALTH CHECK: Prevent goal churn when success rate is critically low
     const CRITICAL_SUCCESS_THRESHOLD = 0.15
 
-    if e.adaptive.recentGoalSuccessRate < CRITICAL_SUCCESS_THRESHOLD && len(state.ActiveGoals) < 5 {
-        log.Printf("[Dialogue] ⚠ CRITICAL: Goal success rate is %.2f (below %.2f). Halting LLM proposals to break failure loop.", e.adaptive.recentGoalSuccessRate, CRITICAL_SUCCESS_THRESHOLD)
+    if e.adaptiveConfig.recentGoalSuccessRate < CRITICAL_SUCCESS_THRESHOLD && len(state.ActiveGoals) < 5 {
+        log.Printf("[Dialogue] ⚠ CRITICAL: Goal success rate is %.2f (below %.2f). Halting LLM proposals to break failure loop.", e.adaptiveConfig.recentGoalSuccessRate, CRITICAL_SUCCESS_THRESHOLD)
 
         // Force exploratory goal based on user interests to reset context
         userInterests, err := e.analyzeUserInterests(ctx)
