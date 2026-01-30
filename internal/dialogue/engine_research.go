@@ -45,7 +45,7 @@ Respond with S-expression:
       (deps ("q1")))
     ...))`, goal.Description)
 
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
 	if err != nil {
 		return nil, tokens, fmt.Errorf("failed to generate research plan: %w", err)
 	}
@@ -1012,7 +1012,7 @@ CRITICAL:
 		originalPlanSummary,
 		reason)
 
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
 	if err != nil {
 		return nil, tokens, fmt.Errorf("replan LLM call failed: %w", err)
 	}
@@ -1197,7 +1197,7 @@ If should_modify=false, only include (should_modify false).`,
 		len(recentGoals),
 		failureContext)
 
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
 	if err != nil {
 		return nil, tokens, fmt.Errorf("principle evaluation failed: %w", err)
 	}
@@ -1352,7 +1352,7 @@ RESPOND with S-expression:
 		modGoal.ProposedPrinciple,
 		modGoal.Justification)
 
-	response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+	response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
 	if err != nil {
 		return false, fmt.Sprintf("Validation failed: %v", err)
 	}

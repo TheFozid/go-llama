@@ -568,7 +568,7 @@ Keep it focused and actionable.`, principlesContext, memoryContext, goalsContext
     }
 
     // Call LLM with structured reasoning
-    reasoning, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true)
+    reasoning, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
     if err != nil {
         return nil, nil, tokens, err
     }
