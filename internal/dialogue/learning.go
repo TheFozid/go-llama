@@ -105,8 +105,14 @@ func (e *Engine) callLLM(ctx context.Context, prompt string, useSimpleModel bool
 func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool, systemPromptOverride string) (*ReasoningResponse, int, error) {
     // Default system prompt for general reasoning
     defaultSystemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
+
+CRITICAL ASSESSMENT RULES:
+1. Outcome Determination: If the user expresses negative sentiment (e.g., "terrible", "wrong", "bad", "hate"), you MUST set outcome=bad.
+2. Heuristic Override: Extracting a lesson (learning=true) from a negative event does NOT make the outcome 'good'. 'outcome' reflects user satisfaction, not internal learning success.
+3. Mistakes: If outcome=bad due to user feedback, set mistake=true.
+
 Format: (reasoning (reflection "...") (insights "...") (goals_to_create (goal (description "...") (priority 8))))
-Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))`
+Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))
 
     // CRITICAL: Load and Inject Principles for ALL reasoning steps
     // This ensures Identity, Admin Rules, and Evolved Principles are front and centre
