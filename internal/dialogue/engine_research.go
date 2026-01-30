@@ -892,9 +892,11 @@ func (e *Engine) parseAssessmentSExpr(rawResponse string) (*PlanAssessment, erro
 		}
 	}
 
-	if len(blocks) == 0 {
-		return nil, fmt.Errorf("no assessment block found in response")
-	}
+    if len(blocks) == 0 {
+        // Log the raw content for debugging purposes
+        log.Printf("[Dialogue] DIAGNOSTIC: Raw content that failed assessment parsing:\n%s\n", content)
+        return nil, fmt.Errorf("no assessment block found in response")
+    }
 
 	block := blocks[0]
 
