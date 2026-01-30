@@ -31,7 +31,7 @@ func (e *Engine) evaluateSearchResults(ctx context.Context, searchOutput string,
 	
 	// Call LLM via queue with S-expression response
 	log.Printf("[SearchEval] Requesting LLM evaluation of %d search results", len(urls))
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false, "")
 	if err != nil {
 		return nil, fmt.Errorf("LLM evaluation failed: %w", err)
 	}

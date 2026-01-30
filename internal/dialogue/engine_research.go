@@ -616,7 +616,7 @@ RULES:
 		primaryContext.String(), secondary.Description)
 
 	log.Printf("[GoalValidation] Validating secondary goal linkage via LLM...")
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false, "")
 	if err != nil {
 		return nil, fmt.Errorf("LLM validation failed: %w", err)
 	}
@@ -1438,7 +1438,7 @@ Rules:
 - If metadata is vague, estimate start (0) and subsequent indices.`, goal.Description, url, metadataResult.Output)
 
 	// FIX: Use _ to ignore unused 'tokens' return value
-	response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+	response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, false, "")
 	if err != nil {
 		return nil, fmt.Errorf("fallback failed: LLM selection failed: %w", err)
 	}

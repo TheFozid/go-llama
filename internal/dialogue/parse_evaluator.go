@@ -64,7 +64,7 @@ func (e *Engine) evaluateParseResults(
 	log.Printf("[ParseEval] Requesting LLM evaluation of parse results (goal: %s)", 
 		truncate(goalDescription, 60))
 	
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
+	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false, "")
 	if err != nil {
 		log.Printf("[ParseEval] LLM evaluation failed: %v", err)
 		// Fallback to conservative evaluation
