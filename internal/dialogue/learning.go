@@ -107,7 +107,7 @@ func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt stri
     defaultSystemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
 
 CRITICAL ASSESSMENT RULES:
-1. Outcome Determination: If the user expresses negative sentiment (e.g., "terrible", "wrong", "bad", "hate"), you MUST set outcome=bad.
+1. Outcome Determination: If the user expresses dissatisfaction, frustration, or uses negative language (e.g., 'terrible', 'bad', 'wrong'), you MUST classify the outcome as 'bad' and 'mistake=true'.
 2. Heuristic Override: Extracting a lesson (learning=true) from a negative event does NOT make the outcome 'good'. 'outcome' reflects user satisfaction, not internal learning success.
 3. Mistakes: If outcome=bad due to user feedback, set mistake=true.
 

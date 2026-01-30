@@ -1149,51 +1149,29 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 
             for _, action := range topGoal.Actions {
                 if action.Status == ActionStatusCompleted {
-                    resultLower := strings.ToLower(action.Result)
-
                     // Filter out abandoned/stale actions to avoid noise in reflection
                     // These are environment/timeout issues, not strategic tool failures
                     if strings.HasPrefix(action.Result, "TIMEOUT: Action abandoned") {
                         continue
                     }
 
-                    // Check if action ACTUALLY failed (not just mentioned errors in parsed content)
-                    // Only check first 100 chars where real error messages appear
-                    // This prevents false positives from phrases like "error handling" in parsed articles
-                    resultPrefix := resultLower
-                    if len(resultPrefix) > 100 {
-                        resultPrefix = resultPrefix[:100]
+                    // Accumulate output length
+                    totalOutputLength += len(action.Result)
+
+                    // Check if action produced meaningful output
+                    // - Parse actions should produce >200 chars
+                    // - Search actions should produce >100 chars
+                    minLength := 100
+                    if action.Tool == ActionToolWebParseContextual ||
+                        action.Tool == ActionToolWebParseGeneral {
+                        minLength = 200
                     }
 
-                    // Only mark as failure if error appears at the START of the result
-                    if strings.HasPrefix(resultPrefix, "error:") ||
-                        strings.HasPrefix(resultPrefix, "failed:") ||
-                        strings.HasPrefix(resultPrefix, "timeout:") ||
-                        strings.Contains(resultPrefix, "no suitable urls") ||
-                        strings.Contains(resultPrefix, "parse failed:") ||
-                        strings.Contains(resultPrefix, "action failed:") {
-                        hasFailures = true
-                        log.Printf("[Dialogue] Detected actual failure in action result: %s",
-                            truncate(action.Result, 80))
+                    if len(action.Result) > minLength {
+                        hasUsefulOutcome = true
                     }
-
-					// Accumulate output length
-					totalOutputLength += len(action.Result)
-
-					// Check if action produced meaningful output
-					// - Parse actions should produce >200 chars
-					// - Search actions should produce >100 chars
-					minLength := 100
-					if action.Tool == ActionToolWebParseContextual ||
-						action.Tool == ActionToolWebParseGeneral {
-						minLength = 200
-					}
-
-					if len(action.Result) > minLength && !strings.HasPrefix(resultPrefix, "error:") {
-						hasUsefulOutcome = true
-					}
-				}
-			}
+                }
+            }
 
 			log.Printf("[Dialogue] Goal evaluation: useful=%v, failures=%v, totalOutput=%d chars",
 				hasUsefulOutcome, hasFailures, totalOutputLength)
