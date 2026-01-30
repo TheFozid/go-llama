@@ -105,7 +105,7 @@ func handleStandardLLMWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *
     }
 
     // Build System Prompt with Principles
-    principles, err = memory.LoadPrinciples(db.DB)
+    principles, err := memory.LoadPrinciples(db.DB)
     if err != nil {
         log.Printf("[WS-Chat] WARNING: Failed to load principles: %v", err)
         // Fallback to generic prompt if loading fails
