@@ -108,10 +108,25 @@ func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt stri
 Format: (reasoning (reflection "...") (insights "...") (goals_to_create (goal (description "...") (priority 8))))
 Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))`
 
-    // Use override if provided (e.g., for assessments), otherwise default
-    systemPrompt := defaultSystemPrompt
+    // CRITICAL: Load and Inject Principles for ALL reasoning steps
+    // This ensures Identity, Admin Rules, and Evolved Principles are front and centre
+    // for Reflection, Planning, Assessment, and Goal Thinking.
+    principlesContext := ""
+    principles, err := memory.LoadPrinciples(e.db)
+    if err != nil {
+        log.Printf("[Dialogue] WARNING: Failed to load principles for reasoning: %v", err)
+        // Proceed without principles if DB error, but log it
+    } else {
+        // Format: "Today is... You are X... === PRINCIPLES ===..."
+        principlesContext = memory.FormatAsSystemPrompt(principles, 0.7)
+    }
+
+    // Combine: Principles (Identity & Rules) + Technical Instructions (S-expression format)
+    finalSystemPrompt := principlesContext + "\n\n" + defaultSystemPrompt
+    
+    // Use override if provided (e.g., for assessments), but prepend principles first
     if systemPromptOverride != "" {
-        systemPrompt = systemPromptOverride
+        finalSystemPrompt = principlesContext + "\n\n" + systemPromptOverride
     }
 
     reqBody := map[string]interface{}{

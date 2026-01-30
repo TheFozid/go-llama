@@ -276,279 +276,226 @@ type PrincipleCandidate struct {
 	Frequency  int     // How often this pattern appears
 }
 
-// ExtractPrinciples analyzes memory patterns to propose new principles
-// This is called by the background worker
+// ExtractPrinciples uses Contrastive Learning to derive balanced principles
+// by comparing successful interactions (Good) against failed ones (Bad).
 func ExtractPrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, minRatingThreshold float64, extractionLimit int, llmURL string, llmModel string, llmClient interface{}) ([]PrincipleCandidate, error) {
-	ctx := context.Background()
-	
-	log.Printf("[Principles] Extracting principle candidates from memory patterns (limit: %d)...", extractionLimit)
-	
+    ctx := context.Background()
+    
+    log.Printf("[Principles] Extracting principles using Contrastive Analysis (Good vs Bad)...")
 
-	// Step 1: Find all "good" memories across all users with pagination
-	var goodMemories []*Memory
-	var offset *qdrant.PointId
-	batchSize := 100
-	totalFetched := 0
-	
-	// Query Qdrant with pagination to respect extraction limit
-	for totalFetched < extractionLimit {
-		remaining := extractionLimit - totalFetched
-		currentBatch := batchSize
-		if remaining < batchSize {
-			currentBatch = remaining
-		}
-		
-		scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
-			CollectionName: storage.CollectionName,
-			Filter: &qdrant.Filter{
-				Must: []*qdrant.Condition{
-					qdrant.NewMatch("outcome_tag", "good"),
-				},
-			},
-			Limit:       qdrant.PtrOf(uint32(currentBatch)),
-			Offset:      offset,
-			WithPayload: qdrant.NewWithPayload(true),
-		})
-		
-		if err != nil {
-			return nil, fmt.Errorf("failed to find good memories: %w", err)
-		}
-		
-		if len(scrollResult) == 0 {
-			break // No more results
-		}
-		
-		for _, point := range scrollResult {
-			mem := storage.pointToMemoryFromScroll(point)
-			goodMemories = append(goodMemories, &mem)
-		}
-		
-		totalFetched += len(scrollResult)
-		
-		// Update offset for next page
-		if len(scrollResult) > 0 {
-			offset = scrollResult[len(scrollResult)-1].Id
-		}
-		
-		// Break if we got fewer results than requested (no more data)
-		if len(scrollResult) < currentBatch {
-			break
-		}
-	}
-	
-	log.Printf("[Principles] Fetched %d good memories for analysis", len(goodMemories))
-	
-	if len(goodMemories) == 0 {
-		log.Printf("[Principles] No 'good' memories found to analyze")
-		return []PrincipleCandidate{}, nil
-	}
-	
-	log.Printf("[Principles] Analyzing %d 'good' memories for patterns...", len(goodMemories))
-	
-	// Step 2: Find BEHAVIORAL patterns from actual conversation content
-	// NOT just concept tag frequency - look at what actually worked
-	
-	type BehavioralPattern struct {
-		Behavior       string   // What behavior was exhibited
-		GoodExamples   []string // Memory IDs where this worked
-		BadExamples    []string // Memory IDs where this failed (for validation)
-		Confidence     float64  // Statistical confidence score
-		Evidence       string   // Sample evidence text
-	}
-	
-	patterns := []BehavioralPattern{}
-	
-	// PATTERN TYPE 1: Communication style patterns
-	// Look for patterns in HOW the AI communicated, not WHAT it did
-	stylePatterns := map[string]struct{
-		keywords []string
-		behavior string
-	}{
-		"technical_adaptation": {
-			keywords: []string{"technical", "code", "example", "specific", "detailed"},
-			behavior: "Adapt technical depth based on user's demonstrated knowledge level",
-		},
-		"uncertainty_honesty": {
-			keywords: []string{"uncertain", "don't know", "not sure", "clarify", "verify"},
-			behavior: "Express uncertainty honestly rather than guessing or fabricating answers",
-		},
-		"concrete_examples": {
-			keywords: []string{"example", "instance", "demonstrate", "show", "illustrate"},
-			behavior: "Use concrete examples to illustrate abstract concepts",
-		},
-		"conversational_tone": {
-			keywords: []string{"friendly", "casual", "natural", "like talking", "conversational"},
-			behavior: "Maintain a warm, conversational tone that feels natural and approachable",
-		},
-		"user_autonomy": {
-			keywords: []string{"could", "might", "suggest", "option", "choose", "prefer"},
-			behavior: "Respect user autonomy by offering suggestions rather than dictating solutions",
-		},
-		"clarification_seeking": {
-			keywords: []string{"clarify", "confirm", "verify", "check", "make sure", "understand correctly"},
-			behavior: "Ask clarifying questions when user intent is ambiguous",
-		},
-	}
-	
-	// Analyze each pattern against good AND bad memories
-	for patternID, pattern := range stylePatterns {
-		goodMatches := []string{}
-		badMatches := []string{}
-		evidenceText := ""
-		
-		// Check good memories
-		for _, mem := range goodMemories {
-			contentLower := strings.ToLower(mem.Content)
-			matchCount := 0
-			for _, keyword := range pattern.keywords {
-				if strings.Contains(contentLower, keyword) {
-					matchCount++
-				}
-			}
-			
-			// If 2+ keywords match, this is evidence of the pattern
-			if matchCount >= 2 {
-				goodMatches = append(goodMatches, mem.ID)
-				if evidenceText == "" && len(mem.Content) > 50 {
-					evidenceText = mem.Content[:min(200, len(mem.Content))]
-				}
-			}
-		}
-		
-		// Pattern confidence is based on good matches only
-		// (cross-validation against bad memories would require additional complexity)
-		
-		// Calculate confidence based on frequency of good matches
-		totalMatches := len(goodMatches)
-		if totalMatches == 0 {
-			continue // No evidence for this pattern
-		}
-		
-		// Confidence is 1.0 since we only checked good memories
-		confidence := 1.0
-		
-		// Require: at least 5 good examples AND confidence > 0.7
-		if len(goodMatches) >= 5 && confidence >= 0.7 {
-			patterns = append(patterns, BehavioralPattern{
-				Behavior:     pattern.behavior,
-				GoodExamples: goodMatches,
-				BadExamples:  badMatches,
-				Confidence:   confidence,
-				Evidence:     evidenceText,
-			})
-			
-			log.Printf("[Principles] Pattern '%s': %d good, %d bad, confidence=%.2f",
-				patternID, len(goodMatches), len(badMatches), confidence)
-		}
-	}
-	
-	// PATTERN TYPE 2: Multi-concept co-occurrence patterns
-	// Find pairs of concept tags that appear together frequently
-	type ConceptPair struct {
-		Tag1 string
-		Tag2 string
-	}
-	
-	pairFrequency := make(map[ConceptPair][]string)
-	
-	for _, mem := range goodMemories {
-		// Find all pairs of concepts in this memory
-		for i := 0; i < len(mem.ConceptTags); i++ {
-			for j := i + 1; j < len(mem.ConceptTags); j++ {
-				pair := ConceptPair{
-					Tag1: mem.ConceptTags[i],
-					Tag2: mem.ConceptTags[j],
-				}
-				// Normalize pair order
-				if pair.Tag2 < pair.Tag1 {
-					pair.Tag1, pair.Tag2 = pair.Tag2, pair.Tag1
-				}
-				pairFrequency[pair] = append(pairFrequency[pair], mem.ID)
-			}
-		}
-	}
-	
-	// Find frequent pairs (10+ occurrences)
-	for pair, memoryIDs := range pairFrequency {
-		if len(memoryIDs) >= 10 {
-			// Generate behavioral principle from this pair using LLM
-			principle, err := generatePrincipleFromConceptPair(
-				ctx,
-				llmURL,
-				llmModel,
-				pair.Tag1,
-				pair.Tag2,
-				len(memoryIDs),
-				llmClient,
-			)
-			
-			if err != nil {
-				log.Printf("[Principles] WARNING: Failed to generate principle from pair (%s, %s): %v",
-					pair.Tag1, pair.Tag2, err)
-				continue
-			}
-			
-			// Get sample evidence
-			sampleMem, _ := storage.GetMemoryByID(ctx, memoryIDs[0])
-			evidence := ""
-			if sampleMem != nil {
-				evidence = sampleMem.Content
-			}
-			
-			patterns = append(patterns, BehavioralPattern{
-				Behavior:     principle,
-				GoodExamples: memoryIDs,
-				BadExamples:  []string{}, // We didn't validate against bad examples here
-				Confidence:   0.7,        // Lower confidence - not validated
-				Evidence:     evidence,
-			})
-			
-			log.Printf("[Principles] Concept pair pattern (%s + %s): %d occurrences → %s",
-				pair.Tag1, pair.Tag2, len(memoryIDs), truncate(principle, 60))
-		}
-	}
-	
-	if len(patterns) == 0 {
-		log.Printf("[Principles] No recurring patterns found")
-		return []PrincipleCandidate{}, nil
-	}
-	
-	log.Printf("[Principles] Found %d behavioral patterns", len(patterns))
-	
-	// Sort patterns by confidence (highest first)
-	sort.Slice(patterns, func(i, j int) bool {
-		return patterns[i].Confidence > patterns[j].Confidence
-	})
-	
-	// Take top 10 patterns
-	if len(patterns) > 10 {
-		patterns = patterns[:10]
-	}
-	
-	candidates := []PrincipleCandidate{}
-	
-	// BehavioralPatterns already have pre-formulated behaviors, use them directly
-	for _, pattern := range patterns {
-		// Use calculated confidence as rating (already validated)
-		rating := pattern.Confidence
-		
-		// Only include if meets minimum threshold
-		if rating < minRatingThreshold {
-			continue
-		}
-		
-		candidates = append(candidates, PrincipleCandidate{
-			Content:   pattern.Behavior,
-			Rating:    rating,
-			Evidence:  pattern.GoodExamples,
-			Frequency: len(pattern.GoodExamples),
-		})
-	}
-	
-	log.Printf("[Principles] Generated %d principle candidates (threshold: %.2f)", 
-		len(candidates), minRatingThreshold)
-	
-	return candidates, nil
+    // Step 1: Fetch "Good" memories (Successes)
+    goodScroll, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+        CollectionName: storage.CollectionName,
+        Filter: &qdrant.Filter{
+            Must: []*qdrant.Condition{
+                qdrant.NewMatch("outcome_tag", "good"),
+            },
+        },
+        Limit:       qdrant.PtrOf(uint32(50)), // Sample 50 good memories
+        WithPayload: qdrant.NewWithPayload(true),
+    })
+    if err != nil {
+        return nil, fmt.Errorf("failed to scroll good memories: %w", err)
+    }
+
+    // Step 2: Fetch "Bad" memories (Failures)
+    badScroll, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+        CollectionName: storage.CollectionName,
+        Filter: &qdrant.Filter{
+            Must: []*qdrant.Condition{
+                qdrant.NewMatch("outcome_tag", "bad"),
+            },
+        },
+        Limit:       qdrant.PtrOf(uint32(50)), // Sample 50 bad memories
+        WithPayload: qdrant.NewWithPayload(true),
+    })
+    if err != nil {
+        return nil, fmt.Errorf("failed to scroll bad memories: %w", err)
+    }
+
+    log.Printf("[Principles] Found %d good and %d bad memories for contrastive analysis", len(goodScroll), len(badScroll))
+
+    if len(goodScroll) == 0 || len(badScroll) == 0 {
+        log.Printf("[Principles] Insufficient data for contrastive analysis (need both good and bad)")
+        return []PrincipleCandidate{}, nil
+    }
+
+    // Convert to Memory structs
+    goodMemories := []*Memory{}
+    for _, p := range goodScroll {
+        mem := storage.pointToMemoryFromScroll(p)
+        goodMemories = append(goodMemories, &mem)
+    }
+
+    badMemories := []*Memory{}
+    for _, p := range badScroll {
+        mem := storage.pointToMemoryFromScroll(p)
+        badMemories = append(badMemories, &mem)
+    }
+
+    candidates := []PrincipleCandidate{}
+    analysisCount := 0
+    maxAnalyses := 10 // Limit to 10 LLM calls per cycle to save tokens
+
+    // Step 3: Contrastive Pairing
+    // We generate principles by asking the LLM: "Why did this succeed but that fail?"
+    for i := 0; i < maxAnalyses; i++ {
+        // Pick 1 random Good and 1 random Bad
+        goodIdx := i % len(goodMemories)
+        badIdx := i % len(badMemories)
+        
+        goodMem := goodMemories[goodIdx]
+        badMem := badMemories[badIdx]
+
+        log.Printf("[Principles] Analyzing pair %d: Good[%s] vs Bad[%s]", i+1, goodMem.ID[:8], badMem.ID[:8])
+
+        // Ask LLM to derive a principle from the contrast
+        principle, confidence, err := generatePrincipleFromContrast(
+            ctx,
+            llmURL,
+            llmModel,
+            goodMem.Content,
+            badMem.Content,
+            llmClient,
+        )
+
+        if err != nil {
+            log.Printf("[Principles] Failed to analyze pair %d: %v", i+1, err)
+            continue
+        }
+
+        // Filter low confidence or generic principles
+        if confidence < 0.6 {
+            log.Printf("[Principles] Pair %d produced low confidence principle (%.2f), skipping", i+1, confidence)
+            continue
+        }
+
+        // Add to candidates
+        candidates = append(candidates, PrincipleCandidate{
+            Content:   principle,
+            Rating:    confidence,
+            Evidence:  []string{goodMem.ID, badMem.ID}, // Reference the pair used
+            Frequency: 1, // Each pair is one data point
+        })
+        
+        analysisCount++
+        if analysisCount >= maxAnalyses {
+            break
+        }
+    }
+
+    log.Printf("[Principles] Generated %d principle candidates from contrastive analysis", len(candidates))
+    return candidates, nil
+}
+
+// generatePrincipleFromContrast asks the LLM to find the rule separating success from failure
+func generatePrincipleFromContrast(ctx context.Context, llmURL string, llmModel string, goodContent string, badContent string, llmClient interface{}) (string, float64, error) {
+    // Truncate content to fit prompt
+    truncateContent := func(s string, max int) string {
+        if len(s) <= max {
+            return s
+        }
+        return s[:max] + "..."
+    }
+    
+    prompt := fmt.Sprintf(`You are analyzing two AI interactions to find a guiding principle.
+
+SUCCESSFUL INTERACTION (Good Outcome):
+%s
+
+FAILED INTERACTION (Bad Outcome):
+%s
+
+TASK:
+Identify ONE specific behavioral principle that explains why the first interaction succeeded and the second failed.
+The principle should:
+1. Describe a way of BEHAVING or INTERACTING.
+2. Be actionable (something the AI can do).
+3. Be a "Guardrail" - something to ALWAYS do or NEVER do.
+4. Be 10-25 words long.
+
+Examples of good principles:
+- "Always verify technical details before presenting them as facts."
+- "Admit uncertainty immediately rather than guessing."
+- "Prioritize user autonomy by offering options, not orders."
+- "Use concrete examples when explaining abstract concepts."
+
+Respond ONLY with valid JSON:
+{
+  "principle": "Your 10-25 word principle here",
+  "confidence": 0.85,
+  "reasoning": "Brief explanation of why this principle fits the contrast"
+}`, truncateContent(goodContent, 600), truncateContent(badContent, 600))
+
+    reqBody := map[string]interface{}{
+        "model": llmModel,
+        "messages": []map[string]string{
+            {
+                "role":    "system",
+                "content": "You are an expert at behavioral psychology and AI alignment. Extract concise principles.",
+            },
+            {
+                "role":    "user",
+                "content": prompt,
+            },
+        },
+        "temperature": 0.5,
+        "stream":      false,
+    }
+
+    // Use queue client if available
+    if llmClient != nil {
+        type LLMCaller interface {
+            Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+        }
+        
+        if client, ok := llmClient.(LLMCaller); ok {
+            body, err := client.Call(ctx, llmURL, reqBody)
+            if err != nil {
+                return "", 0, err
+            }
+            
+            var result struct {
+                Choices []struct {
+                    Message struct {
+                        Content string `json:"content"`
+                    } `json:"message"`
+                } `json:"choices"`
+            }
+            
+            if err := json.Unmarshal(body, &result); err != nil {
+                return "", 0, err
+            }
+            
+            if len(result.Choices) == 0 {
+                return "", 0, fmt.Errorf("no choices returned")
+            }
+
+            content := strings.TrimSpace(result.Choices[0].Message.Content)
+            content = strings.TrimPrefix(content, "```json")
+            content = strings.TrimPrefix(content, "```")
+            content = strings.TrimSuffix(content, "```")
+            content = strings.TrimSpace(content)
+            
+            var proposal struct {
+                Principle  string  `json:"principle"`
+                Confidence float64 `json:"confidence"`
+                Reasoning  string  `json:"reasoning"`
+            }
+            
+            if err := json.Unmarshal([]byte(content), &proposal); err != nil {
+                return "", 0, err
+            }
+            
+            if len(proposal.Principle) < 10 || len(proposal.Principle) > 200 {
+                return "", 0, fmt.Errorf("invalid principle length")
+            }
+
+            return proposal.Principle, proposal.Confidence, nil
+        }
+    }
+    
+    return "", 0, fmt.Errorf("no LLM client available for contrastive analysis")
 }
 
 // EvolvePrinciples updates AI-managed slots (4-10) with highest-rated candidates
