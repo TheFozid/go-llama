@@ -239,7 +239,36 @@ func (e *Engine) runPhaseGoalManagement(ctx context.Context, state *InternalStat
 
     // Create goals from LLM proposals if available (but not if we have too many already)
     newGoals := []Goal{}
-    if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 15 { // Increased limit for tier system
+
+    // HEALTH CHECK: Prevent goal churn when success rate is critically low
+    const CRITICAL_SUCCESS_THRESHOLD = 0.15
+
+    if e.adaptive.recentGoalSuccessRate < CRITICAL_SUCCESS_THRESHOLD && len(state.ActiveGoals) < 5 {
+        log.Printf("[Dialogue] ⚠ CRITICAL: Goal success rate is %.2f (below %.2f). Halting LLM proposals to break failure loop.", e.adaptive.recentGoalSuccessRate, CRITICAL_SUCCESS_THRESHOLD)
+
+        // Force exploratory goal based on user interests to reset context
+        userInterests, err := e.analyzeUserInterests(ctx)
+        if err != nil {
+            log.Printf("[Dialogue] WARNING: Failed to analyze user interests for recovery: %v", err)
+            userInterests = []string{}
+        }
+
+        // Extract recent descriptions to avoid repeating failures
+        recentGoalDescriptions := []string{}
+        recentGoals := state.CompletedGoals
+        if len(recentGoals) > 5 {
+            recentGoals = recentGoals[len(recentGoals)-5:]
+        }
+        for _, goal := range recentGoals {
+            recentGoalDescriptions = append(recentGoalDescriptions, goal.Description)
+        }
+
+        recoveryGoal := e.generateExploratoryGoal(ctx, userInterests, "system failure", recentGoalDescriptions)
+        newGoals = append(newGoals, recoveryGoal)
+
+        log.Printf("[Dialogue] ✓ Created RECOVERY goal to stabilize system: %s", truncate(recoveryGoal.Description, 60))
+
+    } else if len(reasoning.GoalsToCreate.ToSlice()) > 0 && len(state.ActiveGoals) < 15 {
         log.Printf("[Dialogue] LLM proposed %d new goals", len(reasoning.GoalsToCreate))
 
         // Get recently abandoned goals (last 10)

@@ -2,7 +2,7 @@
 
 Local, private, and fast LLM chat interface and orchestrator — with optional intelligent web search via SearxNG.  
 Built for self-hosting on everything from Raspberry Pi and low-power mini-PCs to full servers.  
-Lightweight, secure, and purpose-built to outperform bloated open-web UI stacks.
+Lightweight, secure, and purpose-built to outperform bloated open-web UI stacks.1
 
 ---
 
