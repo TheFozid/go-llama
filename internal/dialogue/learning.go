@@ -102,10 +102,17 @@ func (e *Engine) callLLM(ctx context.Context, prompt string, useSimpleModel bool
     return "", 0, fmt.Errorf("LLM queue client required for dialogue")
 }
 
-func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool) (*ReasoningResponse, int, error) {
-    systemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
-Format: (reasoning (reflection "...") (insights "...") (goals_to_create (goal (description "...") (priority 7))))
+func (e *Engine) callLLMWithStructuredReasoning(ctx context.Context, prompt string, expectJSON bool, systemPromptOverride string) (*ReasoningResponse, int, error) {
+    // Default system prompt for general reasoning
+    defaultSystemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
+Format: (reasoning (reflection "...") (insights "...") (goals_to_create (goal (description "...") (priority 8))))
 Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))`
+
+    // Use override if provided (e.g., for assessments), otherwise default
+    systemPrompt := defaultSystemPrompt
+    if systemPromptOverride != "" {
+        systemPrompt = systemPromptOverride
+    }
 
     reqBody := map[string]interface{}{
         "model":	e.llmModel,

@@ -837,10 +837,15 @@ DECISION RULES:
 - recommendation "replan" = call replan function`,
 		goal.Description, completedSummary, pendingSummary, planSummary)
 
-	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false)
-	if err != nil {
-		return nil, tokens, fmt.Errorf("assessment failed: %w", err)
-	}
+    // Specific system prompt to avoid schema conflict with default reasoning prompt
+    assessmentSystemPrompt := `Output ONLY S-expressions (Lisp-style). No Markdown.
+Format: (assessment (progress_quality "good|partial|poor") (plan_validity "valid|needs_adjustment|needs_replan") (reasoning "...") (recommendation "continue|adjust|replan"))
+Example: (assessment (progress_quality "partial") (plan_validity "needs_adjustment") (reasoning "Some info found but need more.") (recommendation "adjust"))`
+
+    response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, false, assessmentSystemPrompt)
+    if err != nil {
+        return nil, tokens, fmt.Errorf("assessment failed: %w", err)
+    }
 
 	// Parse assessment
 	assessment, err := e.parseAssessmentSExpr(response.RawResponse)
