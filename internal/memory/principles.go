@@ -851,7 +851,7 @@ Respond ONLY with valid JSON:
             confidenceStr := resultMap["confidence"]
             
             var confidence float64
-            _, err := fmt.Sscanf(confidenceStr, "%f", &confidence)
+            _, err = fmt.Sscanf(confidenceStr, "%f", &confidence)
             if err != nil {
                 return "", 0, fmt.Errorf("failed to parse confidence: %w", err)
             }
