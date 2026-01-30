@@ -92,11 +92,11 @@ func HandleGrowerAIMessage(c *gin.Context, cfg *config.Config, chatInst *chat.Ch
 	log.Printf("[GrowerAI] ✓ Found %d relevant memories", len(results))
 
     // STEP 3: Load Principles and Build System Prompt
-    principles, err := memory.LoadPrinciples(e.db)
+    principles, err := memory.LoadPrinciples(db.DB)
     if err != nil {
         log.Printf("[GrowerAI] WARNING: Failed to load principles: %v", err)
         // Fallback to default if principles fail
-        principles = []memory.Principle{} 
+        principles = []memory.Principle{}
     }
 
     // Get the bias for dynamic config values
