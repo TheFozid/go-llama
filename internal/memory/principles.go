@@ -182,12 +182,19 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
 		}
 	}
 	
-	// If identity contains " - ", it's a profile, otherwise just a name
-	if strings.Contains(systemName, " - ") {
-		builder.WriteString(fmt.Sprintf("%s\n\n", systemName))
-	} else {
-		builder.WriteString(fmt.Sprintf("You are %s, an advanced autonomous learning system.\n\n", systemName))
-	}
+    // If identity contains a dash or is long, treat it as a full profile
+    // We check for standard hyphen (-), en-dash (–), and em-dash (—)
+    // Also, if the description is long (>40 chars), it's likely a profile.
+    isProfile := len(systemName) > 40 ||
+        strings.Contains(systemName, " - ") ||
+        strings.Contains(systemName, " – ") ||
+        strings.Contains(systemName, " — ")
+
+    if isProfile {
+        builder.WriteString(fmt.Sprintf("%s\n\n", systemName))
+    } else {
+        builder.WriteString(fmt.Sprintf("You are %s, an advanced autonomous learning system.\n\n", systemName))
+    }
 	builder.WriteString("=== YOUR CORE PRINCIPLES ===\n")
 	builder.WriteString("These principles guide all your responses and decisions:\n\n")
 
