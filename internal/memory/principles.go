@@ -36,31 +36,23 @@ func (Principle) TableName() string {
 	return "growerai_principles"
 }
 
-// InitializeDefaultPrinciples creates the 3 admin principles if they don't exist
+// InitializeDefaultPrinciples syncs the database principles with the code defaults.
+// - Admin slots (1-3) are FORCED to match code (to enforce rules).
+// - Identity slot (0) is only created if missing (to preserve AI evolution).
+// - AI slots (4-10) are only created if missing (to preserve AI learning).
 // Should be called once at server startup
 func InitializeDefaultPrinciples(db *gorm.DB) error {
-	// Check if any principles exist
-	var count int64
-	if err := db.Model(&Principle{}).Count(&count).Error; err != nil {
-		return fmt.Errorf("failed to count principles: %w", err)
-	}
-
-	// If principles already exist, skip initialization
-	if count > 0 {
-		return nil
-	}
-
-	// Create system identity (slot 0) - AI-managed, can evolve through experience
-	systemIdentity := Principle{
-		Slot:            0,
-		Content:         "GrowerAI", // Default name - AI can change this
-		Rating:          0.5,        // Neutral rating - can be improved
-		IsAdmin:         false,      // AI-managed
-		ValidationCount: 0,
-	}
-	
-    // Create default admin principles (slots 1-3)
-    adminPrinciples := []Principle{
+    // Define the desired state of principles
+    defaultPrinciples := []Principle{
+        // Slot 0: Identity
+        {
+            Slot:            0,
+            Content:         "GrowerAI", // Default name - AI can change this
+            Rating:          0.5,
+            IsAdmin:         false,
+            ValidationCount: 0,
+        },
+        // Slots 1-3: Admin Principles
         {
             Slot:            1,
             Content:         "Never share personal information across users. Personal memories must remain isolated and private to their respective users.",
@@ -84,26 +76,46 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
         },
     }
 
-	// Create empty AI-managed principles (slots 4-10)
-	aiPrinciples := []Principle{}
-	for slot := 4; slot <= 10; slot++ {
-		aiPrinciples = append(aiPrinciples, Principle{
-			Slot:            slot,
-			Content:         "", // Empty - will evolve from experience
-			Rating:          0.0,
-			IsAdmin:         false,
-			ValidationCount: 0,
-		})
-	}
+    // Add empty AI slots (4-10) to the list for initialization checks
+    for slot := 4; slot <= 10; slot++ {
+        defaultPrinciples = append(defaultPrinciples, Principle{
+            Slot:            slot,
+            Content:         "",
+            Rating:          0.0,
+            IsAdmin:         false,
+            ValidationCount: 0,
+        })
+    }
 
-	// Insert system identity + all principles
-	allPrinciples := append([]Principle{systemIdentity}, adminPrinciples...)
-	allPrinciples = append(allPrinciples, aiPrinciples...)
-	if err := db.Create(&allPrinciples).Error; err != nil {
-		return fmt.Errorf("failed to create default principles: %w", err)
-	}
+    // Sync loop
+    for _, desiredP := range defaultPrinciples {
+        var existingP Principle
+        err := db.Where("slot = ?", desiredP.Slot).First(&existingP).Error
 
-	return nil
+        if err == gorm.ErrRecordNotFound {
+            // Slot doesn't exist, create it
+            if err := db.Create(&desiredP).Error; err != nil {
+                return fmt.Errorf("failed to create principle slot %d: %w", desiredP.Slot, err)
+            }
+            log.Printf("[Principles] Created slot %d", desiredP.Slot)
+        } else if err == nil {
+            // Slot exists
+            if desiredP.IsAdmin {
+                // Force update Admin slots to match code if content differs
+                if existingP.Content != desiredP.Content {
+                    if err := db.Model(&existingP).Update("content", desiredP.Content).Error; err != nil {
+                        return fmt.Errorf("failed to update admin principle slot %d: %w", desiredP.Slot, err)
+                    }
+                    log.Printf("[Principles] Updated admin slot %d to match code", desiredP.Slot)
+                }
+            }
+            // If not Admin (AI slots), do nothing to preserve evolution
+        } else {
+            return fmt.Errorf("db error checking slot %d: %w", desiredP.Slot, err)
+        }
+    }
+
+    return nil
 }
 
 // LoadPrinciples retrieves all principles from the database, ordered by slot
