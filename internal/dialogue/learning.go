@@ -112,7 +112,7 @@ CRITICAL ASSESSMENT RULES:
 3. Mistakes: If outcome=bad due to user feedback, set mistake=true.
 
 Format: (reasoning (reflection "...") (insights "...") (goals_to_create (goal (description "...") (priority 8))))
-Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))
+Example: (reasoning (reflection "Good session") (insights "Learned X") (goals_to_create (goal (description "Do Y") (priority 8))))`
 
     // CRITICAL: Load and Inject Principles for ALL reasoning steps
     // This ensures Identity, Admin Rules, and Evolved Principles are front and centre
