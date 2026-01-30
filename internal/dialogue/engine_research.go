@@ -890,11 +890,26 @@ func (e *Engine) parseAssessmentSExpr(rawResponse string) (*PlanAssessment, erro
 					}
 				}
 
-				if endIndex != -1 {
-					blocks = append(blocks, content[startIndex:endIndex])
-				}
-			}
-		}
+                if endIndex != -1 {
+                    blocks = append(blocks, content[startIndex:endIndex])
+                } else {
+                    // Attempt auto-repair for truncated responses
+                    // Check if we have an unbalanced open block
+                    depth := 0
+                    for _, r := range content[startIndex:] {
+                        if r == '(' { depth++ }
+                        if r == ')' { depth-- }
+                    }
+
+                    if depth > 0 {
+                        // Append missing closing parentheses
+                        repaired := content[startIndex:] + strings.Repeat(")", depth)
+                        blocks = append(blocks, repaired)
+                        log.Printf("[Dialogue] Auto-repaired truncated assessment block (added %d closing parens)", depth)
+                    }
+                }
+            }
+        }
 	}
 
     if len(blocks) == 0 {
