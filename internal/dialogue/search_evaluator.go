@@ -246,17 +246,21 @@ func extractListField(input, fieldName string) []string {
 				items = append(items, item)
 				pos++ // Skip closing quote
 			}
-		} else {
-			// Unquoted item (read until space or close paren)
-			start := pos
-			for pos < len(listContent) && listContent[pos] != ' ' && listContent[pos] != ')' {
-				pos++
-			}
-			item := listContent[start:pos]
-			if item != "" {
-				items = append(items, item)
-			}
-		}
+        } else {
+            // Unquoted item (read until space or close paren)
+            start := pos
+            for pos < len(listContent) && listContent[pos] != ' ' && listContent[pos] != ')' {
+                pos++
+            }
+            item := listContent[start:pos]
+            if item != "" {
+                items = append(items, item)
+            }
+            // If we encountered a delimiter immediately (e.g., stray ')'), advance to avoid infinite loop
+            if start == pos {
+                pos++
+            }
+        }
 	}
 	
 	return items
