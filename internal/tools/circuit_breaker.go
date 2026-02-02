@@ -126,7 +126,6 @@ func (cb *CircuitBreaker) beforeRequest() error {
 	}
 }
 
-Replace with:
 // afterRequest records the result and updates state
 func (cb *CircuitBreaker) afterRequest(err error) {
     cb.mu.Lock()
@@ -236,7 +235,6 @@ func (cb *CircuitBreaker) Stats() map[string]interface{} {
 	}
 }
 
-Replace with:
 // isClientError determines if an error represents a client-side 4xx error
 // or a bad request, which should not trip the circuit breaker.
 func isClientError(err error) bool {
