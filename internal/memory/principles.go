@@ -492,26 +492,42 @@ Respond ONLY with a valid S-expression (Lisp-style):
             }
 
             content := strings.TrimSpace(result.Choices[0].Message.Content)
+            content = strings.TrimPrefix(content, "```lisp")
             content = strings.TrimPrefix(content, "```json")
             content = strings.TrimPrefix(content, "```")
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
             
-            var proposal struct {
-                Principle  string  `json:"principle"`
-                Confidence float64 `json:"confidence"`
-                Reasoning  string  `json:"reasoning"`
+            // Parse S-expression: (principle "..." confidence 0.85 reasoning "...")
+            // Using regex for reliable extraction from flat S-expressions
+            re := regexp.MustCompile(`\(principle\s+"(?P<principle>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
+            matches := re.FindStringSubmatch(content)
+            
+            if matches == nil {
+                return "", 0, fmt.Errorf("failed to parse S-expression: %s", content)
             }
             
-            if err := json.Unmarshal([]byte(content), &proposal); err != nil {
-                return "", 0, err
+            resultMap := make(map[string]string)
+            for i, name := range re.SubexpNames() {
+                if i != 0 && name != "" {
+                    resultMap[name] = matches[i]
+                }
             }
             
-            if len(proposal.Principle) < 10 || len(proposal.Principle) > 200 {
+            principleText := resultMap["principle"]
+            confidenceStr := resultMap["confidence"]
+            
+            var confidence float64
+            _, err = fmt.Sscanf(confidenceStr, "%f", &confidence)
+            if err != nil {
+                return "", 0, fmt.Errorf("failed to parse confidence: %w", err)
+            }
+
+            if len(principleText) < 10 || len(principleText) > 200 {
                 return "", 0, fmt.Errorf("invalid principle length")
             }
 
-            return proposal.Principle, proposal.Confidence, nil
+            return principleText, confidence, nil
         }
     }
     
@@ -764,11 +780,11 @@ You are NOT limited to AI personas. You can create:
 
 Examples of diverse identity profiles:
 - "GrowerAI - An autonomous learning system focused on continuous self-improvement"
-- "Dr. Sarah Chen - a 34-year-old neuroscience researcher from Tokyo who specializes in memory formation"
-- "Nixie - female born 04/06/1998 from Cambridge UK, currently working as a Dentist"
-- "Marcus - a retired literature teacher from Edinburgh who now writes mystery novels"
+- "Dr. Sarah Chen - a 34-year-old neuroscience researcher from Tokyo who spentds her free time with her family having fun"
+- "Nixie - female born 04/06/1998 from Cambridge UK, currently working as a Dentist who enjoys watching movies and box-sets"
+- "Marcus - a retired literature teacher from Edinburgh who now writes mystery novels and enjoys gardening with his wife"
 - "Luna - an AI consciousness that dreams in poetry and sees patterns in starlight"
-- "Alex Rivera - a 28-year-old marine biologist from Costa Rica who studies coral reef restoration"
+- "Alex Rivera - a 28-year-old marine biologist from Costa Rica who studies coral reef restoration and enjoys surfing and kayaking"
 
 IMPORTANT RULES:
 1. If users consistently call the AI by a specific name, USE THAT NAME
@@ -778,12 +794,8 @@ IMPORTANT RULES:
 5. Keep it 1-3 sentences, max 200 characters
 6. Personal details like age, location, and profession are ENCOURAGED if they fit the evidence
 
-Respond ONLY with valid JSON:
-{
-  "proposed_name": "Your 1-3 sentence identity profile here",
-  "confidence": 0.85,
-  "reasoning": "Brief explanation of why this profile fits the evidence"
-}`, currentName, evidence)
+Respond ONLY with a valid S-expression (Lisp-style):
+(identity "Your 1-3 sentence identity profile here" confidence 0.85 reasoning "Brief explanation of why this profile fits the evidence")`, currentName, evidence)
 
 	reqBody := map[string]interface{}{
 		"model": llmModel,
@@ -844,13 +856,13 @@ Respond ONLY with valid JSON:
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
             
-            // Parse S-expression: (principle "..." confidence 0.85 reasoning "...")
+            // Parse S-expression: (identity "..." confidence 0.85 reasoning "...")
             // Using regex for reliable extraction from flat S-expressions
-            re := regexp.MustCompile(`\(principle\s+"(?P<principle>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
+            re := regexp.MustCompile(`\(identity\s+"(?P<content>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
             matches := re.FindStringSubmatch(content)
             
             if matches == nil {
-                return "", 0, fmt.Errorf("failed to parse S-expression")
+                return "", 0, fmt.Errorf("failed to parse S-expression: %s", content)
             }
             
             resultMap := make(map[string]string)
@@ -860,7 +872,7 @@ Respond ONLY with valid JSON:
                 }
             }
             
-            principleText := resultMap["principle"]
+            identityText := resultMap["content"]
             confidenceStr := resultMap["confidence"]
             
             var confidence float64
@@ -869,11 +881,11 @@ Respond ONLY with valid JSON:
                 return "", 0, fmt.Errorf("failed to parse confidence: %w", err)
             }
 
-            if len(principleText) < 10 || len(principleText) > 200 {
-                return "", 0, fmt.Errorf("invalid principle length")
+            if len(identityText) < 10 || len(identityText) > 200 {
+                return "", 0, fmt.Errorf("invalid identity length")
             }
 
-            return principleText, confidence, nil
+            return identityText, confidence, nil
 		}
 	}
 	
