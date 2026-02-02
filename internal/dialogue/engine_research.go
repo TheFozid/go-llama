@@ -95,6 +95,10 @@ Respond with S-expression:
         content = strings.TrimSpace(content)
     }
 
+    // NEW: Strip common LLM reasoning wrappers (DeepSeek R1, etc.)
+    // These often appear as (reasoning "..." (target ...)) or <think>...</think>
+    content = cleanLLMWrappers(content)
+
 	// IMPROVED PARSING: Use recursive search first (most robust)
 
 	// Strategy 1: Recursive search (handles nested structures like (reasoning (research_plan ...)))
@@ -1658,4 +1662,62 @@ func (e *Engine) parseChunkSelectionSExpr(rawResponse string) ([]int, string, er
 	}
 
 	return indices, reasoning, nil
+}
+
+// cleanLLMWrappers removes outer reasoning blocks or XML tags that obscure the S-expression
+func cleanLLMWrappers(content string) string {
+    content = strings.TrimSpace(content)
+
+    // 1. Remove XML-style thinking tags (e.g., <think>...</think>)
+    if startIdx := strings.Index(content, "<think>"); startIdx != -1 {
+        if endIdx := strings.Index(content, "</think>"); endIdx != -1 && endIdx > startIdx {
+            // Keep content after the closing tag
+            afterThink := strings.TrimSpace(content[endIdx+len("</think>"):])
+            if len(afterThink) > 0 {
+                return afterThink
+            }
+            // If nothing after, maybe the content is inside? (Unlikely for this structure, but safe to handle)
+            inner := strings.TrimSpace(content[startIdx+len("<think>") : endIdx])
+            return inner
+        }
+    }
+
+    // 2. Remove S-expression reasoning wrapper (e.g., (reasoning "...target..." ) or (reasoning (target ...)) )
+    // Strategy: If content starts with (reasoning and has balanced parens, extract the meaningful part.
+    // This is tricky because we don't know if the payload is the first child or the last child.
+    // Common pattern A: (reasoning "explanation" (research_plan ...))
+    // Common pattern B: (reasoning (research_plan ...))
+    
+    if strings.HasPrefix(content, "(reasoning") {
+        // We need to parse to find the top-level list items.
+        // A simple heuristic: find the FIRST occurrence of a known top-level keyword like (research_plan or (assessment.
+        // If found, return everything from that keyword to the end.
+        
+        knownRoots := []string{"(research_plan", "(assessment", "(goal_support_validation", "(chunk_selection_plan"}
+        earliestIdx := -1
+        
+        for _, root := range knownRoots {
+            if idx := strings.Index(content, root); idx != -1 {
+                if earliestIdx == -1 || idx < earliestIdx {
+                    earliestIdx = idx
+                }
+            }
+        }
+        
+        if earliestIdx != -1 {
+            return strings.TrimSpace(content[earliestIdx:])
+        }
+        
+        // If no known root found, we try to strip the outer (reasoning ...) wrapper manually.
+        // We look for the matching closing parenthesis of the (reasoning ... ) block?
+        // No, reasoning usually wraps the *whole* response. 
+        // If we can't find a known root, we might have to return content as is, or try to strip the first atom.
+        // Let's try to strip the first S-expression atom if it's "reasoning".
+        // content looks like: (reasoning "text" (actual data))
+        // We want to skip the first atom.
+        
+        // This is risky without a full parser. Let's stick to the known-root extraction above.
+    }
+
+    return content
 }

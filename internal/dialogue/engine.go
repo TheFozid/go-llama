@@ -180,13 +180,22 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
                 if e.adaptiveConfig != nil {
                     baseTimeout = time.Duration(e.adaptiveConfig.toolTimeout) * time.Second
                 }
-                timeout := baseTimeout
 
-                // Web parsing can take significantly longer due to LLM processing
+                // Web parsing can take significantly longer due to LLM processing + Network I/O
                 if action.Tool == ActionToolWebParseContextual ||
                     action.Tool == ActionToolWebParseGeneral ||
                     action.Tool == ActionToolWebParseChunked {
-                    timeout = baseTimeout * 3 / 2 // 1.5x multiplier for parse actions
+                    // Enforce a minimum of 5 minutes for network+llm actions, 
+                    // or use the adaptive timeout * 2 if it's higher.
+                    minWebTimeout := 5 * time.Minute
+                    calculatedTimeout := baseTimeout * 2
+                    if calculatedTimeout < minWebTimeout {
+                        timeout = minWebTimeout
+                    } else {
+                        timeout = calculatedTimeout
+                    }
+                } else {
+                    timeout = baseTimeout
                 }
 
                 if age > timeout {
