@@ -244,11 +244,28 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		return StopReasonMaxThoughts, nil
 	}
 
-	// PHASE 2: Reasoning-Driven Goal Management
-	err = e.runPhaseGoalManagement(ctx, state, reasoning, principles, metrics, &totalTokens)
-	if err != nil {
-		return StopReasonNaturalStop, err
-	}
+    // PHASE 2: Reasoning-Driven Goal Management
+
+    // LIFECYCLE GATEKEEPER: Check if we have capacity for NEW goals before generating them.
+    // We only count "Locked" goals (in-progress) against the limit.
+    lockedCount := 0
+    for _, g := range state.ActiveGoals {
+        // A goal is locked if it has progress, has actions, or has been pursued recently
+        isLocked := (g.Progress > 0.0 || len(g.Actions) > 0 || !g.LastPursued.IsZero()) && g.Status == GoalStatusActive
+        if isLocked {
+            lockedCount++
+        }
+    }
+
+    MAX_ACTIVE_GOALS := 5 // Define limit
+    if lockedCount >= MAX_ACTIVE_GOALS {
+        log.Printf("[Dialogue] Skipping Phase 2: Goal queue full with %d locked/in-progress goals.", lockedCount)
+    } else {
+        err = e.runPhaseGoalManagement(ctx, state, reasoning, principles, metrics, &totalTokens)
+        if err != nil {
+            return StopReasonNaturalStop, err
+        }
+    }
 
 	// PHASE 3: Goal Pursuit (if we have active goals)
 	if len(state.ActiveGoals) > 0 {
@@ -1341,57 +1358,70 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		}
 	}
 
-	// Limit active goals to top 5 by priority
-	// BUT: Don't prune goals created in the last 30 minutes (give them a chance)
-	if len(activeGoals) > 5 {
-		sortedGoals := sortGoalsByPriority(activeGoals)
+    // LIMIT ACTIVE GOALS: Strict separation of "Locked" (In-Progress) and "Queued" (Waiting)
+    // Logic: Locked goals are immune to pruning. Queued goals fill remaining slots.
+    if len(activeGoals) > MAX_ACTIVE_GOALS {
+        lockedGoals := []Goal{}
+        queuedGoals := []Goal{}
 
-		// Separate new vs old goals
-		newGoals := []Goal{}
-		oldGoals := []Goal{}
-		for _, goal := range sortedGoals {
-			if currentTime.Sub(goal.Created) < 30*time.Minute {
-				newGoals = append(newGoals, goal)
-			} else {
-				oldGoals = append(oldGoals, goal)
-			}
-		}
+        // 1. Separate Locked vs Queued
+        for _, g := range activeGoals {
+            // Definition of Locked: Progress made OR Actions planned OR Recently Pursued
+            isLocked := (g.Progress > 0.0 || len(g.Actions) > 0 || !g.LastPursued.IsZero()) && g.Status == GoalStatusActive
 
-		log.Printf("[Dialogue] Goal counts: %d total (%d new, %d old)", len(sortedGoals), len(newGoals), len(oldGoals))
+            if isLocked {
+                lockedGoals = append(lockedGoals, g)
+            } else {
+                queuedGoals = append(queuedGoals, g)
+            }
+        }
 
-		// Keep all new goals + top old goals up to limit of 5
-		activeGoals = newGoals
-		remainingSlots := 5 - len(newGoals)
+        log.Printf("[Dialogue] Goal Separation: %d locked (immune), %d queued (prunable)", len(lockedGoals), len(queuedGoals))
 
-		if remainingSlots > 0 && len(oldGoals) > 0 {
-			// Keep top N old goals
-			if len(oldGoals) > remainingSlots {
-				activeGoals = append(activeGoals, oldGoals[:remainingSlots]...)
-				// Abandon the rest
-				for i := remainingSlots; i < len(oldGoals); i++ {
-					oldGoals[i].Status = GoalStatusAbandoned
-					oldGoals[i].Outcome = "neutral"
-					state.CompletedGoals = append(state.CompletedGoals, oldGoals[i])
-					abandonedCount++
-				}
-				log.Printf("[Dialogue] Pruned %d low-priority old goals (kept %d new + %d old)",
-					len(oldGoals)-remainingSlots, len(newGoals), remainingSlots)
-			} else {
-				activeGoals = append(activeGoals, oldGoals...)
-			}
-		} else if remainingSlots <= 0 {
-			// All 5 slots taken by new goals, abandon all old goals
-			for i := range oldGoals {
-				oldGoals[i].Status = GoalStatusAbandoned
-				oldGoals[i].Outcome = "neutral"
-				state.CompletedGoals = append(state.CompletedGoals, oldGoals[i])
-				abandonedCount++
-			}
-			if len(oldGoals) > 0 {
-				log.Printf("[Dialogue] Abandoned %d old goals (all slots taken by new goals)", len(oldGoals))
-			}
-		}
-	}
+        // 2. Locked goals are protected. They persist until completion/failure.
+        // We allow a soft overflow to ensure started work finishes.
+        if len(lockedGoals) > MAX_ACTIVE_GOALS {
+            log.Printf("[Dialogue] WARNING: Goal Overflow: %d locked goals exceed max %d. Allowing execution.", len(lockedGoals), MAX_ACTIVE_GOALS)
+        }
+
+        // 3. Manage Queued Goals (Prunable)
+        remainingSlots := MAX_ACTIVE_GOALS - len(lockedGoals)
+        if remainingSlots > 0 {
+            // Sort queued goals by priority to keep the best ones
+            sortedQueued := sortGoalsByPriority(queuedGoals)
+
+            if len(sortedQueued) > remainingSlots {
+                // Prune lowest priority queued goals
+                prunedCount := len(sortedQueued) - remainingSlots
+                for i := remainingSlots; i < len(sortedQueued); i++ {
+                    sortedQueued[i].Status = GoalStatusAbandoned
+                    sortedQueued[i].Outcome = "neutral"
+                    state.CompletedGoals = append(state.CompletedGoals, sortedQueued[i])
+                    abandonedCount++
+                }
+                log.Printf("[Dialogue] Pruned %d queued goals (slots available: %d)", prunedCount, remainingSlots)
+                queuedGoals = sortedQueued[:remainingSlots]
+            } else {
+                // All queued goals fit
+                queuedGoals = sortedQueued
+            }
+        } else {
+            // No room for queued goals - abandon all of them
+            for i := range queuedGoals {
+                queuedGoals[i].Status = GoalStatusAbandoned
+                queuedGoals[i].Outcome = "neutral"
+                state.CompletedGoals = append(state.CompletedGoals, queuedGoals[i])
+                abandonedCount++
+            }
+            if len(queuedGoals) > 0 {
+                log.Printf("[Dialogue] Abandoned %d queued goals (no slots available)", len(queuedGoals))
+            }
+            queuedGoals = []Goal{}
+        }
+
+        // 4. Reconstruct ActiveGoals list (Locked + Remaining Queued)
+        activeGoals = append(lockedGoals, queuedGoals...)
+    }
 
 	state.ActiveGoals = activeGoals
 
