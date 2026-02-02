@@ -52,11 +52,45 @@ func (e *Engine) evaluateSearchResults(ctx context.Context, searchOutput string,
 		}, nil
 	}
 	
-	log.Printf("[SearchEval] Selected: %s (confidence: %.2f)", 
-		truncate(evaluation.BestURL, 60), evaluation.Confidence)
-	log.Printf("[SearchEval] Reasoning: %s", truncate(evaluation.Reasoning, 100))
-	
-	return evaluation, nil
+    log.Printf("[SearchEval] Selected: %s (confidence: %.2f)", 
+        truncate(evaluation.BestURL, 60), evaluation.Confidence)
+    log.Printf("[SearchEval] Reasoning: %s", truncate(evaluation.Reasoning, 100))
+
+    // POST-PROCESSING: Recover full URLs from original list if LLM truncated them
+    // LLMs often truncate long URLs in responses with "..."
+    
+    // Helper to find full URL by prefix
+    findFullURL := func(shortURL string, candidates []string) string {
+        if shortURL == "" || len(candidates) == 0 {
+            return shortURL
+        }
+        // If no truncation marker, assume it's fine (basic check)
+        if !strings.Contains(shortURL, "...") {
+            return shortURL
+        }
+        
+        // Try to find a candidate that starts with the short URL (minus the ellipsis)
+        prefix := strings.TrimSuffix(shortURL, "...")
+        for _, candidate := range candidates {
+            if strings.HasPrefix(candidate, prefix) {
+                log.Printf("[SearchEval] Recovered full URL from truncation: %s", truncate(candidate, 80))
+                return candidate
+            }
+        }
+        return shortURL
+    }
+
+    // Recover BestURL
+    evaluation.BestURL = findFullURL(evaluation.BestURL, urls)
+
+    // Recover FallbackURLs
+    var recoveredFallbacks []string
+    for _, fallback := range evaluation.FallbackURLs {
+        recoveredFallbacks = append(recoveredFallbacks, findFullURL(fallback, urls))
+    }
+    evaluation.FallbackURLs = recoveredFallbacks
+    
+    return evaluation, nil
 }
 
 // buildSearchEvaluationPrompt creates the LLM prompt for search evaluation
