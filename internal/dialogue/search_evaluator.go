@@ -138,12 +138,12 @@ func (e *Engine) parseSearchEvaluation(rawResponse string) (*SearchEvaluation, e
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 	
-	// Find search_evaluation block
-	evalBlocks := findBlocks(content, "search_evaluation")
-	if len(evalBlocks) == 0 {
-		// Try without underscore (search-evaluation)
-		evalBlocks = findBlocks(content, "search-evaluation")
-	}
+    // Find search_evaluation block (using recursive search to handle nested structures)
+    evalBlocks := findBlocksRecursive(content, "search_evaluation")
+    if len(evalBlocks) == 0 {
+        // Try without underscore (search-evaluation)
+        evalBlocks = findBlocksRecursive(content, "search-evaluation")
+    }
 	
 	if len(evalBlocks) == 0 {
 		return nil, fmt.Errorf("no search_evaluation block found")
