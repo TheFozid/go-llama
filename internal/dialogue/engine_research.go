@@ -50,17 +50,50 @@ Respond with S-expression:
 		return nil, tokens, fmt.Errorf("failed to generate research plan: %w", err)
 	}
 
-	content := response.RawResponse
+    content := response.RawResponse
 
-	// DEBUG LOGGING: Always log what we received
-	log.Printf("[Dialogue] Research plan response length: %d chars", len(content))
-	log.Printf("[Dialogue] Research plan response (first 300 chars): %s", truncateResponse(content, 300))
+    // DEBUG LOGGING: Always log what we received
+    log.Printf("[Dialogue] Research plan response length: %d chars", len(content))
+    log.Printf("[Dialogue] Research plan response (first 300 chars): %s", truncateResponse(content, 300))
 
-	// Clean up markdown fences
-	content = strings.TrimPrefix(content, "```lisp")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
+    // Clean up markdown fences
+    // Robust extraction: Find content between ``` and ``` regardless of leading/trailing text
+    if startIdx := strings.Index(content, "```"); startIdx != -1 {
+        // Move index past the opening ```
+        innerStart := startIdx + 3
+        
+        // Find the closing fence
+        if endIdx := strings.Index(content[innerStart:], "```"); endIdx != -1 {
+            // Extract content between fences
+            rawBlock := content[innerStart : innerStart+endIdx]
+            
+            // Remove language identifier (e.g. "lisp", "json", "scheme") if present on the first line
+            // We check if the first line contains a space or parenthesis. If not, it's likely a language tag.
+            lines := strings.SplitN(rawBlock, "\n", 2)
+            if len(lines) > 0 {
+                firstLine := strings.TrimSpace(lines[0])
+                // If first line looks like a single word (no spaces/parens), assume it's a language tag
+                if !strings.Contains(firstLine, " ") && !strings.Contains(firstLine, "(") && !strings.Contains(firstLine, ")") {
+                    if len(lines) > 1 {
+                        content = strings.TrimSpace(lines[1])
+                    } else {
+                        content = "" // Block contained only a language tag
+                    }
+                } else {
+                    content = strings.TrimSpace(rawBlock)
+                }
+            } else {
+                content = strings.TrimSpace(rawBlock)
+            }
+        } else {
+            // Malformed: Opening fence found, but no closing fence. 
+            // Fallback to taking everything after the opening fence.
+            content = strings.TrimSpace(content[innerStart:])
+        }
+    } else {
+        // No markdown fences found, trim whitespace only
+        content = strings.TrimSpace(content)
+    }
 
 	// IMPROVED PARSING: Use recursive search first (most robust)
 
