@@ -328,7 +328,7 @@ body {
   max-height: 200px;
   resize: none;
   overflow-y: auto;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-lg);
   background: #2a2f37;
   color: var(--text-main);
   border: 1px solid var(--border-subtle);
