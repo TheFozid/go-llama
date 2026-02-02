@@ -70,17 +70,37 @@ func (t *WebParserGeneralTool) Execute(ctx context.Context, params map[string]in
 		}, fmt.Errorf("missing url parameter")
 	}
 
-	// Validate URL
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return &ToolResult{
-			Success:  false,
-			Error:    "URL must start with http:// or https://",
-			Duration: time.Since(startTime),
-		}, fmt.Errorf("invalid URL scheme")
-	}
+    // Validate URL
+    if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+        return &ToolResult{
+            Success:  false,
+            Error:    "URL must start with http:// or https://",
+            Duration: time.Since(startTime),
+        }, fmt.Errorf("invalid URL scheme")
+    }
 
-	// Fetch and parse page
-	content, err := t.client.FetchAndParse(ctx, url)
+    // Check for known problematic URL patterns
+    urlLower := strings.ToLower(url)
+    if strings.HasSuffix(urlLower, ".pdf") {
+        return &ToolResult{
+            Success:  false,
+            Error:    "Cannot parse PDF files - please search for HTML content instead",
+            Duration: time.Since(startTime),
+        }, fmt.Errorf("PDF files not supported")
+    }
+
+    if strings.Contains(urlLower, "/login") ||
+       strings.Contains(urlLower, "/signin") ||
+       strings.Contains(urlLower, "/subscribe") {
+        return &ToolResult{
+            Success:  false,
+            Error:    "URL appears to require authentication - skipping",
+            Duration: time.Since(startTime),
+        }, fmt.Errorf("authentication required")
+    }
+
+    // Fetch and parse page
+    content, err := t.client.FetchAndParse(ctx, url)
 	if err != nil {
 		return &ToolResult{
 			Success:  false,
