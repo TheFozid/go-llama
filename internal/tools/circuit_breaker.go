@@ -3,6 +3,7 @@ package tools
 import (
 	"errors"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -125,60 +126,68 @@ func (cb *CircuitBreaker) beforeRequest() error {
 	}
 }
 
+Replace with:
 // afterRequest records the result and updates state
 func (cb *CircuitBreaker) afterRequest(err error) {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-	
-	if err != nil {
-		// Request failed
-		cb.totalFailures++
-		cb.failureCount++
-		cb.consecutiveSuccesses = 0
-		cb.lastFailureTime = time.Now()
-		
-		switch cb.state {
-		case StateClosed:
-			// Check if we should open
-			if cb.failureCount >= cb.failureThreshold {
-				cb.setState(StateOpen)
-				log.Printf("[CircuitBreaker] State: CLOSED → OPEN (%d consecutive failures, threshold=%d)",
-					cb.failureCount, cb.failureThreshold)
-			}
-			
-		case StateHalfOpen:
-			// Failed during testing, go back to open
-			cb.setState(StateOpen)
-			log.Printf("[CircuitBreaker] State: HALF-OPEN → OPEN (test request failed)")
-		}
-		
-	} else {
-		// Request succeeded
-		cb.totalSuccesses++
-		cb.successCount++
-		cb.consecutiveSuccesses++
-		
-		switch cb.state {
-		case StateClosed:
-			// Reset failure count on success
-			if cb.failureCount > 0 {
-				log.Printf("[CircuitBreaker] Success after %d failures, resetting counter", cb.failureCount)
-				cb.failureCount = 0
-			}
-			
-		case StateHalfOpen:
-			// Check if we should close
-			if cb.consecutiveSuccesses >= cb.successThreshold {
-				cb.setState(StateClosed)
-				cb.failureCount = 0
-				log.Printf("[CircuitBreaker] State: HALF-OPEN → CLOSED (%d consecutive successes, service recovered)",
-					cb.consecutiveSuccesses)
-			} else {
-				log.Printf("[CircuitBreaker] Half-open test succeeded (%d/%d)", 
-					cb.consecutiveSuccesses, cb.successThreshold)
-			}
-		}
-	}
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+    
+    if err != nil {
+        // Request failed
+        cb.totalFailures++
+        
+        // Check if this is a client error (4xx) that should not trip the circuit
+        if isClientError(err) {
+            log.Printf("[CircuitBreaker] Ignoring client error (4xx) for circuit breaker logic: %v", err)
+            return
+        }
+        
+        cb.failureCount++
+        cb.consecutiveSuccesses = 0
+        cb.lastFailureTime = time.Now()
+        
+        switch cb.state {
+        case StateClosed:
+            // Check if we should open
+            if cb.failureCount >= cb.failureThreshold {
+                cb.setState(StateOpen)
+                log.Printf("[CircuitBreaker] State: CLOSED → OPEN (%d consecutive failures, threshold=%d)",
+                    cb.failureCount, cb.failureThreshold)
+            }
+            
+        case StateHalfOpen:
+            // Failed during testing, go back to open
+            cb.setState(StateOpen)
+            log.Printf("[CircuitBreaker] State: HALF-OPEN → OPEN (test request failed)")
+        }
+        
+    } else {
+        // Request succeeded
+        cb.totalSuccesses++
+        cb.successCount++
+        cb.consecutiveSuccesses++
+        
+        switch cb.state {
+        case StateClosed:
+            // Reset failure count on success
+            if cb.failureCount > 0 {
+                log.Printf("[CircuitBreaker] Success after %d failures, resetting counter", cb.failureCount)
+                cb.failureCount = 0
+            }
+            
+        case StateHalfOpen:
+            // Check if we should close
+            if cb.consecutiveSuccesses >= cb.successThreshold {
+                cb.setState(StateClosed)
+                cb.failureCount = 0
+                log.Printf("[CircuitBreaker] State: HALF-OPEN → CLOSED (%d consecutive successes, service recovered)",
+                    cb.consecutiveSuccesses)
+            } else {
+                log.Printf("[CircuitBreaker] Half-open test succeeded (%d/%d)", 
+                    cb.consecutiveSuccesses, cb.successThreshold)
+            }
+        }
+    }
 }
 
 // setState changes the circuit breaker state
@@ -225,6 +234,24 @@ func (cb *CircuitBreaker) Stats() map[string]interface{} {
 		"consecutive_successes": cb.consecutiveSuccesses,
 		"time_in_state":        time.Since(cb.lastStateChange).String(),
 	}
+}
+
+Replace with:
+// isClientError determines if an error represents a client-side 4xx error
+// or a bad request, which should not trip the circuit breaker.
+func isClientError(err error) bool {
+    if err == nil {
+        return false
+    }
+    errStr := strings.ToLower(err.Error())
+    // Common patterns for HTTP 4xx errors and bad inputs
+    return strings.Contains(errStr, "http 40") || 
+           strings.Contains(errStr, "403 forbidden") || 
+           strings.Contains(errStr, "404 not found") || 
+           strings.Contains(errStr, "400 bad request") || 
+           strings.Contains(errStr, "401 unauthorized") || 
+           strings.Contains(errStr, "missing query") || 
+           strings.Contains(errStr, "bad request")
 }
 
 // LogStats logs current statistics
