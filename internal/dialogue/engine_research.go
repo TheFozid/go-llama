@@ -381,13 +381,29 @@ func (e *Engine) executeAction(ctx context.Context, action *Action) (string, err
 
 	// Map action tool to actual tool execution
 	switch action.Tool {
-	case ActionToolSearch:
-		// Extract search query from action description
-		params := map[string]interface{}{
-			"query": action.Description,
-		}
+    case ActionToolSearch:
+        // Extract search query from action description
+        query := action.Description
 
-		log.Printf("[Dialogue] Calling search tool with query: %s", truncate(action.Description, 80))
+        // FALLBACK: If description is empty, try to extract from metadata (research_question_text)
+        // This handles cases where the LLM omitted the search_query field in the plan
+        if query == "" && action.Metadata != nil {
+            if qText, ok := action.Metadata["question_text"].(string); ok && qText != "" {
+                query = qText
+                log.Printf("[Dialogue] Query was empty, using question text from metadata: %s", truncate(query, 80))
+            }
+        }
+
+        // FINAL FALLBACK: If still empty, generate a generic error
+        if query == "" {
+            return "", fmt.Errorf("search query is empty and no fallback found in metadata")
+        }
+
+        params := map[string]interface{}{
+            "query": query,
+        }
+
+        log.Printf("[Dialogue] Calling search tool with query: %s", truncate(query, 80))
 		result, err := e.toolRegistry.ExecuteIdle(ctx, tools.ToolNameSearch, params)
 
 		elapsed := time.Since(startTime)
