@@ -175,11 +175,14 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
             if action.Status == ActionStatusInProgress {
                 age := now.Sub(action.Timestamp)
 
-                // Use adaptive timeout calculated by the system, with 1.5x multiplier for LLM parsing
+                // Use adaptive timeout calculated by the system
                 baseTimeout := 10 * time.Minute // Fallback if adaptive config is nil/unavailable
                 if e.adaptiveConfig != nil {
                     baseTimeout = time.Duration(e.adaptiveConfig.toolTimeout) * time.Second
                 }
+                
+                // Initialize timeout variable in the correct scope
+                var timeout time.Duration
 
                 // Web parsing can take significantly longer due to LLM processing + Network I/O
                 if action.Tool == ActionToolWebParseContextual ||
