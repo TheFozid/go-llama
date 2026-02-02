@@ -150,7 +150,6 @@ func findBlocks(input, blockName string) []string {
 
         // Check if this parenthesis is followed by any of our target block names
         matched := false
-        consumedLen := 0
 
         // Look at characters immediately following '('
         contentStart := openPos + 1
@@ -164,7 +163,6 @@ func findBlocks(input, blockName string) []string {
             for _, variant := range variants {
                 if strings.HasPrefix(input[contentStart+offset:], variant) {
                     matched = true
-                    consumedLen = offset + len(variant)
                     break
                 }
             }

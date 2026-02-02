@@ -95,9 +95,9 @@ Respond with S-expression:
         
         if openCount > 0 && openCount == closeCount {
             // Try to tokenize the whole content as a generic list
-            tokens := tokenize(content)
-            if len(tokens) > 0 {
-                root, _, parseErr := parseExpr(tokens, 0)
+            parseTokens := tokenize(content) // Renamed to avoid shadowing 'tokens' (int) from outer scope
+            if len(parseTokens) > 0 {
+                root, _, parseErr := parseExpr(parseTokens, 0)
                 if parseErr == nil && !root.isAtom && len(root.list) > 0 {
                     // Assume the first string is the root question, and sub-lists are questions
                     heuristicPlan := &ResearchPlan{
