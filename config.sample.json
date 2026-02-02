@@ -138,7 +138,7 @@
         "enabled": true,
         "max_page_size_mb": 10,
         "timeout": 120,
-        "user_agent": "GrowerAI/1.0",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "chunk_size": 2000
       },
       "sandbox": {

@@ -113,67 +113,68 @@ func (e *Engine) evaluateParseResults(
 
 // buildParseEvaluationPrompt creates the LLM prompt for parse evaluation
 func (e *Engine) buildParseEvaluationPrompt(
-	parseOutput string,
-	goalDescription string,
-	parsedURL string,
-	fallbackURLs []string,
+    parseOutput string,
+    goalDescription string,
+    parsedURL string,
+    fallbackURLs []string,
 ) string {
-	var prompt strings.Builder
-	
-	prompt.WriteString("Evaluate if this parsed web content helps achieve the goal.\n\n")
-	
-	prompt.WriteString(fmt.Sprintf("GOAL: %s\n\n", goalDescription))
-	
-	prompt.WriteString(fmt.Sprintf("PARSED URL: %s\n\n", parsedURL))
-	
-	prompt.WriteString("PARSED CONTENT:\n")
-	// Limit content to avoid token overflow (keep first 2000 chars)
-	content := parseOutput
-	if len(content) > 2000 {
-		content = content[:2000] + "... [truncated]"
-	}
-	prompt.WriteString(content)
-	prompt.WriteString("\n\n")
-	
-	if len(fallbackURLs) > 0 {
-		prompt.WriteString(fmt.Sprintf("FALLBACK URLs AVAILABLE: %d alternatives\n\n", len(fallbackURLs)))
-	}
-	
-	prompt.WriteString("EVALUATION CRITERIA:\n")
-	prompt.WriteString("1. Does content directly address the goal?\n")
-	prompt.WriteString("2. Is information specific and actionable?\n")
-	prompt.WriteString("3. Is content substantive (not just metadata/headers)?\n")
-	prompt.WriteString("4. Does it provide NEW information (not already known)?\n\n")
-	
-	prompt.WriteString("CRITICAL: Respond ONLY with this S-expression format:\n\n")
-	prompt.WriteString("(parse_evaluation\n")
-	prompt.WriteString("  (quality \"sufficient\")  ; \"sufficient\" | \"try_fallback\" | \"parse_deeper\" | \"completely_failed\"\n")
-	prompt.WriteString("  (reasoning \"Specific explanation of quality rating\")\n")
-	prompt.WriteString("  (confidence 0.85)  ; 0.0-1.0 confidence\n")
-	prompt.WriteString("  (missing_info \"What's missing\" \"Other gaps\")  ; List of gaps, empty () if sufficient\n")
-	prompt.WriteString("  (next_action \"continue\")  ; \"continue\" | \"try_fallback\" | \"parse_deeper\" | \"abandon\"\n")
-	prompt.WriteString("  (should_continue true)  ; false only if goal should be abandoned\n")
-	prompt.WriteString("  (useful_content \"Brief summary of useful parts\"))  ; 1-2 sentences\n\n")
-	
-	prompt.WriteString("QUALITY RATINGS:\n")
-	prompt.WriteString("- \"sufficient\": Content directly helps goal, continue to next step\n")
-	prompt.WriteString("- \"try_fallback\": Content weak/irrelevant, try alternative URL if available\n")
-	prompt.WriteString("- \"parse_deeper\": Content exists but extraction incomplete, use chunked parsing\n")
-	prompt.WriteString("- \"completely_failed\": No useful content, likely paywall/error page\n\n")
-	
-	prompt.WriteString("NEXT_ACTION GUIDELINES:\n")
-	prompt.WriteString("- \"continue\": Content is good enough, move on\n")
-	prompt.WriteString("- \"try_fallback\": Try next URL from fallback list\n")
-	prompt.WriteString("- \"parse_deeper\": Use chunked parser on same URL\n")
-	prompt.WriteString("- \"abandon\": Give up on this goal (only if completely stuck)\n\n")
-	
-	prompt.WriteString("RULES:\n")
-	prompt.WriteString("- Output ONLY the S-expression, no markdown or explanations\n")
-	prompt.WriteString("- Be strict: rate \"sufficient\" only if content CLEARLY helps the goal\n")
-	prompt.WriteString("- If content is vague/generic, rate \"try_fallback\" to find better sources\n")
-	prompt.WriteString("- Set should_continue=false only if goal is impossible/nonsensical\n")
-	
-	return prompt.String()
+    var prompt strings.Builder
+    
+    // 1. FORMAT INSTRUCTIONS & PRIMING (Moved to top for better compliance)
+    prompt.WriteString("You are an evaluation engine. You must assess if provided content achieves a specific goal.\n\n")
+    
+    prompt.WriteString("OUTPUT REQUIREMENT:\n")
+    prompt.WriteString("You MUST respond with ONLY a valid S-expression. Do not include markdown, conversational text, or explanations.\n\n")
+    
+    prompt.WriteString("EXAMPLE OUTPUT 1 (Good content):\n")
+    prompt.WriteString("(parse_evaluation\n")
+    prompt.WriteString("  (quality \"sufficient\")\n")
+    prompt.WriteString("  (reasoning \"Content contains specific data points requested.\")\n")
+    prompt.WriteString("  (confidence 0.9)\n")
+    prompt.WriteString("  (missing_info)\n") // Explicitly showing empty list
+    prompt.WriteString("  (next_action \"continue\")\n")
+    prompt.WriteString("  (should_continue true)\n")
+    prompt.WriteString("  (useful_content \"Found the required API endpoints.\"))\n\n")
+    
+    prompt.WriteString("EXAMPLE OUTPUT 2 (Missing info):\n")
+    prompt.WriteString("(parse_evaluation\n")
+    prompt.WriteString("  (quality \"try_fallback\")\n")
+    prompt.WriteString("  (reasoning \"Page is a login gate, no data accessible.\")\n")
+    prompt.WriteString("  (confidence 0.95)\n")
+    prompt.WriteString("  (missing_info \"accessible data\" \"public statistics\")\n")
+    prompt.WriteString("  (next_action \"try_fallback\")\n")
+    prompt.WriteString("  (should_continue true)\n")
+    prompt.WriteString("  (useful_content \"\"))\n\n")
+    
+    // 2. TASK CONTEXT
+    prompt.WriteString(fmt.Sprintf("GOAL: %s\n", goalDescription))
+    prompt.WriteString(fmt.Sprintf("SOURCE URL: %s\n", parsedURL))
+    
+    if len(fallbackURLs) > 0 {
+        prompt.WriteString(fmt.Sprintf("FALLBACK AVAILABLE: Yes (%d URLs)\n", len(fallbackURLs)))
+    } else {
+        prompt.WriteString("FALLBACK AVAILABLE: No\n")
+    }
+    prompt.WriteString("\n")
+    
+    // 3. INPUT DATA
+    prompt.WriteString("PARSED CONTENT TO EVALUATE:\n")
+    // Limit content to avoid token overflow (keep first 2000 chars)
+    content := parseOutput
+    if len(content) > 2000 {
+        content = content[:2000] + "... [truncated]"
+    }
+    prompt.WriteString(content)
+    prompt.WriteString("\n\n")
+    
+    // 4. CRITERIA
+    prompt.WriteString("EVALUATION CRITERIA:\n")
+    prompt.WriteString("- quality: \"sufficient\" (helpful), \"try_fallback\" (weak/blocked), \"parse_deeper\" (needs chunking), \"completely_failed\" (error).\n")
+    prompt.WriteString("- missing_info: Use empty list () if nothing is missing. Otherwise list gaps.\n")
+    prompt.WriteString("- next_action: Choose based on quality. Use \"try_fallback\" only if fallback is available.\n")
+    prompt.WriteString("- useful_content: Brief summary if quality > 0, otherwise empty string.\n")
+    
+    return prompt.String()
 }
 
 // parseParseEvaluation extracts evaluation from S-expression response
