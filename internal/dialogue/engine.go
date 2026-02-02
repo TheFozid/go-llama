@@ -1301,13 +1301,12 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		}
 	}
 
-	// PHASE 5: Cleanup (move completed/abandoned goals and limit active goals)
-	completedCount := 0
-	abandonedCount := 0
-	activeGoals := []Goal{}
-	currentTime := time.Now()
+    // PHASE 5: Cleanup (move completed/abandoned goals and limit active goals)
+    completedCount := 0
+    abandonedCount := 0
+    activeGoals := []Goal{}
 
-	for _, goal := range state.ActiveGoals {
+    for _, goal := range state.ActiveGoals {
 		if goal.Status == GoalStatusCompleted {
 			state.CompletedGoals = append(state.CompletedGoals, goal)
 			completedCount++
