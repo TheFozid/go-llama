@@ -73,19 +73,90 @@ Respond with S-expression:
 		planBlocks = findBlocks(content, "research_plan")
 	}
 
-	// Strategy 3: Regex fallback (handles malformed S-expressions)
-	if len(planBlocks) == 0 {
-		log.Printf("[Dialogue] Structured parsing failed, attempting regex extraction...")
-		plan, err := extractResearchPlanFromMalformed(content)
-		if err == nil && plan != nil {
-			log.Printf("[Dialogue] ✓ Extracted research plan via regex fallback (%d questions)", len(plan.SubQuestions))
-			return plan, tokens, nil
-		}
-		log.Printf("[Dialogue] Regex extraction also failed: %v", err)
-	}
+    // Strategy 3: Regex fallback (handles malformed S-expressions)
+    if len(planBlocks) == 0 {
+        log.Printf("[Dialogue] Structured parsing failed, attempting regex extraction...")
+        plan, err := extractResearchPlanFromMalformed(content)
+        if err == nil && plan != nil {
+            log.Printf("[Dialogue] ✓ Extracted research plan via regex fallback (%d questions)", len(plan.SubQuestions))
+            return plan, tokens, nil
+        }
+        log.Printf("[Dialogue] Regex extraction also failed: %v", err)
+    }
 
-	// If all strategies failed, provide detailed error
-	if len(planBlocks) == 0 {
+    // STRATEGY 4: Heuristic Fallback (Last Ditch Effort)
+    // If we have balanced parens but no recognizable tags, try to interpret the root list as the plan
+    if len(planBlocks) == 0 {
+        log.Printf("[Dialogue] Attempting heuristic parsing of root S-expression...")
+        
+        // Quick check for balanced parens
+        openCount := strings.Count(content, "(")
+        closeCount := strings.Count(content, ")")
+        
+        if openCount > 0 && openCount == closeCount {
+            // Try to tokenize the whole content as a generic list
+            tokens := tokenize(content)
+            if len(tokens) > 0 {
+                root, _, parseErr := parseExpr(tokens, 0)
+                if parseErr == nil && !root.isAtom && len(root.list) > 0 {
+                    // Assume the first string is the root question, and sub-lists are questions
+                    heuristicPlan := &ResearchPlan{
+                        RootQuestion:    "Heuristic Plan", // Fallback
+                        SubQuestions:    []ResearchQuestion{},
+                        CurrentStep:     0,
+                        SynthesisNeeded: false,
+                        CreatedAt:       time.Now(),
+                        UpdatedAt:       time.Now(),
+                    }
+
+                    // Try to extract root question
+                    if len(root.list) > 0 && root.list[0].isAtom {
+                         heuristicPlan.RootQuestion = root.list[0].atom
+                    }
+
+                    // Iterate over rest of list to find questions
+                    for i := 1; i < len(root.list); i++ {
+                        item := root.list[i]
+                        if !item.isAtom && len(item.list) > 0 {
+                            // This looks like a sub-list, treat it as a question
+                            q := ResearchQuestion{
+                                ID:              fmt.Sprintf("hq%d", i),
+                                Status:          ResearchStatusPending,
+                                Priority:        5,
+                                Dependencies:    []string{},
+                                SourcesFound:    []string{},
+                                KeyFindings:     "",
+                                ConfidenceLevel: 0.5,
+                            }
+
+                            // Heuristic: first atom is ID, second is Text, rest is context
+                            // Or if first atom is text, use that
+                            if len(item.list) > 0 {
+                                q.Question = item.list[0].atom
+                                q.SearchQuery = item.list[0].atom // Default query to question text
+                                
+                                // If we have more atoms, maybe the second one is the query?
+                                if len(item.list) > 1 && item.list[1].isAtom {
+                                    q.SearchQuery = item.list[1].atom
+                                }
+                            }
+
+                            heuristicPlan.SubQuestions = append(heuristicPlan.SubQuestions, q)
+                        }
+                    }
+
+                    if len(heuristicPlan.SubQuestions) > 0 {
+                        log.Printf("[Dialogue] ✓ Extracted research plan via heuristic fallback (%d questions)", len(heuristicPlan.SubQuestions))
+                        return heuristicPlan, tokens, nil
+                    }
+                }
+            }
+        }
+        log.Printf("[Dialogue] Heuristic parsing failed or yielded no questions.")
+    }
+
+    // If all strategies failed, provide detailed error
+    if len(planBlocks) == 0 {
 		log.Printf("[Dialogue] ERROR: All parsing strategies failed")
 		log.Printf("[Dialogue] Content structure analysis:")
 		log.Printf("[Dialogue]   - Contains '(reasoning': %v", strings.Contains(content, "(reasoning"))

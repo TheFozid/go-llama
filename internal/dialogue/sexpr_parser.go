@@ -127,43 +127,77 @@ func extractGoalsFromMalformed(input string) []GoalProposal {
 }
 
 // NEW FUNCTION: Find all blocks with a specific name
+// Enhanced to handle optional whitespace between ( and blockName
 func findBlocks(input, blockName string) []string {
     var blocks []string
     
-    // Look for patterns like (blockName ...)
+    // Prepare variants of block name to search for
+    // 1. Exact match: "research_plan"
+    // 2. Hyphenated: "research-plan" (common LLM variation)
+    variants := []string{blockName}
+    if strings.Contains(blockName, "_") {
+        variants = append(variants, strings.ReplaceAll(blockName, "_", "-"))
+    }
+
     start := 0
     for {
-        // Find opening
-        openPos := strings.Index(input[start:], "("+blockName)
+        // Find next opening parenthesis
+        openPos := strings.Index(input[start:], "(")
         if openPos == -1 {
             break
         }
-        openPos += start
-        
-        // Find matching close
-        depth := 0
-        closePos := -1
-        for i := openPos; i < len(input); i++ {
-            if input[i] == '(' {
-                depth++
-            } else if input[i] == ')' {
-                depth--
-                if depth == 0 {
-                    closePos = i
+        openPos += start // Convert to absolute index
+
+        // Check if this parenthesis is followed by any of our target block names
+        matched := false
+        consumedLen := 0
+
+        // Look at characters immediately following '('
+        contentStart := openPos + 1
+        if contentStart < len(input) {
+            // Skip whitespace immediately after '('
+            offset := 0
+            for offset < len(input)-contentStart && (input[contentStart+offset] == ' ' || input[contentStart+offset] == '\t') {
+                offset++
+            }
+
+            for _, variant := range variants {
+                if strings.HasPrefix(input[contentStart+offset:], variant) {
+                    matched = true
+                    consumedLen = offset + len(variant)
                     break
                 }
             }
         }
-        
-        if closePos == -1 {
-            break // No matching close
+
+        if matched {
+            // We found a candidate block. Now find the matching closing parenthesis.
+            depth := 0
+            closePos := -1
+            for i := openPos; i < len(input); i++ {
+                if input[i] == '(' {
+                    depth++
+                } else if input[i] == ')' {
+                    depth--
+                    if depth == 0 {
+                        closePos = i
+                        break
+                    }
+                }
+            }
+
+            if closePos != -1 {
+                // Extract block
+                blocks = append(blocks, input[openPos:closePos+1])
+                start = closePos + 1
+                continue // Continue searching after this block
+            }
         }
-        
-        // Extract block
-        blocks = append(blocks, input[openPos:closePos+1])
-        start = closePos + 1
+
+        // If not matched or unclosed, move to the next character to continue search
+        start = openPos + 1
     }
-    
+
     return blocks
 }
 
