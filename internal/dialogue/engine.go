@@ -157,13 +157,52 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 	totalTokens := 0
 	recentThoughts := []string{}	// For novelty filtering
 
-	// PHASE 0: Update adaptive thresholds based on current state
-	totalMemories, err := e.storage.GetTotalMemoryCount(ctx)
-	if err != nil {
-		log.Printf("[Dialogue] WARNING: Failed to get memory count: %v", err)
-		totalMemories = 0
-	}
-	e.adaptiveConfig.UpdateMetrics(ctx, state, totalMemories)
+    // PHASE 0: Update adaptive thresholds based on current state
+    totalMemories, err := e.storage.GetTotalMemoryCount(ctx)
+    if err != nil {
+        log.Printf("[Dialogue] WARNING: Failed to get memory count: %v", err)
+        totalMemories = 0
+    }
+    e.adaptiveConfig.UpdateMetrics(ctx, state, totalMemories)
+
+    // GLOBAL CLEANUP: Check for stale in-progress actions across ALL goals
+    // Moved here from single-goal loop to ensure cleanup happens regardless of goal selection
+    now := time.Now()
+    for gIdx := range state.ActiveGoals {
+        goal := &state.ActiveGoals[gIdx]
+        for i := range goal.Actions {
+            action := &goal.Actions[i]
+            if action.Status == ActionStatusInProgress {
+                age := now.Sub(action.Timestamp)
+
+                // Use adaptive timeout calculated by the system, with 1.5x multiplier for LLM parsing
+                baseTimeout := 10 * time.Minute // Fallback if adaptive config is nil/unavailable
+                if e.adaptiveConfig != nil {
+                    baseTimeout = time.Duration(e.adaptiveConfig.toolTimeout) * time.Second
+                }
+                timeout := baseTimeout
+
+                // Web parsing can take significantly longer due to LLM processing
+                if action.Tool == ActionToolWebParseContextual ||
+                    action.Tool == ActionToolWebParseGeneral ||
+                    action.Tool == ActionToolWebParseChunked {
+                    timeout = baseTimeout * 3 / 2 // 1.5x multiplier for parse actions
+                }
+
+                if age > timeout {
+                    log.Printf("[Dialogue] Found stale in-progress action (age: %s, timeout: %s), marking as failed: %s",
+                        age.Round(time.Second), timeout, truncate(action.Description, 60))
+                    action.Status = ActionStatusCompleted
+                    action.Result = fmt.Sprintf("TIMEOUT: Action abandoned after %s (timeout: %s)",
+                        age.Round(time.Second), timeout)
+                    goal.Outcome = "bad"
+                    
+                    // Update goal in state immediately
+                    state.ActiveGoals[gIdx] = *goal
+                }
+            }
+        }
+    }
 
 	// PHASE 1: Enhanced Reflection with Structured Reasoning
 	reasoning, principles, phaseTokens, reflectionText, err := e.runPhaseReflection(ctx, state)
@@ -900,38 +939,6 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 
 		// If no actions were executed, check if we should create new actions
 		if !actionExecuted {
-            // Check for stale in-progress actions with adaptive timeouts
-            now := time.Now()
-            for i := range topGoal.Actions {
-                action := &topGoal.Actions[i]
-                if action.Status == ActionStatusInProgress {
-                    age := now.Sub(action.Timestamp)
-
-                    // Use adaptive timeout calculated by the system, with 1.5x multiplier for LLM parsing
-                    baseTimeout := 10 * time.Minute // Fallback if adaptive config is nil/unavailable
-                    if e.adaptiveConfig != nil {
-                        baseTimeout = time.Duration(e.adaptiveConfig.toolTimeout) * time.Second
-                    }
-                    timeout := baseTimeout
-
-                    // Web parsing can take significantly longer due to LLM processing
-                    if action.Tool == ActionToolWebParseContextual ||
-                        action.Tool == ActionToolWebParseGeneral ||
-                        action.Tool == ActionToolWebParseChunked {
-                        timeout = baseTimeout * 3 / 2 // 1.5x multiplier for parse actions
-                    }
-
-                    if age > timeout {
-						log.Printf("[Dialogue] Found stale in-progress action (age: %s, timeout: %s), marking as failed: %s",
-							age.Round(time.Second), timeout, truncate(action.Description, 60))
-						action.Status = ActionStatusCompleted
-						action.Result = fmt.Sprintf("TIMEOUT: Action abandoned after %s (timeout: %s)",
-							age.Round(time.Second), timeout)
-						topGoal.Outcome = "bad"
-					}
-				}
-			}
-
 			// Check if all actions are completed (need to create more)
 			hasPendingActions := false
 			allActionsCompleted := len(topGoal.Actions) > 0
