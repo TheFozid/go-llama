@@ -153,11 +153,7 @@ const (
 // ActionTool constants
 const (
     ActionToolSearch              = "search"
-    ActionToolWebParse            = "web_parse" // Generic (deprecated)
-    ActionToolWebParseMetadata    = "web_parse_metadata"
-    ActionToolWebParseGeneral     = "web_parse_general"
-    ActionToolWebParseContextual  = "web_parse_contextual"
-    ActionToolWebParseChunked     = "web_parse_chunked"
+    ActionToolWebParseUnified    = "web_parse_unified"
     ActionToolSandbox             = "sandbox"
     ActionToolMemoryConsolidation = "memory_consolidation"
     ActionToolSynthesis           = "synthesis"

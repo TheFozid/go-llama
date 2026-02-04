@@ -185,9 +185,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
                 var timeout time.Duration
 
                 // Web parsing can take significantly longer due to LLM processing + Network I/O
-                if action.Tool == ActionToolWebParseContextual ||
-                    action.Tool == ActionToolWebParseGeneral ||
-                    action.Tool == ActionToolWebParseChunked {
+                if action.Tool == ActionToolWebParseUnified {
                     // Enforce a minimum of 5 minutes for network+llm actions, 
                     // or use the adaptive timeout * 2 if it's higher.
                     minWebTimeout := 5 * time.Minute
@@ -424,397 +422,262 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 								action.Metadata["eval_reasoning"] = evaluation.Reasoning
 								action.Metadata["fallback_urls"] = evaluation.FallbackURLs
 
-								// Check if there's already a pending parse action
-								hasParseAction := false
-								for j := i + 1; j < len(topGoal.Actions); j++ {
-									nextAction := &topGoal.Actions[j]
-									if (nextAction.Tool == ActionToolWebParseGeneral ||
-										nextAction.Tool == ActionToolWebParseContextual) &&
-										nextAction.Status == ActionStatusPending {
-										if nextAction.Metadata == nil {
-											nextAction.Metadata = make(map[string]interface{})
-										}
-										nextAction.Metadata["selected_url"] = bestURL
-										nextAction.Description = bestURL
-										log.Printf("[Dialogue] Updated next parse action with best URL: %s", truncate(bestURL, 60))
-										hasParseAction = true
-										break
-									}
-								}
+                               // Check if there's already a pending parse action
+                                hasParseAction := false
+                                for j := i + 1; j < len(topGoal.Actions); j++ {
+                                    nextAction := &topGoal.Actions[j]
+                                    if nextAction.Tool == ActionToolWebParseUnified &&
+                                        nextAction.Status == ActionStatusPending {
+                                        if nextAction.Metadata == nil {
+                                            nextAction.Metadata = make(map[string]interface{})
+                                        }
+                                        nextAction.Metadata["selected_url"] = bestURL
+                                        nextAction.Description = bestURL
+                                        log.Printf("[Dialogue] Updated next unified parse action with best URL: %s", truncate(bestURL, 60))
+                                        hasParseAction = true
+                                        break
+                                    }
+                                }
 
-								// If no parse action exists, create one NOW
-								if !hasParseAction {
-									var parseAction Action
-									goalLower := strings.ToLower(topGoal.Description)
+                                // If no parse action exists, create one NOW
+                                if !hasParseAction {
+                                    var parseAction Action
+                                    goalLower := strings.ToLower(topGoal.Description)
 
-									if strings.Contains(goalLower, "research") ||
-										strings.Contains(goalLower, "analyze") ||
-										strings.Contains(goalLower, "understand") ||
-										strings.Contains(goalLower, "learn about") {
-										purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
-										parseAction = Action{
-											Description:	bestURL,
-											Tool:		ActionToolWebParseContextual,
-											Status:		ActionStatusPending,
-											Timestamp:	time.Now(),
-											Metadata: map[string]interface{}{
-												"purpose":	purpose,
-												"selected_url":	bestURL,
-											},
-										}
-										// CRITICAL: Copy research metadata from search action to parse action
-										if action.Metadata != nil {
-											if questionID, ok := action.Metadata["research_question_id"].(string); ok {
-												parseAction.Metadata["research_question_id"] = questionID
-											}
-											if questionText, ok := action.Metadata["question_text"].(string); ok {
-												parseAction.Metadata["question_text"] = questionText
-											}
-										}
-										log.Printf("[Dialogue] Auto-created contextual parse action for best URL: %s", truncate(bestURL, 60))
-									} else {
-										parseAction = Action{
-											Description:	bestURL,
-											Tool:		ActionToolWebParseGeneral,
-											Status:		ActionStatusPending,
-											Timestamp:	time.Now(),
-											Metadata: map[string]interface{}{
-												"selected_url": bestURL,
-											},
-										}
-										// CRITICAL: Copy research metadata from search action to parse action
-										if action.Metadata != nil {
-											if questionID, ok := action.Metadata["research_question_id"].(string); ok {
-												parseAction.Metadata["research_question_id"] = questionID
-											}
-											if questionText, ok := action.Metadata["question_text"].(string); ok {
-												parseAction.Metadata["question_text"] = questionText
-											}
-										}
-										log.Printf("[Dialogue] Auto-created general parse action for best URL: %s", truncate(bestURL, 60))
-									}
+                                    // All parsing is now handled by the unified tool
+                                    purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
+                                    parseAction = Action{
+                                        Description:	bestURL,
+                                        Tool:		ActionToolWebParseUnified,
+                                        Status:		ActionStatusPending,
+                                        Timestamp:	time.Now(),
+                                        Metadata: map[string]interface{}{
+                                            "goal":		purpose, // Use "goal" key for unified tool
+                                            "selected_url":	bestURL,
+                                        },
+                                    }
+                                    // CRITICAL: Copy research metadata from search action to parse action
+                                    if action.Metadata != nil {
+                                        if questionID, ok := action.Metadata["research_question_id"].(string); ok {
+                                            parseAction.Metadata["research_question_id"] = questionID
+                                        }
+                                        if questionText, ok := action.Metadata["question_text"].(string); ok {
+                                            parseAction.Metadata["question_text"] = questionText
+                                        }
+                                    }
+                                    log.Printf("[Dialogue] Auto-created unified parse action for best URL: %s", truncate(bestURL, 60))
 
-									topGoal.Actions = append(topGoal.Actions, parseAction)
+                                    topGoal.Actions = append(topGoal.Actions, parseAction)
 
-									// CRITICAL: Update goal in state immediately
-									for k := range state.ActiveGoals {
-										if state.ActiveGoals[k].ID == topGoal.ID {
-											state.ActiveGoals[k] = topGoal
-											log.Printf("[Dialogue] ✓ Updated goal in state with new parse action")
-											break
-										}
-									}
-								}
+                                    // CRITICAL: Update goal in state immediately
+                                    for k := range state.ActiveGoals {
+                                        if state.ActiveGoals[k].ID == topGoal.ID {
+                                            state.ActiveGoals[k] = topGoal
+                                            log.Printf("[Dialogue] ✓ Updated goal in state with new parse action")
+                                            break
+                                        }
+                                    }
+                                }
 							}
 						}
 					}
-					if err != nil {
-						log.Printf("[Dialogue] Action failed: %v", err)
-						action.Result = fmt.Sprintf("ERROR: %v", err)
-						action.Status = ActionStatusCompleted
 
-                    // Check if this is a "page too large" error from web_parse_general OR web_parse_contextual
-                    if (action.Tool == ActionToolWebParseGeneral || action.Tool == ActionToolWebParseContextual) &&
-                        strings.Contains(strings.ToLower(err.Error()), "page too large") {
-                        log.Printf("[Dialogue] Page too large detected, initiating intelligent fallback...")
+                   if err != nil {
+                        log.Printf("[Dialogue] Action failed: %v", err)
+                        action.Result = fmt.Sprintf("ERROR: %v", err)
+                        action.Status = ActionStatusCompleted
 
-                        // Get the URL from the action
-                        var url string
-                        if action.Metadata != nil {
-                            if selectedURL, ok := action.Metadata["selected_url"].(string); ok {
-                                url = selectedURL
-                            } else if bestURL, ok := action.Metadata["best_url"].(string); ok {
-                                url = bestURL
-                            }
+                        // NOTE: The unified web parser handles strategy selection internally.
+                        // It should NOT return a "page too large" error.
+                        // If it does, we treat it as a standard failure.
+                        if strings.Contains(strings.ToLower(err.Error()), "page too large") {
+                            log.Printf("[Dialogue] WARNING: Received 'page too large' from unified tool (unexpected).")
                         }
 
-                        // Fallback: extract URL from action description
-                        if url == "" {
-                            url = strings.TrimSpace(action.Description)
-                            if idx := strings.Index(url, "http"); idx != -1 {
-                                url = url[idx:]
-                            }
-                            if idx := strings.Index(url, " "); idx != -1 {
-                                url = url[:idx]
-                            }
-                        }
+                        // Track failures - don't abandon on first failure
+                        topGoal.FailureCount++
 
-                        // Call intelligent recovery handler in engine_research.go
-                        // We pass &topGoal because the function expects a pointer (*Goal)
-                        fallbackActions, fallbackErr := e.handleLargePageFallback(ctx, url, &topGoal)
-                        
-                        if fallbackErr != nil {
-                            log.Printf("[Dialogue] ⚠ Intelligent fallback failed: %v. Falling back to default behavior.", fallbackErr)
-                            // If intelligent fallback fails, increment failure count
-                            topGoal.FailureCount++
+                        // Only mark as bad after 3+ consecutive failures
+                        if topGoal.FailureCount >= 3 {
+                            topGoal.Outcome = "bad"
+                            log.Printf("[Dialogue] ⚠ Goal marked as bad after %d consecutive failures", topGoal.FailureCount)
                         } else {
-                            log.Printf("[Dialogue] ✓ Intelligent fallback generated %d recovery actions", len(fallbackActions))
-                            // Append the new actions to the goal
-                            topGoal.Actions = append(topGoal.Actions, fallbackActions...)
-                            
-                            // Don't increment failure count for this specific error
-                            // since we're handling it with fallback actions
+                            log.Printf("[Dialogue] ⚠ Action failed (failure %d/3), will retry", topGoal.FailureCount)
                         }
 
-                        // Update goal in state
-                        for k := range state.ActiveGoals {
-                            if state.ActiveGoals[k].ID == topGoal.ID {
-                                state.ActiveGoals[k] = topGoal
-                                break
+                        // Don't increment actionCount - this was a failure
+                        actionExecuted = true	// Still counts as execution attempt
+
+                    } else if action.Tool == ActionToolWebParseUnified {
+                        // NEW: Parse evaluation for unified web parse actions
+                        log.Printf("[Dialogue] Unified parse action completed, evaluating quality...")
+
+                        // Get fallback URLs from metadata (set during search evaluation)
+                        var fallbackURLs []string
+                        var parsedURL string
+
+                        if action.Metadata != nil {
+                            if urls, ok := action.Metadata["fallback_urls"].([]string); ok {
+                                fallbackURLs = urls
+                            }
+                            if url, ok := action.Metadata["selected_url"].(string); ok {
+                                parsedURL = url
                             }
                         }
-						} else {
-							// Track failures - don't abandon on first failure
-							topGoal.FailureCount++
-						}
 
-						// Only mark as bad after 3+ consecutive failures
-						if topGoal.FailureCount >= 3 {
-							topGoal.Outcome = "bad"
-							log.Printf("[Dialogue] ⚠ Goal marked as bad after %d consecutive failures", topGoal.FailureCount)
-						} else {
-							log.Printf("[Dialogue] ⚠ Action failed (failure %d/3), will retry", topGoal.FailureCount)
-						}
+                        if parsedURL == "" {
+                            parsedURL = action.Description
+                        }
 
-						// Don't increment actionCount - this was a failure
-						actionExecuted = true	// Still counts as execution attempt
+                        // Evaluate parse quality
+                        parseEval, evalErr := e.evaluateParseResults(
+                            ctx,
+                            result,
+                            topGoal.Description,
+                            parsedURL,
+                            fallbackURLs,
+                        )
 
-					} else if action.Tool == ActionToolWebParseContextual ||
-						action.Tool == ActionToolWebParseGeneral ||
-						action.Tool == ActionToolWebParseChunked ||
-						action.Tool == ActionToolWebParseMetadata {
-						// NEW: Parse evaluation for web parse actions
-						log.Printf("[Dialogue] Parse action completed, evaluating quality...")
+                        if evalErr != nil {
+                            log.Printf("[Dialogue] WARNING: Parse evaluation failed: %v", evalErr)
+                            // Continue with action as if it succeeded
+                            action.Result = result
+                            action.Status = ActionStatusCompleted
+                            actionCount++
+                            actionExecuted = true
+                        } else {
+                            // Store evaluation in metadata
+                            if action.Metadata == nil {
+                                action.Metadata = make(map[string]interface{})
+                            }
+                            action.Metadata["parse_quality"] = parseEval.Quality
+                            action.Metadata["parse_confidence"] = parseEval.Confidence
+                            action.Metadata["parse_reasoning"] = parseEval.Reasoning
 
-						// Special handling for metadata action - store findings for later use
-						if action.Tool == ActionToolWebParseMetadata && action.Metadata != nil {
-							if action.Metadata["fallback_for"] == "page_too_large" {
-								log.Printf("[Dialogue] Storing metadata findings for intelligent chunk selection")
+                            log.Printf("[Dialogue] ✓ Parse quality: %s (confidence: %.2f)",
+                                parseEval.Quality, parseEval.Confidence)
 
-								// Parse the metadata result to extract section information
-								sections := e.extractSectionsFromMetadata(result)
+                            // Decision tree based on quality
+                            switch parseEval.Quality {
+                            case "sufficient":
+                                // Content is good, mark action complete
+                                action.Result = result
+                                action.Status = ActionStatusCompleted
+                                actionCount++
+                                actionExecuted = true
+                                log.Printf("[Dialogue] Parse result sufficient, continuing goal")
 
-								// Store sections in goal's metadata for later use by chunked action
-								if topGoal.Metadata == nil {
-									topGoal.Metadata = make(map[string]interface{})
-								}
-								topGoal.Metadata["page_sections"] = sections
+                            case "try_fallback":
+                                // Content inadequate, try next fallback URL if available
+                                action.Result = fmt.Sprintf("Parse quality insufficient: %s", parseEval.Reasoning)
+                                action.Status = ActionStatusCompleted
+                                actionExecuted = true
 
-								// Also identify the most relevant chunk based on the goal
-								relevantChunk := e.findMostRelevantChunk(sections, topGoal.Description)
-								if relevantChunk >= 0 {
-									topGoal.Metadata["suggested_chunk"] = relevantChunk
-									log.Printf("[Dialogue] Suggested starting chunk: %d based on goal: %s",
-										relevantChunk, truncate(topGoal.Description, 60))
-								}
+                                if len(fallbackURLs) > 0 {
+                                    // Create new parse action with next fallback URL
+                                    nextURL := fallbackURLs[0]
+                                    remainingFallbacks := fallbackURLs[1:]
 
-								// Update goal in state
-								for k := range state.ActiveGoals {
-									if state.ActiveGoals[k].ID == topGoal.ID {
-										state.ActiveGoals[k] = topGoal
-										break
-									}
-								}
-							}
-						}
+                                    log.Printf("[Dialogue] Trying fallback URL: %s", truncate(nextURL, 60))
 
-						// Get fallback URLs from metadata (set during search evaluation)
-						var fallbackURLs []string
-						var parsedURL string
+                                    // Use unified tool for fallback
+                                    var fallbackAction Action
+                                    purpose := "Extract relevant information for goal"
+                                    if action.Metadata != nil {
+                                        if p, ok := action.Metadata["goal"].(string); ok {
+                                            purpose = p
+                                        }
+                                    }
 
-						if action.Metadata != nil {
-							if urls, ok := action.Metadata["fallback_urls"].([]string); ok {
-								fallbackURLs = urls
-							}
-							if url, ok := action.Metadata["selected_url"].(string); ok {
-								parsedURL = url
-							}
-						}
+                                    fallbackAction = Action{
+                                        Description:	nextURL,
+                                        Tool:		ActionToolWebParseUnified,
+                                        Status:		ActionStatusPending,
+                                        Timestamp:	time.Now(),
+                                        Metadata: map[string]interface{}{
+                                            "goal":			purpose,
+                                            "selected_url":		nextURL,
+                                            "fallback_urls":		remainingFallbacks,
+                                            "is_fallback":		true,
+                                        },
+                                    }
 
-						if parsedURL == "" {
-							parsedURL = action.Description
-						}
+                                    topGoal.Actions = append(topGoal.Actions, fallbackAction)
+                                    log.Printf("[Dialogue] ✓ Created fallback unified parse action (%d fallbacks remaining)",
+                                        len(remainingFallbacks))
 
-						// Evaluate parse quality
-						parseEval, evalErr := e.evaluateParseResults(
-							ctx,
-							result,
-							topGoal.Description,
-							parsedURL,
-							fallbackURLs,
-						)
+                                    // Update pending work status
+                                    topGoal.HasPendingWork = hasPendingActions(&topGoal)
 
-						if evalErr != nil {
-							log.Printf("[Dialogue] WARNING: Parse evaluation failed: %v", evalErr)
-							// Continue with action as if it succeeded
-							action.Result = result
-							action.Status = ActionStatusCompleted
-							actionCount++
-							actionExecuted = true
-						} else {
-							// Store evaluation in metadata
-							if action.Metadata == nil {
-								action.Metadata = make(map[string]interface{})
-							}
-							action.Metadata["parse_quality"] = parseEval.Quality
-							action.Metadata["parse_confidence"] = parseEval.Confidence
-							action.Metadata["parse_reasoning"] = parseEval.Reasoning
+                                    // Update goal in state
+                                    for i := range state.ActiveGoals {
+                                        if state.ActiveGoals[i].ID == topGoal.ID {
+                                            state.ActiveGoals[i] = topGoal
+                                            log.Printf("[Dialogue] Updated goal in state: pending_work=%v", topGoal.HasPendingWork)
+                                            break
+                                        }
+                                    }
+                                } else {
+                                    log.Printf("[Dialogue] No fallback URLs available, marking goal as partial failure")
+                                    topGoal.Outcome = "bad"
+                                }
 
-							log.Printf("[Dialogue] ✓ Parse quality: %s (confidence: %.2f)",
-								parseEval.Quality, parseEval.Confidence)
+                            case "parse_deeper":
+                                // Content exists but extraction incomplete
+                                // NOTE: The unified tool already handles chunking internally.
+                                // If evaluation says incomplete, we try again or fail.
+                                action.Result = fmt.Sprintf("Parse incomplete: %s", parseEval.Reasoning)
+                                action.Status = ActionStatusCompleted
+                                actionExecuted = true
 
-							// Decision tree based on quality
-							switch parseEval.Quality {
-							case "sufficient":
-								// Content is good, mark action complete
-								action.Result = result
-								action.Status = ActionStatusCompleted
-								actionCount++
-								actionExecuted = true
-								log.Printf("[Dialogue] Parse result sufficient, continuing goal")
+                                log.Printf("[Dialogue] Parse evaluation requested deeper extraction, but unified tool handles this. Marking complete.")
+                                // We do not create a new action. The unified tool should have handled it.
+                                // If it didn't, it's a failure.
 
-							case "try_fallback":
-								// Content inadequate, try next fallback URL if available
-								action.Result = fmt.Sprintf("Parse quality insufficient: %s", parseEval.Reasoning)
-								action.Status = ActionStatusCompleted
-								actionExecuted = true
+                            case "completely_failed":
+                                // Parse completely failed, try fallback or abandon
+                                action.Result = fmt.Sprintf("Parse failed: %s", parseEval.Reasoning)
+                                action.Status = ActionStatusCompleted
+                                actionExecuted = true
 
-								if len(fallbackURLs) > 0 {
-									// Create new parse action with next fallback URL
-									nextURL := fallbackURLs[0]
-									remainingFallbacks := fallbackURLs[1:]
+                                if len(fallbackURLs) > 0 && parseEval.ShouldContinue {
+                                    // Try fallback (same logic as try_fallback)
+                                    nextURL := fallbackURLs[0]
+                                    remainingFallbacks := fallbackURLs[1:]
 
-									log.Printf("[Dialogue] Trying fallback URL: %s", truncate(nextURL, 60))
+                                    log.Printf("[Dialogue] Parse completely failed, trying fallback: %s",
+                                        truncate(nextURL, 60))
 
-									var fallbackAction Action
-									if action.Tool == ActionToolWebParseContextual {
-										purpose := "Extract relevant information for goal"
-										if action.Metadata != nil {
-											if p, ok := action.Metadata["purpose"].(string); ok {
-												purpose = p
-											}
-										}
+                                    // Use unified tool for fallback
+                                    fallbackAction := Action{
+                                        Description:	nextURL,
+                                        Tool:		ActionToolWebParseUnified,
+                                        Status:		ActionStatusPending,
+                                        Timestamp:	time.Now(),
+                                        Metadata: map[string]interface{}{
+                                            "selected_url":		nextURL,
+                                            "fallback_urls":	remainingFallbacks,
+                                            "is_fallback":		true,
+                                        },
+                                    }
 
-										fallbackAction = Action{
-											Description:	nextURL,
-											Tool:		ActionToolWebParseContextual,
-											Status:		ActionStatusPending,
-											Timestamp:	time.Now(),
-											Metadata: map[string]interface{}{
-												"purpose":		purpose,
-												"selected_url":		nextURL,
-												"fallback_urls":	remainingFallbacks,
-												"is_fallback":		true,
-											},
-										}
-									} else {
-										fallbackAction = Action{
-											Description:	nextURL,
-											Tool:		ActionToolWebParseGeneral,
-											Status:		ActionStatusPending,
-											Timestamp:	time.Now(),
-											Metadata: map[string]interface{}{
-												"selected_url":		nextURL,
-												"fallback_urls":	remainingFallbacks,
-												"is_fallback":		true,
-											},
-										}
-									}
+                                    topGoal.Actions = append(topGoal.Actions, fallbackAction)
 
-									topGoal.Actions = append(topGoal.Actions, fallbackAction)
-									log.Printf("[Dialogue] ✓ Created fallback parse action (%d fallbacks remaining)",
-										len(remainingFallbacks))
+                                    // Update goal in state
+                                    for k := range state.ActiveGoals {
+                                        if state.ActiveGoals[k].ID == topGoal.ID {
+                                            state.ActiveGoals[k] = topGoal
+                                            break
+                                        }
+                                    }
+                                } else {
+                                    log.Printf("[Dialogue] Parse failed with no fallbacks, marking goal as bad")
+                                    topGoal.Outcome = "bad"
+                                }
+                            }
+                        }
 
-									// Update pending work status
-									topGoal.HasPendingWork = hasPendingActions(&topGoal)
-
-									// Update goal in state
-									for i := range state.ActiveGoals {
-										if state.ActiveGoals[i].ID == topGoal.ID {
-											state.ActiveGoals[i] = topGoal
-											log.Printf("[Dialogue] Updated goal in state: pending_work=%v", topGoal.HasPendingWork)
-											break
-										}
-									}
-								} else {
-									log.Printf("[Dialogue] No fallback URLs available, marking goal as partial failure")
-									topGoal.Outcome = "bad"
-								}
-
-							case "parse_deeper":
-								// Content exists but extraction incomplete, try chunked parsing
-								action.Result = fmt.Sprintf("Parse incomplete: %s", parseEval.Reasoning)
-								action.Status = ActionStatusCompleted
-								actionExecuted = true
-
-								log.Printf("[Dialogue] Parse needs deeper extraction, creating chunked parse action")
-
-								chunkedAction := Action{
-									Description:	parsedURL,
-									Tool:		ActionToolWebParseChunked,
-									Status:		ActionStatusPending,
-									Timestamp:	time.Now(),
-									Metadata: map[string]interface{}{
-										"selected_url":	parsedURL,
-										"chunk_index":	0,
-									},
-								}
-
-								topGoal.Actions = append(topGoal.Actions, chunkedAction)
-								log.Printf("[Dialogue] ✓ Created chunked parse action for deeper extraction")
-
-								// Update goal in state
-								for k := range state.ActiveGoals {
-									if state.ActiveGoals[k].ID == topGoal.ID {
-										state.ActiveGoals[k] = topGoal
-										break
-									}
-								}
-
-							case "completely_failed":
-								// Parse completely failed, try fallback or abandon
-								action.Result = fmt.Sprintf("Parse failed: %s", parseEval.Reasoning)
-								action.Status = ActionStatusCompleted
-								actionExecuted = true
-
-								if len(fallbackURLs) > 0 && parseEval.ShouldContinue {
-									// Try fallback (same logic as try_fallback)
-									nextURL := fallbackURLs[0]
-									remainingFallbacks := fallbackURLs[1:]
-
-									log.Printf("[Dialogue] Parse completely failed, trying fallback: %s",
-										truncate(nextURL, 60))
-
-									fallbackAction := Action{
-										Description:	nextURL,
-										Tool:		action.Tool,
-										Status:		ActionStatusPending,
-										Timestamp:	time.Now(),
-										Metadata: map[string]interface{}{
-											"selected_url":		nextURL,
-											"fallback_urls":	remainingFallbacks,
-											"is_fallback":		true,
-										},
-									}
-
-									topGoal.Actions = append(topGoal.Actions, fallbackAction)
-
-									// Update goal in state
-									for k := range state.ActiveGoals {
-										if state.ActiveGoals[k].ID == topGoal.ID {
-											state.ActiveGoals[k] = topGoal
-											break
-										}
-									}
-								} else {
-									log.Printf("[Dialogue] Parse failed with no fallbacks, marking goal as bad")
-									topGoal.Outcome = "bad"
-								}
-							}
-						}
-
-						action.Timestamp = time.Now()
-
+                        action.Timestamp = time.Now()
 					} else {
 						// Check if result ACTUALLY indicates failure (check prefix only)
 						resultLower := strings.ToLower(result)
@@ -1219,12 +1082,11 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
                     // Accumulate output length
                     totalOutputLength += len(action.Result)
 
-                    // Check if action produced meaningful output
-                    // - Parse actions should produce >200 chars
+                    // Check if action actually succeeded (not just completed with error)
+                    // - Unified Parse actions should produce >200 chars
                     // - Search actions should produce >100 chars
                     minLength := 100
-                    if action.Tool == ActionToolWebParseContextual ||
-                        action.Tool == ActionToolWebParseGeneral {
+                    if action.Tool == ActionToolWebParseUnified {
                         minLength = 200
                     }
 

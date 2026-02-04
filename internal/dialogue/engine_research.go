@@ -540,131 +540,72 @@ func (e *Engine) executeAction(ctx context.Context, action *Action) (string, err
 
 		return result.Output, nil
 
-	case ActionToolWebParse,
-		ActionToolWebParseMetadata,
-		ActionToolWebParseGeneral,
-		ActionToolWebParseContextual,
-		ActionToolWebParseChunked:
+    case ActionToolWebParseUnified:
 
-		var url string
+        var url string
 
-		// First priority: check if search evaluation selected a best URL
-		if action.Metadata != nil {
-			if selectedURL, ok := action.Metadata["selected_url"].(string); ok && selectedURL != "" {
-				url = selectedURL
-				log.Printf("[Dialogue] Using evaluated best URL: %s", truncate(url, 60))
-			} else if bestURL, ok := action.Metadata["best_url"].(string); ok && bestURL != "" {
-				url = bestURL
-				log.Printf("[Dialogue] Using best URL from metadata: %s", truncate(url, 60))
-			} else if urls, ok := action.Metadata["previous_search_urls"].([]string); ok && len(urls) > 0 {
-				// Fallback: use first URL (old behavior)
-				url = urls[0]
-				log.Printf("[Dialogue] WARNING: Using first URL from search results (evaluation may have failed): %s", truncate(url, 60))
-			}
-		}
+        // First priority: check if search evaluation selected a best URL
+        if action.Metadata != nil {
+            if selectedURL, ok := action.Metadata["selected_url"].(string); ok && selectedURL != "" {
+                url = selectedURL
+                log.Printf("[Dialogue] Using evaluated best URL: %s", truncate(url, 60))
+            } else if bestURL, ok := action.Metadata["best_url"].(string); ok && bestURL != "" {
+                url = bestURL
+                log.Printf("[Dialogue] Using best URL from metadata: %s", truncate(url, 60))
+            } else if urls, ok := action.Metadata["previous_search_urls"].([]string); ok && len(urls) > 0 {
+                url = urls[0]
+                log.Printf("[Dialogue] Using first URL from search results: %s", truncate(url, 60))
+            }
+        }
 
-		// Fallback: extract URL from action description
-		if url == "" {
-			// Formats handled:
-			//   - "https://example.com"
-			//   - "Parse URL: https://example.com"
-			//   - "Search result: https://example.com - title"
-			//   - "URL from search results" (placeholder - will fail with clear error)
-			url = strings.TrimSpace(action.Description)
+        // Fallback: extract URL from action description
+        if url == "" {
+            url = strings.TrimSpace(action.Description)
+            if idx := strings.Index(url, "http"); idx != -1 {
+                url = url[idx:]
+            }
+            if idx := strings.Index(url, " "); idx != -1 {
+                url = url[:idx]
+            }
+        }
 
-			// Handle placeholder case
-			if url == "URL from search results" {
-				return "", fmt.Errorf("parse action has placeholder URL - previous search may have failed or returned no URLs")
-			}
+        // Basic Validation
+        if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+            return "", fmt.Errorf("invalid URL extracted: %s", url)
+        }
 
-			// Clean up common prefixes
-			if idx := strings.Index(url, "http"); idx != -1 {
-				url = url[idx:] // Start from http
-			}
+        params := map[string]interface{}{
+            "url": url,
+        }
 
-			// Remove everything after first space (titles, descriptions)
-			if idx := strings.Index(url, " "); idx != -1 {
-				url = url[:idx]
-			}
+        // Extract Goal/Purpose from metadata for Unified tool
+        if action.Metadata != nil {
+            if goal, ok := action.Metadata["goal"].(string); ok && goal != "" {
+                params["goal"] = goal
+            } else if purpose, ok := action.Metadata["purpose"].(string); ok && purpose != "" {
+                params["goal"] = purpose
+            }
+        }
 
-			// Basic validation
-			if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-				return "", fmt.Errorf("invalid URL in action description: %s", action.Description)
-			}
-		}
+        log.Printf("[Dialogue] Calling unified web parser: %s", truncate(url, 80))
+        result, err := e.toolRegistry.ExecuteIdle(ctx, action.Tool, params)
 
-		params := map[string]interface{}{
-			"url": url,
-		}
+        elapsed := time.Since(startTime)
 
-		// For contextual parsing, extract purpose from metadata if available
-		if action.Tool == ActionToolWebParseContextual {
-			if action.Metadata != nil {
-				if purpose, ok := action.Metadata["purpose"].(string); ok && purpose != "" {
-					params["purpose"] = purpose
-					log.Printf("[Dialogue] Using contextual parser with purpose: %s", truncate(purpose, 60))
-				} else {
-					params["purpose"] = "Extract relevant information for research goal"
-				}
-			} else {
-				params["purpose"] = "Extract relevant information for research goal"
-			}
-		}
+        if err != nil {
+            log.Printf("[Dialogue] Unified web parser failed after %s: %v", elapsed, err)
+            return "", fmt.Errorf("web parse failed: %w", err)
+        }
 
-		// For chunked parsing, look for chunk index
-		if action.Tool == ActionToolWebParseChunked {
-			// Default to first chunk - LLM should specify in future iterations
-			params["chunk_index"] = 0
+        if !result.Success {
+            log.Printf("[Dialogue] Unified web parser returned failure after %s: %s", elapsed, result.Error)
+            return "", fmt.Errorf("web parse failed: %s", result.Error)
+        }
 
-			// Try to parse chunk index from description
-			// Format: "Read chunk 3 from URL" or "chunk_index: 3"
-			desc := strings.ToLower(action.Description)
-			if strings.Contains(desc, "chunk") {
-				// Simple extraction - matches "chunk 3", "chunk 0", etc.
-				parts := strings.Fields(desc)
-				for i, part := range parts {
-					if part == "chunk" && i+1 < len(parts) {
-						if chunkIdx, err := fmt.Sscanf(parts[i+1], "%d", new(int)); err == nil && chunkIdx >= 0 {
-							var idx int
-							fmt.Sscanf(parts[i+1], "%d", &idx)
-							params["chunk_index"] = idx
-							break
-						}
-					}
-				}
-			}
-		}
+        log.Printf("[Dialogue] Unified web parser completed successfully in %s (%d chars output)",
+            elapsed, len(result.Output))
 
-		// Execute the appropriate web parse tool
-		log.Printf("[Dialogue] Calling web parse tool '%s' for URL: %s", action.Tool, truncate(url, 80))
-		result, err := e.toolRegistry.ExecuteIdle(ctx, action.Tool, params)
-
-		elapsed := time.Since(startTime)
-
-		if err != nil {
-			log.Printf("[Dialogue] Web parse tool failed after %s: %v", elapsed, err)
-			return "", fmt.Errorf("web parse tool failed: %w", err)
-		}
-
-		if !result.Success {
-			log.Printf("[Dialogue] Web parse returned failure after %s: %s", elapsed, result.Error)
-
-			// Check if this is a "page too large" error from web_parse_general
-			if action.Tool == ActionToolWebParseGeneral &&
-				strings.Contains(strings.ToLower(result.Error), "page too large") {
-				log.Printf("[Dialogue] Page too large for general parsing, creating fallback actions")
-
-				// Create a special error that will be handled by the goal pursuit system
-				return "", fmt.Errorf("page too large for general summary: %s", result.Error)
-			}
-
-			return "", fmt.Errorf("web parse failed: %s", result.Error)
-		}
-
-		log.Printf("[Dialogue] Web parse completed successfully in %s (%d chars output)",
-			elapsed, len(result.Output))
-
-		return result.Output, nil
+        return result.Output, nil
 
 	case ActionToolSandbox:
 		// Phase 3.5: Sandbox not yet implemented
@@ -1522,146 +1463,17 @@ RESPOND with S-expression:
 	}
 }
 
-// handleLargePageFallback attempts to recover from a "page too large" error by
-// fetching metadata and asking the LLM to select relevant chunks to parse.
+// handleLargePageFallback is DEPRECATED. 
+// The web_parse_unified tool now handles strategy selection (Full vs Selective) internally.
+// This function is retained for backwards compatibility during transition but does nothing.
 func (e *Engine) handleLargePageFallback(ctx context.Context, url string, goal *Goal) ([]Action, error) {
-	log.Printf("[Dialogue] Initiating fallback strategy for large page (URL: %s)", truncate(url, 60))
-
-	// Step 1: Get Metadata
-	params := map[string]interface{}{
-		"url": url,
-	}
-
-	metadataResult, err := e.toolRegistry.ExecuteIdle(ctx, ActionToolWebParseMetadata, params)
-	if err != nil {
-		return nil, fmt.Errorf("fallback failed: metadata tool error: %w", err)
-	}
-	if !metadataResult.Success {
-		return nil, fmt.Errorf("fallback failed: metadata tool returned failure: %s", metadataResult.Error)
-	}
-
-	log.Printf("[Dialogue] ✓ Metadata retrieved (%d chars), analyzing with LLM...", len(metadataResult.Output))
-
-	// Step 2: Ask LLM to select chunks based on metadata and goal
-	// We use callLLMWithStructuredReasoning to ensure we get a clean list of indices
-	prompt := fmt.Sprintf(`We are researching a large web page but cannot parse it fully in one go.
-We have retrieved METADATA for the page.
-
-GOAL: %s
-
-URL: %s
-
-PAGE METADATA:
-%s
-
-AVAILABLE CAPABILITY:
-- web_parse_chunked: Read specific 500-token chunks by index (0, 1, 2, ...).
-
-ANALYSIS INSTRUCTIONS:
-1. Analyze the metadata to understand the page structure (sections, headings, length).
-2. Identify which parts of the page are most relevant to the GOAL.
-3. Select specific chunk indices that cover these relevant parts.
-   - Example: If metadata shows "Introduction (chunks 0-2)" and goal is intro, select 0, 1, 2.
-   - Example: If metadata shows "Conclusion (chunk 9)" and goal is summary, select 9.
-4. Estimate indices if metadata implies location (e.g., start/middle/end).
-5. Limit selection to 3-5 chunks to stay efficient.
-
-RESPOND ONLY with this S-expression (no markdown):
-
-(chunk_selection_plan
-  (selected_chunks (0 3 4))  ; List of integers (e.g., 0 3 4)
-  (reasoning "Brief explanation of why these chunks are relevant"))
-
-Rules:
-- selected_chunks must be a list of integers.
-- Prioritize relevance over completeness.
-- If metadata is vague, estimate start (0) and subsequent indices.`, goal.Description, url, metadataResult.Output)
-
-	// FIX: Use _ to ignore unused 'tokens' return value
-	response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, false, "")
-	if err != nil {
-		return nil, fmt.Errorf("fallback failed: LLM selection failed: %w", err)
-	}
-
-	// Step 3: Parse the chunk indices
-	chunks, reasoning, err := e.parseChunkSelectionSExpr(response.RawResponse)
-	if err != nil {
-		log.Printf("[Dialogue] Failed to parse chunk selection: %v", err)
-		return nil, fmt.Errorf("fallback failed: parsing error: %w", err)
-	}
-
-	log.Printf("[Dialogue] ✓ LLM selected %d chunks: %v. Reasoning: %s", len(chunks), chunks, truncate(reasoning, 100))
-
-	// Step 4: Create actions for the selected chunks
-	var actions []Action
-	for _, idx := range chunks {
-		actions = append(actions, Action{
-			Description: fmt.Sprintf("Read chunk %d from %s", idx, url),
-			Tool:        ActionToolWebParseChunked,
-			Status:      ActionStatusPending,
-			Timestamp:   time.Now(),
-			Metadata: map[string]interface{}{
-				"url":         url,
-				"chunk_index": idx,
-				"recovery":    "metadata_driven_chunking",
-			},
-		})
-	}
-	return actions, nil
+    log.Printf("[Dialogue] WARNING: handleLargePageFallback called but is deprecated. Tool should handle this internally.")
+    return nil, fmt.Errorf("manual fallback deprecated")
 }
 
-
-// parseChunkSelectionSExpr extracts the list of chunk indices from LLM response
+// parseChunkSelectionSExpr is DEPRECATED - see handleLargePageFallback
 func (e *Engine) parseChunkSelectionSExpr(rawResponse string) ([]int, string, error) {
-	content := strings.TrimSpace(rawResponse)
-	content = strings.TrimPrefix(content, "```lisp")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-
-	// Find chunk_selection_plan block
-	blocks := findBlocksRecursive(content, "chunk_selection_plan")
-	if len(blocks) == 0 {
-		return nil, "", fmt.Errorf("no chunk_selection_plan block found")
-	}
-
-	block := blocks[0]
-
-	// Extract reasoning
-	reasoning := extractFieldContent(block, "reasoning")
-
-	// Extract selected_chunks list
-	// We expect format: (selected_chunks (0 3 4))
-	indicesPattern := "(selected_chunks "
-	start := strings.Index(block, indicesPattern)
-	if start == -1 {
-		return nil, reasoning, fmt.Errorf("selected_chunks field not found")
-	}
-
-	start += len(indicesPattern)
-
-	// Extract content until closing paren
-	contentEnd := strings.Index(block[start:], ")")
-	if contentEnd == -1 {
-		return nil, reasoning, fmt.Errorf("malformed selected_chunks list")
-	}
-
-	listContent := strings.TrimSpace(block[start : start+contentEnd])
-
-	// Parse integers from the list
-	var indices []int
-	parts := strings.Fields(listContent)
-	for _, part := range parts {
-		if idx, err := strconv.Atoi(part); err == nil {
-			indices = append(indices, idx)
-		}
-	}
-
-	if len(indices) == 0 {
-		return nil, reasoning, fmt.Errorf("no indices found in selected_chunks")
-	}
-
-	return indices, reasoning, nil
+    return nil, "", fmt.Errorf("deprecated")
 }
 
 // cleanLLMWrappers removes outer reasoning blocks or XML tags that obscure the S-expression
