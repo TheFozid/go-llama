@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
     "context"
     "encoding/json"
     "fmt"
@@ -207,7 +208,7 @@ func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString st
                 continue // Skip empty pages
             }
             
-            text, err := page.GetText()
+            text, err := page.ToText()
             if err != nil {
                 log.Printf("[WebParser] Warning: failed to extract text from page %d: %v", i, err)
                 continue
