@@ -9,13 +9,13 @@ import (
 
 // ParseEvaluation represents the LLM's evaluation of parsed content quality
 type ParseEvaluation struct {
-	Quality        string   `json:"quality"`         // "sufficient" | "try_fallback" | "parse_deeper" | "completely_failed"
-	Reasoning      string   `json:"reasoning"`       // Why this quality rating
-	Confidence     float64  `json:"confidence"`      // 0.0-1.0 confidence in evaluation
-	MissingInfo    []string `json:"missing_info"`    // What information is still needed
-	NextAction     string   `json:"next_action"`     // Recommended next step
-	ShouldContinue bool     `json:"should_continue"` // Continue pursuing this goal?
-	UsefulContent  string   `json:"useful_content"`  // Brief summary of what WAS useful
+    Quality        string   // "sufficient" | "try_fallback" | "parse_deeper" | "completely_failed"
+    Reasoning      string   // Why this quality rating
+    Confidence     float64  // 0.0-1.0 confidence in evaluation
+    MissingInfo    []string // What information is still needed
+    NextAction     string   // Recommended next step
+    ShouldContinue bool     // Continue pursuing this goal?
+    UsefulContent  string   // Brief summary of what WAS useful
 }
 
 // evaluateParseResults uses LLM to determine if parsed content helps achieve the goal
@@ -119,32 +119,30 @@ func (e *Engine) buildParseEvaluationPrompt(
     fallbackURLs []string,
 ) string {
     var prompt strings.Builder
-    
-    // 1. FORMAT INSTRUCTIONS & PRIMING (Moved to top for better compliance)
+
+    // 1. FORMAT INSTRUCTIONS & PRIMING
     prompt.WriteString("You are an evaluation engine. You must assess if provided content achieves a specific goal.\n\n")
-    
+
     prompt.WriteString("OUTPUT REQUIREMENT:\n")
-    prompt.WriteString("You MUST respond with ONLY a valid S-expression. Do not include markdown, conversational text, or explanations.\n\n")
-    
+    prompt.WriteString("You MUST respond with ONLY a flat S-expression containing the fields below. Do not wrap the content in a 'parse_evaluation' block.\n\n")
+
     prompt.WriteString("EXAMPLE OUTPUT 1 (Good content):\n")
-    prompt.WriteString("(parse_evaluation\n")
-    prompt.WriteString("  (quality \"sufficient\")\n")
-    prompt.WriteString("  (reasoning \"Content contains specific data points requested.\")\n")
-    prompt.WriteString("  (confidence 0.9)\n")
-    prompt.WriteString("  (missing_info)\n") // Explicitly showing empty list
-    prompt.WriteString("  (next_action \"continue\")\n")
-    prompt.WriteString("  (should_continue true)\n")
-    prompt.WriteString("  (useful_content \"Found the required API endpoints.\"))\n\n")
-    
+    prompt.WriteString("(quality \"sufficient\")\n")
+    prompt.WriteString("(reasoning \"Content contains specific data points requested.\")\n")
+    prompt.WriteString("(confidence 0.9)\n")
+    prompt.WriteString("(missing_info)\n") // Explicitly showing empty list
+    prompt.WriteString("(next_action \"continue\")\n")
+    prompt.WriteString("(should_continue true)\n")
+    prompt.WriteString("(useful_content \"Found the required API endpoints.\")\n\n")
+
     prompt.WriteString("EXAMPLE OUTPUT 2 (Missing info):\n")
-    prompt.WriteString("(parse_evaluation\n")
-    prompt.WriteString("  (quality \"try_fallback\")\n")
-    prompt.WriteString("  (reasoning \"Page is a login gate, no data accessible.\")\n")
-    prompt.WriteString("  (confidence 0.95)\n")
-    prompt.WriteString("  (missing_info \"accessible data\" \"public statistics\")\n")
-    prompt.WriteString("  (next_action \"try_fallback\")\n")
-    prompt.WriteString("  (should_continue true)\n")
-    prompt.WriteString("  (useful_content \"\"))\n\n")
+    prompt.WriteString("(quality \"try_fallback\")\n")
+    prompt.WriteString("(reasoning \"Page is a login gate, no data accessible.\")\n")
+    prompt.WriteString("(confidence 0.95)\n")
+    prompt.WriteString("(missing_info \"accessible data\" \"public statistics\")\n")
+    prompt.WriteString("(next_action \"try_fallback\")\n")
+    prompt.WriteString("(should_continue true)\n")
+    prompt.WriteString("(useful_content \"\")\n\n")
     
     // 2. TASK CONTEXT
     prompt.WriteString(fmt.Sprintf("GOAL: %s\n", goalDescription))
@@ -177,33 +175,23 @@ func (e *Engine) buildParseEvaluationPrompt(
     return prompt.String()
 }
 
-// parseParseEvaluation extracts evaluation from S-expression response
+// parseParseEvaluation extracts evaluation from flat S-expression response
 func (e *Engine) parseParseEvaluation(rawResponse string) (*ParseEvaluation, error) {
-	// Clean up response
-	content := strings.TrimSpace(rawResponse)
-	content = strings.TrimPrefix(content, "```lisp")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-	
-	// Find parse_evaluation block using recursive search (handles nested structures)
-	evalBlocks := findBlocksRecursive(content, "parse_evaluation")
-	if len(evalBlocks) == 0 {
-		// Try with hyphen
-		evalBlocks = findBlocksRecursive(content, "parse-evaluation")
-	}
-	
-	if len(evalBlocks) == 0 {
-		return nil, fmt.Errorf("no parse_evaluation block found")
-	}
-	
-	block := evalBlocks[0]
-	
-	evaluation := &ParseEvaluation{
-		MissingInfo:    []string{},
-		Confidence:     0.7, // Default
-		ShouldContinue: true,
-	}
+    // Clean up response
+    content := strings.TrimSpace(rawResponse)
+    content = strings.TrimPrefix(content, "```lisp")
+    content = strings.TrimPrefix(content, "```")
+    content = strings.TrimSuffix(content, "```")
+    content = strings.TrimSpace(content)
+
+    // We expect a flat structure now, no need to search for a wrapper block
+    block := content
+
+    evaluation := &ParseEvaluation{
+        MissingInfo:    []string{},
+        Confidence:     0.7, // Default
+        ShouldContinue: true,
+    }
 	
 	// Extract quality
 	if quality := extractFieldContent(block, "quality"); quality != "" {
