@@ -7,12 +7,11 @@ import (
     "io"
     "log"
     "net/http"
+    "net/url"
     "strings"
     "time"
 
     "github.com/go-shiori/go-readability"
-    "github.com/PuerkitoBio/goquery"
-
     "go-llama/internal/config"
 )
 
@@ -73,19 +72,19 @@ func (t *WebParserUnifiedTool) Execute(ctx context.Context, params map[string]in
     startTime := time.Now()
 
     // 1. Validate Params
-    url, ok := params["url"].(string)
-    if !ok || url == "" {
+    urlStr, ok := params["url"].(string)
+    if !ok || urlStr == "" {
         return &ToolResult{Success: false, Error: "missing 'url' parameter"}, fmt.Errorf("missing url")
     }
 
     goal, _ := params["goal"].(string) // Optional, but critical for large pages
 
-    if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+    if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
         return &ToolResult{Success: false, Error: "invalid URL scheme"}, fmt.Errorf("invalid url")
     }
 
     // 2. Fetch & Extract
-    article, err := t.fetchAndExtract(ctx, url)
+    article, err := t.fetchAndExtract(ctx, urlStr)
     if err != nil {
         return &ToolResult{Success: false, Error: fmt.Sprintf("Fetch failed: %v", err)}, err
     }
@@ -128,14 +127,14 @@ func (t *WebParserUnifiedTool) Execute(ctx context.Context, params map[string]in
 
     // 5. Format Output
     output := fmt.Sprintf("=== WEB PARSER RESULTS ===\nStrategy: %s\nReasoning: %s\n\nSource: %s\n%s\n\nContent:\n%s",
-        strategy, reasoning, article.Title, url, content)
+        strategy, reasoning, article.Title, urlStr, content)
 
     return &ToolResult{
         Success:  true,
         Output:   output,
         Duration: time.Since(startTime),
         Metadata: map[string]interface{}{
-            "url":           url,
+            "url":           urlStr,
             "title":         article.Title,
             "strategy":      strategy,
             "final_tokens":  t.estimateTokens(content),
@@ -145,8 +144,14 @@ func (t *WebParserUnifiedTool) Execute(ctx context.Context, params map[string]in
 }
 
 // fetchAndExtract handles HTTP and Readability
-func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, url string) (*readability.Article, error) {
-    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString string) (*readability.Article, error) {
+    // Parse URL string to url.URL type
+    parsedURL, err := url.Parse(urlString)
+    if err != nil {
+        return nil, err
+    }
+
+    req, err := http.NewRequestWithContext(ctx, "GET", urlString, nil)
     if err != nil {
         return nil, err
     }
@@ -170,12 +175,13 @@ func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, url string) 
     }
 
     // Use Readability to extract clean content
-    article, err := readability.FromReader(strings.NewReader(string(html)), url)
+    article, err := readability.FromReader(strings.NewReader(string(html)), parsedURL)
     if err != nil {
         return nil, err
     }
 
-    return article, nil
+    // Return a pointer to the article to avoid copying large structs and allow modification if needed
+    return &article, nil
 }
 
 // performSelectiveParsing asks the LLM which chunks to read
@@ -199,7 +205,7 @@ func (t *WebParserUnifiedTool) performSelectiveParsing(ctx context.Context, arti
     }
 
     // 3. Prompt LLM
-    mapJSON, _ := json.Marshal(chunkunksInfos) // Using the chunk info map
+    mapJSON, _ := json.Marshal(chunkInfos) // Typo fix here
     
     prompt := fmt.Sprintf(`You are a research assistant. Your goal is: "%s".
 
@@ -283,10 +289,6 @@ func (t *WebParserUnifiedTool) createChunks(text string, size int) []string {
     if len(text) == 0 {
         return []string{}
     }
-    
-    // Simple splitting by size is usually fine for this selection phase, 
-    // as we just need the LLM to find the right "region" of the text.
-    // We can improve by splitting on newlines if needed, but for robustness, fixed size + boundary search is good.
     
     var chunks []string
     for len(text) > 0 {
