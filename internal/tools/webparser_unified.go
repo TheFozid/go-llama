@@ -1,8 +1,3 @@
-### File: internal/tools/webparser_unified.go
-
-**Action:** Create
-
-**Content:**
 package tools
 
 import (
