@@ -757,37 +757,30 @@ func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportVal
 
 // parseActionFromPlan parses a plan step into an Action
 func (e *Engine) parseActionFromPlan(planStep string) Action {
-	// Simple parsing: look for tool keywords
-	tool := ActionToolSearch // Default to search
-	planLower := strings.ToLower(planStep)
+    // Simple parsing: look for tool keywords
+    tool := ActionToolSearch // Default to search
+    planLower := strings.ToLower(planStep)
 
-	// Map to specific registered tools (not deprecated generic web_parse)
-	if strings.Contains(planLower, "contextual") || strings.Contains(planLower, "purpose") {
-		tool = ActionToolWebParseContextual
-	} else if strings.Contains(planLower, "chunk") || strings.Contains(planLower, "incremental") {
-		tool = ActionToolWebParseChunked
-	} else if strings.Contains(planLower, "metadata") || strings.Contains(planLower, "lightweight") {
-		tool = ActionToolWebParseMetadata
-	} else if strings.Contains(planLower, "parse") || strings.Contains(planLower, "read") || strings.Contains(planLower, "fetch") {
-		tool = ActionToolWebParseGeneral // Default parse tool
-	} else if strings.Contains(planLower, "search") || strings.Contains(planLower, "find") || strings.Contains(planLower, "look up") {
-		tool = ActionToolSearch
-	}
-	// NOTE: Removed ActionToolSandbox mapping - sandbox not yet implemented
-	// Keywords like "test", "experiment", "try" will fall back to search
+    // All web parsing is now handled by unified tool
+    if strings.Contains(planLower, "parse") || strings.Contains(planLower, "read") || strings.Contains(planLower, "fetch") ||
+       strings.Contains(planLower, "contextual") || strings.Contains(planLower, "chunk") || strings.Contains(planLower, "metadata") {
+        tool = ActionToolWebParseUnified
+    } else if strings.Contains(planLower, "search") || strings.Contains(planLower, "find") || strings.Contains(planLower, "look up") {
+        tool = ActionToolSearch
+    }
 
-	// CRITICAL: Validate tool exists before creating action
-	if !e.validateToolExists(tool) {
-		log.Printf("[Dialogue] WARNING: Tool '%s' not registered, falling back to search", tool)
-		tool = ActionToolSearch
-	}
+    // CRITICAL: Validate tool exists before creating action
+    if !e.validateToolExists(tool) {
+        log.Printf("[Dialogue] WARNING: Tool '%s' not registered, falling back to search", tool)
+        tool = ActionToolSearch
+    }
 
-	return Action{
-		Description: planStep,
-		Tool:        tool,
-		Status:      ActionStatusPending,
-		Timestamp:   time.Now(),
-	}
+    return Action{
+        Description: planStep,
+        Tool:        tool,
+        Status:      ActionStatusPending,
+        Timestamp:   time.Now(),
+    }
 }
 
 // validateToolExists checks if a tool is registered before creating an action
@@ -799,29 +792,26 @@ func (e *Engine) validateToolExists(toolName string) bool {
 
 // getAvailableToolsList returns a formatted list of registered tools for LLM context
 func (e *Engine) getAvailableToolsList() string {
-	registry := e.toolRegistry.GetRegistry()
-	tools := registry.List()
-	var builder strings.Builder
-	builder.WriteString("\nAvailable tools for creating actions:\n")
+    registry := e.toolRegistry.GetRegistry()
+    tools := registry.List()
+    var builder strings.Builder
+    builder.WriteString("\nAvailable tools for creating actions:\n")
 
-	// List tools in logical order
-	toolOrder := []string{
-		ActionToolSearch,
-		ActionToolWebParseMetadata,
-		ActionToolWebParseGeneral,
-		ActionToolWebParseContextual,
-		ActionToolWebParseChunked,
-	}
+    // List tools in logical order
+    toolOrder := []string{
+        ActionToolSearch,
+        ActionToolWebParseUnified,
+    }
 
-	for _, toolName := range toolOrder {
-		if desc, exists := tools[toolName]; exists {
-			builder.WriteString(fmt.Sprintf("- %s: %s\n", toolName, desc))
-		}
-	}
+    for _, toolName := range toolOrder {
+        if desc, exists := tools[toolName]; exists {
+            builder.WriteString(fmt.Sprintf("- %s: %s\n", toolName, desc))
+        }
+    }
 
-	builder.WriteString("\nIMPORTANT: Only use tools from this list in action plans. Never invent tool names.\n")
-	builder.WriteString("Default to 'search' if unsure which tool to use.\n")
-	return builder.String()
+    builder.WriteString("\nIMPORTANT: Only use tools from this list in action plans. Never invent tool names.\n")
+    builder.WriteString("Default to 'search' if unsure which tool to use.\n")
+    return builder.String()
 }
 
 // assessProgress evaluates if the current plan is still optimal after completing an action

@@ -442,7 +442,6 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
                                 // If no parse action exists, create one NOW
                                 if !hasParseAction {
                                     var parseAction Action
-                                    goalLower := strings.ToLower(topGoal.Description)
 
                                     // All parsing is now handled by the unified tool
                                     purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
