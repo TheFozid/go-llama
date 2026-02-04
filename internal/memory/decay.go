@@ -557,7 +557,7 @@ func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
 
     // Sub-phase C: Evolve principles (update slots 4-10 with best candidates)
     log.Printf("[DecayWorker] Sub-phase C: Principle evolution...")
-    return EvolvePrinciples(w.db, w.storage, w.embedder, candidates, w.minRatingThreshold, w.llmURL, w.llmSmallURL, w.llmClient)
+    return EvolvePrinciples(w.db, w.storage, w.embedder, candidates, w.minRatingThreshold, w.llmURL, w.llmSmallURL, w.llmSmallModel, w.llmClient)
 }
 
 // compressTierWithClusters finds and compresses memories using cluster-based approach
