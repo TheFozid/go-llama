@@ -420,32 +420,29 @@ func generatePrincipleFromContrast(ctx context.Context, llmURL string, llmModel 
     
     prompt := fmt.Sprintf(`You are analyzing two AI interactions to find a guiding principle.
 
-SUCCESSFUL INTERACTION (Good Outcome):
+SUCCESS (Good):
 %s
 
-FAILED INTERACTION (Bad Outcome):
+FAILURE (Bad):
 %s
 
 TASK:
-Identify ONE specific behavioral guidance principle that explains why the first interaction succeeded and the second failed.
-The principle should focus on:
-1. HOW the AI communicated (tone, style, clarity).
-2. The "Vibe" or Persona (human-like vs robotic).
-3. A specific heuristic to guide future responses.
+Identify ONE specific behavioral principle explaining the success/failure difference.
+Focus on: Tone, Style, Persona, Clarity.
 
-BAD examples (too generic/safety-focused):
-- "Always follow the rules."
-- "Be safe."
+CRITICAL FORMATTING RULES:
+1. Respond ONLY with a single S-expression line.
+2. Do NOT use markdown code blocks ( ``` ).
+3. Do NOT include 'confidence' or 'reasoning' keywords inside the principle quotes.
+4. Do NOT use semicolons or colons inside the principle quotes.
 
-GOOD examples (persona and style focused):
-- "To be believable, avoid metaphors and talk plainly like a normal person."
-- "Adjust the complexity of your language to match the user's knowledge level."
-- "Use short, direct sentences when the user is in a hurry."
-- "Show empathy by acknowledging the user's feelings before giving advice."
-- "Keep technical explanations simple unless the user asks for details."
+OUTPUT FORMAT:
+(principle "10-25 word principle text" confidence 0.XX reasoning "Brief explanation text")
 
-Respond ONLY with a valid S-expression (Lisp-style):
-(principle "Your specific behavioral guidance here (10-25 words)" confidence 0.85 reasoning "Brief explanation of why this principle fits the contrast")`, truncateContent(goodContent, 600), truncateContent(badContent, 600))
+EXAMPLE:
+(principle "Use simple vocabulary to match user expertise" confidence 0.90 reasoning "Jargon alienates non-expert users")
+
+Strictly follow the format above.`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
 
     reqBody := map[string]interface{}{
         "model": llmModel,
