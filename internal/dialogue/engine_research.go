@@ -95,7 +95,8 @@ Respond with this FLAT S-expression (no wrapper, no markdown):
     }
     
     log.Printf("[Dialogue] ✓ Parsed research plan successfully (%d questions)", len(plan.SubQuestions))
-                         heuristicPlan.RootQuestion = root.list[0].atom
+    return plan, tokens, nil
+}
                     }
 
                     // Iterate over rest of list to find questions
