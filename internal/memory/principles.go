@@ -599,7 +599,8 @@ func EvolvePrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, candida
         // Case A: No meaningful match found (New Concept)
         if bestMatchSlot == -1 || highestSimilarity < 0.40 {
             log.Printf("[Principles] Candidate is new concept (Sim: %.2f). Finding slot...", highestSimilarity)
-            handleNewConcept(db, candidate, allPrinciples, llmMainURL, llmSmallURL, llmClient)
+            // Pass pointers to update local state and prevent re-filling the same slot
+            handleNewConcept(ctx, db, candidate, &allPrinciples, &activeEmbeddings, embedder, llmMainURL, llmSmallURL, llmClient)
             continue
         }
 
@@ -683,35 +684,56 @@ func findPrincipleBySlot(principles []Principle, slot int) Principle {
 }
 
 // handleNewConcept manages insertion or survival-of-the-fittest for unrelated principles
-func handleNewConcept(db *gorm.DB, candidate PrincipleCandidate, allPrinciples []Principle, llmMainURL, llmSmallURL string, llmClient interface{}) {
-    // Find AI slots (4-10) that are empty or the weakest
-    aiSlots := []Principle{}
-    for _, p := range allPrinciples {
-        if p.Slot >= 4 && p.Slot <= 10 {
-            aiSlots = append(aiSlots, p)
-        }
-    }
-
-    // 1. Try to fill empty slot
-    for _, p := range aiSlots {
-        if p.Content == "" {
+// It updates the local state (allPrinciples and activeEmbeddings) to prevent duplicate slot assignments in the same cycle.
+func handleNewConcept(ctx context.Context, db *gorm.DB, candidate PrincipleCandidate, allPrinciples *[]Principle, activeEmbeddings *map[int][]float32, embedder *Embedder, llmMainURL, llmSmallURL string, llmClient interface{}) {
+    // 1. Try to fill empty slot (Iterate directly over the pointer slice to modify it)
+    for i := range *allPrinciples {
+        p := &(*allPrinciples)[i]
+        if p.Slot >= 4 && p.Slot <= 10 && p.Content == "" {
             log.Printf("[Principles] Filling empty slot %d with new concept.", p.Slot)
             updatePrincipleContent(db, p.Slot, candidate.Content, candidate.Rating)
+            
+            // Update local state immediately to reflect the change
+            p.Content = candidate.Content
+            p.Rating = candidate.Rating
+            
+            // Generate and store embedding for future matching in this cycle
+            if emb, err := embedder.Embed(ctx, candidate.Content); err == nil {
+                (*activeEmbeddings)[p.Slot] = emb
+            }
             return
         }
     }
 
     // 2. Survival of the Fittest: Replace the lowest rated AI slot
-    if len(aiSlots) > 0 {
-        // Sort by rating ascending
-        sort.Slice(aiSlots, func(i, j int) bool {
-            return aiSlots[i].Rating < aiSlots[j].Rating
-        })
+    // Find the index of the weakest AI slot
+    weakestIndex := -1
+    weakestRating := 1.0
+    
+    for i := range *allPrinciples {
+        p := &(*allPrinciples)[i]
+        if p.Slot >= 4 && p.Slot <= 10 {
+            if p.Rating < weakestRating {
+                weakestRating = p.Rating
+                weakestIndex = i
+            }
+        }
+    }
 
-        weakest := aiSlots[0]
+    if weakestIndex != -1 {
+        weakest := &(*allPrinciples)[weakestIndex]
         if candidate.Rating > weakest.Rating {
             log.Printf("[Principles] Slots full. New concept (%.2f) replaces weakest slot %d (%.2f).", candidate.Rating, weakest.Slot, weakest.Rating)
             updatePrincipleContent(db, weakest.Slot, candidate.Content, candidate.Rating)
+            
+            // Update local state immediately
+            weakest.Content = candidate.Content
+            weakest.Rating = candidate.Rating
+            
+            // Update embedding
+            if emb, err := embedder.Embed(ctx, candidate.Content); err == nil {
+                (*activeEmbeddings)[weakest.Slot] = emb
+            }
         } else {
             log.Printf("[Principles] Slots full. New concept (%.2f) weaker than weakest link (%.2f). Discarding.", candidate.Rating, weakest.Rating)
         }
