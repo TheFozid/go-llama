@@ -44,20 +44,22 @@ type CompressionWeights struct {
 
 // DecayWorker manages the background compression and principle evolution process
 type DecayWorker struct {
-	storage                *Storage
-	compressor             *Compressor
-	embedder               *Embedder
-	taggerQueue            TaggerQueueInterface
-	linker                 *Linker
-	db                     *gorm.DB   // Database handle (used for migration status)
-	llmURL                 string     // LLM URL for principle generation
-	llmModel               string     // LLM model name for principle generation
-	llmClient              interface{} // LLM queue client for principle generation
-	scheduleHours          int
-	principleScheduleHours int
-	minRatingThreshold     float64
-	extractionLimit        int        // Max memories to analyze for principles
-	tierRules              TierRules  // DEPRECATED: kept for backwards compatibility
+    storage                *Storage
+    compressor             *Compressor
+    embedder               *Embedder
+    taggerQueue            TaggerQueueInterface
+    linker                 *Linker
+    db                     *gorm.DB   // Database handle (used for migration status)
+    llmURL                 string     // LLM URL for principle generation (Main/Complex)
+    llmModel               string     // LLM model name for principle generation (Main/Complex)
+    llmClient              interface{} // LLM queue client for principle generation
+    llmSmallURL            string     // LLM URL for simple evaluations (Fast/Light)
+    llmSmallModel          string     // LLM model name for simple evaluations
+    scheduleHours          int
+    principleScheduleHours int
+    minRatingThreshold     float64
+    extractionLimit        int        // Max memories to analyze for principles
+    tierRules              TierRules  // DEPRECATED: kept for backwards compatibility
 	mergeWindows           MergeWindows
 	importanceMod          float64    // DEPRECATED: kept for backwards compatibility
 	accessMod              float64    // DEPRECATED: kept for backwards compatibility
@@ -553,9 +555,9 @@ func (w *DecayWorker) evolvePrinciplesPhase(ctx context.Context) error {
 
 	log.Printf("[DecayWorker] Found %d principle candidates", len(candidates))
 
-	// Sub-phase C: Evolve principles (update slots 4-10 with best candidates)
-	log.Printf("[DecayWorker] Sub-phase C: Principle evolution...")
-	return EvolvePrinciples(w.db, candidates, w.minRatingThreshold)
+    // Sub-phase C: Evolve principles (update slots 4-10 with best candidates)
+    log.Printf("[DecayWorker] Sub-phase C: Principle evolution...")
+    return EvolvePrinciples(w.db, w.storage, w.embedder, candidates, w.minRatingThreshold, w.llmURL, w.llmSmallURL, w.llmClient)
 }
 
 // compressTierWithClusters finds and compresses memories using cluster-based approach

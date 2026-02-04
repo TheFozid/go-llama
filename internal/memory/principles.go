@@ -537,7 +537,7 @@ Respond ONLY with a valid S-expression (Lisp-style):
 
 // EvolvePrinciples updates AI-managed slots (4-10) using semantic matching and conflict resolution.
 // It requires an embedder for vector search and two LLM endpoints (Main/Small) via the queue client.
-func EvolvePrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, candidates []PrincipleCandidate, minRatingThreshold float64, llmMainURL, llmSmallURL string, llmClient interface{}) error {
+func EvolvePrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, candidates []PrincipleCandidate, minRatingThreshold float64, llmMainURL, llmSmallURL, llmSmallModel string, llmClient interface{}) error {
     if len(candidates) == 0 {
         return nil
     }
@@ -613,12 +613,12 @@ func EvolvePrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, candida
             continue
         }
 
-        // Case B: High Similarity (Potential Duplicate or Merge)
+// Case B: High Similarity (Potential Duplicate or Merge)
         if highestSimilarity > 0.75 {
             existingP := findPrincipleBySlot(allPrinciples, bestMatchSlot)
             log.Printf("[Principles] High similarity (%.2f) with Slot %d. Merging.", highestSimilarity, bestMatchSlot)
             
-            mergedContent, err := mergePrinciples(ctx, llmSmallURL, llmClient, existingP.Content, candidate.Content)
+            mergedContent, err := mergePrinciples(ctx, llmSmallURL, llmSmallModel, llmClient, existingP.Content, candidate.Content)
             if err != nil {
                 log.Printf("[Principles] Merge failed: %v. Skipping.", err)
                 continue
@@ -636,12 +636,12 @@ func EvolvePrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, candida
             continue
         }
 
-        // Case C: Medium Similarity (Potential Contradiction or Compatible Nuance)
+// Case C: Medium Similarity (Potential Contradiction or Compatible Nuance)
         if highestSimilarity >= 0.40 {
             existingP := findPrincipleBySlot(allPrinciples, bestMatchSlot)
             log.Printf("[Principles] Medium similarity (%.2f) with Slot %d. Checking for conflict...", highestSimilarity, bestMatchSlot)
             
-            isContradiction, err := checkContradiction(ctx, llmSmallURL, llmClient, existingP.Content, candidate.Content)
+            isContradiction, err := checkContradiction(ctx, llmSmallURL, llmSmallModel, llmClient, existingP.Content, candidate.Content)
             if err != nil {
                 log.Printf("[Principles] Contradiction check failed: %v. Assuming safe.", err)
                 isContradiction = false
@@ -675,25 +675,6 @@ func EvolvePrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, candida
 }
 
 // --- HELPER FUNCTIONS FOR EVOLUTION ---
-
-// cosineSimilarity calculates the cosine similarity between two vectors
-func cosineSimilarity(a, b []float32) float32 {
-    if len(a) != len(b) {
-        return 0
-    }
-    var dotProduct float32
-    var normA float32
-    var normB float32
-    for i := 0; i < len(a); i++ {
-        dotProduct += a[i] * b[i]
-        normA += a[i] * a[i]
-        normB += b[i] * b[i]
-    }
-    if normA == 0 || normB == 0 {
-        return 0
-    }
-    return dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
-}
 
 // findPrincipleBySlot is a helper to retrieve a principle from the slice
 func findPrincipleBySlot(principles []Principle, slot int) Principle {
@@ -742,7 +723,7 @@ func handleNewConcept(db *gorm.DB, candidate PrincipleCandidate, allPrinciples [
 }
 
 // checkContradiction uses the Small LLM to determine if two principles conflict
-func checkContradiction(ctx context.Context, llmURL string, llmClient interface{}, p1 string, p2 string) (bool, error) {
+func checkContradiction(ctx context.Context, llmURL string, llmModel string, llmClient interface{}, p1 string, p2 string) (bool, error) {
     type LLMCaller interface {
         Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
     }
@@ -760,7 +741,7 @@ Do they contradict each other? (e.g. "Be honest" vs "Lie to be nice").
 Answer strictly "YES" or "NO".`, p1, p2)
 
     payload := map[string]interface{}{
-        "model": "llama3-8b", // Assuming small model, but usually handled by server routing based on URL
+        "model": llmModel, // Use configured small model
         "messages": []map[string]string{
             {"role": "system", "content": "You are a logic checker."},
             {"role": "user", "content": prompt},
@@ -768,7 +749,7 @@ Answer strictly "YES" or "NO".`, p1, p2)
         "temperature": 0.1,
         "stream":      false,
     }
-
+    
     body, err := client.Call(ctx, llmURL, payload)
     if err != nil {
         return false, err
@@ -795,7 +776,7 @@ Answer strictly "YES" or "NO".`, p1, p2)
 }
 
 // mergePrinciples uses the Small LLM to synthesize two principles into one
-func mergePrinciples(ctx context.Context, llmURL string, llmClient interface{}, p1 string, p2 string) (string, error) {
+func mergePrinciples(ctx context.Context, llmURL string, llmModel string, llmClient interface{}, p1 string, p2 string) (string, error) {
     type LLMCaller interface {
         Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
     }
@@ -817,7 +798,7 @@ Requirements:
 Output ONLY the new rule.`, p1, p2)
 
     payload := map[string]interface{}{
-        "model": "llama3-8b",
+        "model": llmModel, // Use configured small model
         "messages": []map[string]string{
             {"role": "system", "content": "You are an editor."},
             {"role": "user", "content": prompt},
