@@ -12,6 +12,7 @@ import (
     "time"
 
     "github.com/go-shiori/go-readability"
+	"github.com/ledongthuc/pdf"
     "go-llama/internal/config"
 )
 
@@ -151,9 +152,8 @@ func (t *WebParserUnifiedTool) Execute(ctx context.Context, params map[string]in
     }, nil
 }
 
-// fetchAndExtract handles HTTP and Readability
+// fetchAndExtract handles HTTP, Readability, and PDF parsing
 func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString string) (*readability.Article, error) {
-    // Parse URL string to url.URL type
     parsedURL, err := url.Parse(urlString)
     if err != nil {
         return nil, err
@@ -177,19 +177,61 @@ func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString st
 
     maxBytes := int64(t.maxSizeMB * 1024 * 1024)
     limitedReader := io.LimitReader(resp.Body, maxBytes)
-    html, err := io.ReadAll(limitedReader)
+    data, err := io.ReadAll(limitedReader)
     if err != nil {
         return nil, err
     }
 
-    // Use Readability to extract clean content
-    article, err := readability.FromReader(strings.NewReader(string(html)), parsedURL)
-    if err != nil {
-        return nil, err
-    }
+    // Check Content-Type to determine parsing strategy
+    contentType := resp.Header.Get("Content-Type")
 
-    // Return a pointer to the article to avoid copying large structs and allow modification if needed
-    return &article, nil
+    if strings.Contains(contentType, "application/pdf") {
+        // --- PDF PARSING LOGIC ---
+        log.Printf("[WebParser] Detected PDF, extracting text...")
+        
+        // Create a reader from the byte data
+        pdfReader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+        if err != nil {
+            return nil, fmt.Errorf("failed to open PDF: %w", err)
+        }
+
+        var pdfTextBuilder strings.Builder
+        numPages := pdfReader.NumPage()
+
+        // Limit PDF pages if necessary to prevent massive processing times
+        // Optional: You could add a check like if numPages > 50 { return error }
+        
+        for i := 1; i <= numPages; i++ {
+            page := pdfReader.Page(i)
+            if page.V.IsNull() {
+                continue // Skip empty pages
+            }
+            
+            text, err := page.GetText()
+            if err != nil {
+                log.Printf("[WebParser] Warning: failed to extract text from page %d: %v", i, err)
+                continue
+            }
+            pdfTextBuilder.WriteString(text)
+            pdfTextBuilder.WriteString("\n") // Ensure spacing between pages
+        }
+
+        // Map PDF content to the Article struct so the rest of the pipeline remains unchanged
+        return &readability.Article{
+            Title:       "PDF Document: " + parsedURL.Path, // PDFs often lack good titles in metadata
+            Content:     pdfTextBuilder.String(),
+            TextContent: pdfTextBuilder.String(),
+            Length:      pdfTextBuilder.Len(),
+        }, nil
+
+    } else {
+        // --- HTML PARSING LOGIC (Existing) ---
+        article, err := readability.FromReader(strings.NewReader(string(data)), parsedURL)
+        if err != nil {
+            return nil, err
+        }
+        return &article, nil
+    }
 }
 
 // performSelectiveParsing asks the LLM which chunks to read
