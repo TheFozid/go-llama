@@ -26,24 +26,12 @@ INSTRUCTIONS:
 4. Assign priorities (10=highest, 1=lowest).
 5. List dependencies if a question requires answer from another.
 
-Respond with S-expression:
+Respond with this FLAT S-expression (no wrapper, no markdown):
 
-(research_plan
-  (root_question "Main question driving this goal")
-  (sub_questions
-    (question
-      (id "q1")
-      (text "First question")
-      (search_query "Search terms for q1")
-      (priority 10)
-      (deps ()))
-    (question
-      (id "q2")
-      (text "Second question")
-      (search_query "Search terms for q2")
-      (priority 8)
-      (deps ("q1")))
-    ...))`, goal.Description)
+(root "Main question driving this goal")
+(q "First question text")
+(q "Second question text")
+(q "Third question text")`, goal.Description)
 
 	response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
 	if err != nil {
@@ -99,55 +87,14 @@ Respond with S-expression:
     // These often appear as (reasoning "..." (target ...)) or <think>...</think>
     content = cleanLLMWrappers(content)
 
-	// IMPROVED PARSING: Use recursive search first (most robust)
-
-	// Strategy 1: Recursive search (handles nested structures like (reasoning (research_plan ...)))
-	planBlocks := findBlocksRecursive(content, "research_plan")
-
-	// Strategy 2: Direct search as fallback
-	if len(planBlocks) == 0 {
-		log.Printf("[Dialogue] Recursive search failed, trying direct search...")
-		planBlocks = findBlocks(content, "research_plan")
-	}
-
-    // Strategy 3: Regex fallback (handles malformed S-expressions)
-    if len(planBlocks) == 0 {
-        log.Printf("[Dialogue] Structured parsing failed, attempting regex extraction...")
-        plan, err := extractResearchPlanFromMalformed(content)
-        if err == nil && plan != nil {
-            log.Printf("[Dialogue] ✓ Extracted research plan via regex fallback (%d questions)", len(plan.SubQuestions))
-            return plan, tokens, nil
-        }
-        log.Printf("[Dialogue] Regex extraction also failed: %v", err)
+    // REFACTORED PARSING: Use Flat S-Expression Parser
+    // The system expects: (root "...") (q "...") (q "...")
+    plan, err := extractResearchPlanFlat(content)
+    if err != nil {
+        return nil, tokens, fmt.Errorf("failed to parse flat research plan: %w", err)
     }
-
-    // STRATEGY 4: Heuristic Fallback (Last Ditch Effort)
-    // If we have balanced parens but no recognizable tags, try to interpret the root list as the plan
-    if len(planBlocks) == 0 {
-        log.Printf("[Dialogue] Attempting heuristic parsing of root S-expression...")
-        
-        // Quick check for balanced parens
-        openCount := strings.Count(content, "(")
-        closeCount := strings.Count(content, ")")
-        
-        if openCount > 0 && openCount == closeCount {
-            // Try to tokenize the whole content as a generic list
-            parseTokens := tokenize(content) // Renamed to avoid shadowing 'tokens' (int) from outer scope
-            if len(parseTokens) > 0 {
-                root, _, parseErr := parseExpr(parseTokens, 0)
-                if parseErr == nil && !root.isAtom && len(root.list) > 0 {
-                    // Assume the first string is the root question, and sub-lists are questions
-                    heuristicPlan := &ResearchPlan{
-                        RootQuestion:    "Heuristic Plan", // Fallback
-                        SubQuestions:    []ResearchQuestion{},
-                        CurrentStep:     0,
-                        SynthesisNeeded: false,
-                        CreatedAt:       time.Now(),
-                        UpdatedAt:       time.Now(),
-                    }
-
-                    // Try to extract root question
-                    if len(root.list) > 0 && root.list[0].isAtom {
+    
+    log.Printf("[Dialogue] ✓ Parsed research plan successfully (%d questions)", len(plan.SubQuestions))
                          heuristicPlan.RootQuestion = root.list[0].atom
                     }
 

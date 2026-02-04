@@ -8,6 +8,67 @@ import (
 )
 
 // ParseReasoningSExpr parses S-expression format reasoning
+// extractResearchPlanFlat parses a flat S-expression list of questions.
+// Expected Format: (root "Main Question") (q "Sub Q 1") (q "Sub Q 2")
+func extractResearchPlanFlat(input string) (*ResearchPlan, error) {
+    input = strings.TrimSpace(input)
+    
+    // Clean markdown fences
+    input = strings.TrimPrefix(input, "```lisp")
+    input = strings.TrimPrefix(input, "```")
+    input = strings.TrimSuffix(input, "```")
+    input = fixMalformedQuotedSexpr(input)
+
+    plan := &ResearchPlan{
+        SubQuestions:    []ResearchQuestion{},
+        CurrentStep:     0,
+        SynthesisNeeded: false,
+        CreatedAt:       time.Now(),
+        UpdatedAt:       time.Now(),
+    }
+
+    tokens := tokenize(input)
+    
+    // Simple state machine to parse flat list
+    // (root "text") (q "text")
+    for i := 0; i < len(tokens); i++ {
+        token := tokens[i]
+        
+        if token == "root" {
+            // Expect next token to be the string content
+            if i+1 < len(tokens) && tokens[i+1] != "(" && tokens[i+1] != ")" {
+                plan.RootQuestion = tokens[i+1]
+                i++ // Skip next
+            }
+        } else if token == "q" {
+            // Expect next token to be the string content
+            if i+1 < len(tokens) && tokens[i+1] != "(" && tokens[i+1] != ")" {
+                qText := tokens[i+1]
+                
+                // Generate ID automatically based on count
+                qID := fmt.Sprintf("q%d", len(plan.SubQuestions)+1)
+                
+                plan.SubQuestions = append(plan.SubQuestions, ResearchQuestion{
+                    ID:              qID,
+                    Question:        qText,
+                    SearchQuery:     qText, // Default search query to question text
+                    Status:          "pending",
+                    Priority:        10,
+                    Dependencies:    []string{},
+                })
+                i++ // Skip next
+            }
+        }
+    }
+
+    if plan.RootQuestion == "" {
+        return nil, fmt.Errorf("missing root question in plan")
+    }
+
+    return plan, nil
+}
+
+// ParseReasoningSExpr parses S-expression format reasoning
 func ParseReasoningSExpr(input string) (*ReasoningResponse, error) {
     input = strings.TrimSpace(input)
 
