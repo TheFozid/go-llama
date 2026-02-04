@@ -17,20 +17,25 @@ import (
 
 // WebParserUnifiedTool provides intelligent web parsing with strategy selection
 type WebParserUnifiedTool struct {
-    httpClient     *http.Client
-    userAgent      string
-    maxSizeMB      int
-    llmURL         string
-    llmModel       string
-    llmClient      interface{} // Queue client
-    thresholdToken int // Threshold for switching to selective mode (default 6000)
+    httpClient        *http.Client
+    userAgent         string
+    maxSizeMB         int
+    llmURL            string
+    llmModel          string
+    llmClient         interface{} // Queue client
+    maxContentTokens  int         // Dynamic limit based on LLM context size (typically 2/3 of context)
 }
 
 // NewWebParserUnifiedTool creates a new unified parser
-func NewWebParserUnifiedTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig, llmClient interface{}) *WebParserUnifiedTool {
+func NewWebParserUnifiedTool(userAgent string, llmURL string, llmModel string, maxPageSizeMB int, config ToolConfig, llmClient interface{}, maxContentTokens int) *WebParserUnifiedTool {
     timeout := time.Duration(config.TimeoutIdle) * time.Second
     if timeout == 0 {
-        timeout = 60 * time.Second
+        timeout = 90 * time.Second
+    }
+
+    // Fallback safety: if calculation resulted in 0 or less, revert to a safe default (6000)
+    if maxContentTokens <= 0 {
+        maxContentTokens = 6000
     }
 
     return &WebParserUnifiedTool{
@@ -43,12 +48,12 @@ func NewWebParserUnifiedTool(userAgent string, llmURL string, llmModel string, m
                 return nil
             },
         },
-        userAgent:      userAgent,
-        maxSizeMB:      maxPageSizeMB,
-        llmURL:         llmURL,
-        llmModel:       llmModel,
-        llmClient:      llmClient,
-        thresholdToken: 6000,
+        userAgent:        userAgent,
+        maxSizeMB:        maxPageSizeMB,
+        llmURL:           llmURL,
+        llmModel:         llmModel,
+        llmClient:        llmClient,
+        maxContentTokens: maxContentTokens,
     }
 }
 
@@ -97,10 +102,10 @@ func (t *WebParserUnifiedTool) Execute(ctx context.Context, params map[string]in
     var reasoning string
 
     // 4. Strategy Selection
-    if tokens <= t.thresholdToken {
+    if tokens <= t.maxContentTokens {
         // STRATEGY: FULL
         strategy = "FULL_PARSE"
-        reasoning = fmt.Sprintf("Page size (%d tokens) is within threshold (%d). Returning full content.", tokens, t.thresholdToken)
+        reasoning = fmt.Sprintf("Page size (%d tokens) is within threshold (%d). Returning full content.", tokens, t.maxContentTokens)
         content = article.TextContent
         log.Printf("[WebParser] Strategy: FULL (Size: %d tokens)", tokens)
     } else {
@@ -110,14 +115,17 @@ func (t *WebParserUnifiedTool) Execute(ctx context.Context, params map[string]in
         
         if goal == "" {
             // Fallback if no goal provided but page is huge
-            reasoning = fmt.Sprintf("Page size (%d tokens) exceeds threshold, but NO GOAL provided. Returning first 4000 tokens.", tokens)
-            content = t.truncateText(article.TextContent, 4000)
+            // Use the dynamic limit instead of hardcoded 4000
+            reasoning = fmt.Sprintf("Page size (%d tokens) exceeds threshold, but NO GOAL provided. Returning first %d tokens.", tokens, t.maxContentTokens)
+            content = t.truncateText(article.TextContent, t.maxContentTokens)
         } else {
             // LLM Assisted Selection
             selectedContent, selReasoning, err := t.performSelectiveParsing(ctx, article, goal)
             if err != nil {
-                reasoning = fmt.Sprintf("Selective parsing failed: %v. Falling back to metadata + first 2000 tokens.", err)
-                content = fmt.Sprintf("METADATA:\n%s\n\nTOP CONTENT:\n%s", t.formatMetadata(article), t.truncateText(article.TextContent, 2000))
+                // Use dynamic limit for fallback as well (split between metadata and content)
+                fallbackLimit := t.maxContentTokens
+                reasoning = fmt.Sprintf("Selective parsing failed: %v. Falling back to metadata + first %d tokens.", err, fallbackLimit)
+                content = fmt.Sprintf("METADATA:\n%s\n\nTOP CONTENT:\n%s", t.formatMetadata(article), t.truncateText(article.TextContent, fallbackLimit))
             } else {
                 content = selectedContent
                 reasoning = selReasoning

@@ -302,7 +302,11 @@ func main() {
                 log.Printf("[Main] ✓ Unified WebParser using LLM queue (priority: background)")
             }
 
-            unifiedTool := tools.NewWebParserUnifiedTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig, webParserLLMClient)
+            // Calculate dynamic limit: 2/3 of the LLM context size
+            // This reserves 1/3 for the system prompt, user query, and LLM response
+            dynamicLimit := int(float64(cfg.GrowerAI.ReasoningModel.ContextSize) * 0.66)
+            
+            unifiedTool := tools.NewWebParserUnifiedTool(userAgent, llmURL, llmModel, maxPageSizeMB, webParseConfig, webParserLLMClient, dynamicLimit)
             if err := toolRegistry.Register(unifiedTool); err != nil {
                 log.Printf("[Main] WARNING: Failed to register web_parse_unified tool: %v", err)
             } else {
