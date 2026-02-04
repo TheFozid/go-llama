@@ -507,35 +507,95 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
                         // Don't increment actionCount - this was a failure
                         actionExecuted = true	// Still counts as execution attempt
 
-                    } else if action.Tool == ActionToolWebParseUnified {
-                        // NEW: Parse evaluation for unified web parse actions
-                        log.Printf("[Dialogue] Unified parse action completed, evaluating quality...")
+               } else if action.Tool == ActionToolWebParseUnified {
+                    // NEW: Parse evaluation for unified web parse actions
+                    log.Printf("[Dialogue] Unified parse action completed, evaluating quality...")
 
-                        // Get fallback URLs from metadata (set during search evaluation)
-                        var fallbackURLs []string
-                        var parsedURL string
+                    // Get fallback URLs from metadata (set during search evaluation)
+                    var fallbackURLs []string
+                    var parsedURL string
 
-                        if action.Metadata != nil {
-                            if urls, ok := action.Metadata["fallback_urls"].([]string); ok {
-                                fallbackURLs = urls
-                            }
-                            if url, ok := action.Metadata["selected_url"].(string); ok {
-                                parsedURL = url
-                            }
+                    if action.Metadata != nil {
+                        if urls, ok := action.Metadata["fallback_urls"].([]string); ok {
+                            fallbackURLs = urls
                         }
-
-                        if parsedURL == "" {
-                            parsedURL = action.Description
+                        if url, ok := action.Metadata["selected_url"].(string); ok {
+                            parsedURL = url
                         }
+                    }
 
-                        // Evaluate parse quality
-                        parseEval, evalErr := e.evaluateParseResults(
+                    if parsedURL == "" {
+                        parsedURL = action.Description
+                    }
+
+                    // DETERMINISTIC PERMANENT FAILURE CHECK
+                    // We check for hard failures (HTTP 4xx) or blank content BEFORE calling the LLM.
+                    // This ensures we treat dead URLs as permanent failures and trigger fallbacks immediately.
+                    var parseEval ParseEvaluation
+                    var evalErr error
+                    resultLower := strings.ToLower(result)
+                    
+                    isPermanentFailure := false
+                    failureReason := ""
+
+                    // 1. Check for HTTP Client Errors (Permanent)
+                    if strings.Contains(resultLower, "403") || 
+                       strings.Contains(resultLower, "404") || 
+                       strings.Contains(resultLower, "410") || // Gone
+                       strings.Contains(resultLower, "401") || // Unauthorized
+                       strings.Contains(resultLower, "access denied") || 
+                       strings.Contains(resultLower, "forbidden") ||
+                       strings.Contains(resultLower, "not found") {
+                        isPermanentFailure = true
+                        failureReason = "HTTP Client Error / Access Denied"
+                        log.Printf("[Dialogue] Detected permanent failure (HTTP 4xx) on %s", truncate(parsedURL, 40))
+                    } 
+                    // 2. Check for blank or insufficient content (Permanent failure for this URL)
+                    else if len(result) < 50 {
+                        isPermanentFailure = true
+                        failureReason = "Blank or insufficient content"
+                        log.Printf("[Dialogue] Detected permanent failure (Blank content) on %s", truncate(parsedURL, 40))
+                    }
+
+                    if isPermanentFailure {
+                        // Force fallback behavior
+                        if len(fallbackURLs) > 0 {
+                            parseEval = ParseEvaluation{
+                                Quality:      "try_fallback",
+                                Confidence:   1.0, // 100% confident this URL is dead
+                                Reasoning:    fmt.Sprintf("Permanent failure detected: %s. Trying next fallback URL.", failureReason),
+                                ShouldContinue: true,
+                            }
+                            log.Printf("[Dialogue] Forcing fallback due to permanent failure: %s", failureReason)
+                        } else {
+                            // No fallbacks available, mark as complete failure
+                            parseEval = ParseEvaluation{
+                                Quality:      "completely_failed",
+                                Confidence:   1.0,
+                                Reasoning:    fmt.Sprintf("Permanent failure detected: %s. No fallback URLs available.", failureReason),
+                                ShouldContinue: false,
+                            }
+                            log.Printf("[Dialogue] Permanent failure with no fallbacks remaining.")
+                        }
+                    } else {
+                        // No obvious permanent failure, delegate to LLM for nuanced evaluation
+                        parseEval, evalErr = e.evaluateParseResults(
                             ctx,
                             result,
                             topGoal.Description,
                             parsedURL,
                             fallbackURLs,
                         )
+                    }
+
+                    if evalErr != nil {
+                        // If our check didn't catch it, but LLM failed, handle gracefully
+                        if !isPermanentFailure {
+                            log.Printf("[Dialogue] WARNING: Parse evaluation failed: %v", evalErr)
+                            // If LLM fails, we generally assume valid result to avoid stalling, unless it was a network error caught elsewhere
+                            parseEval = ParseEvaluation{ Quality: "sufficient", Confidence: 0.5 } 
+                        }
+                    }
 
                         if evalErr != nil {
                             log.Printf("[Dialogue] WARNING: Parse evaluation failed: %v", evalErr)
