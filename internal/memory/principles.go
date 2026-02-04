@@ -432,7 +432,7 @@ Focus on: Tone, Style, Persona, Clarity.
 
 CRITICAL FORMATTING RULES:
 1. Respond ONLY with a single S-expression line.
-2. Do NOT use markdown code blocks ( ``` ).
+2. Do NOT use markdown code blocks.
 3. Do NOT include 'confidence' or 'reasoning' keywords inside the principle quotes.
 4. Do NOT use semicolons or colons inside the principle quotes.
 
