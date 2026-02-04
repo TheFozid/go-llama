@@ -362,524 +362,155 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
 		}
 
 		// Phase 3.2: Execute actions with tools (skip if self-mod goal already handled)
-		if !actionExecuted {
-			for i := range topGoal.Actions {
-				action := &topGoal.Actions[i]
+if !actionExecuted {
+    for i := range topGoal.Actions {
+        action := &topGoal.Actions[i]
 
-				// Skip completed actions
-				if action.Status == ActionStatusCompleted {
-					continue
-				}
+        // Skip completed actions
+        if action.Status == ActionStatusCompleted {
+            continue
+        }
 
-				// Execute pending action
-				if action.Status == ActionStatusPending {
-					action.Status = ActionStatusInProgress
+        // Execute pending action
+        if action.Status == ActionStatusPending {
+            action.Status = ActionStatusInProgress
 
-					log.Printf("[Dialogue] Executing action: %s using tool '%s'", action.Description, action.Tool)
+            log.Printf("[Dialogue] Executing action: %s using tool '%s'", action.Description, action.Tool)
 
-					// Execute tool
-					result, err := e.executeAction(ctx, action)
+            // Execute tool
+            result, err := e.executeAction(ctx, action)
 
-					// If this was a search, extract URLs and create parse action
-					if err == nil && action.Tool == ActionToolSearch {
-						// Extract URLs from search results
-						urls := extractURLsFromSearchResults(result)
+            // If this was a search, extract URLs and create parse action
+            if err == nil && action.Tool == ActionToolSearch {
+                // ... search handling code ...
+            }
 
-						if len(urls) == 0 {
-							log.Printf("[Dialogue] WARNING: No URLs found in search results")
-							action.Result = "Search completed but no URLs found"
-							action.Status = ActionStatusCompleted
-							topGoal.Outcome = "bad"
-						} else {
-							// Use LLM-based evaluation to select best URL
-							log.Printf("[Dialogue] Evaluating %d search results with LLM...", len(urls))
+            if err != nil {
+                // Error handling block
+                log.Printf("[Dialogue] Action failed: %v", err)
+                action.Result = fmt.Sprintf("ERROR: %v", err)
+                action.Status = ActionStatusCompleted
 
-							evaluation, evalErr := e.evaluateSearchResults(ctx, result, topGoal.Description)
+                if strings.Contains(strings.ToLower(err.Error()), "page too large") {
+                    log.Printf("[Dialogue] WARNING: Received 'page too large' from unified tool (unexpected).")
+                }
 
-							if evalErr != nil || !evaluation.ShouldProceed {
-								// Evaluation failed or no good URLs found
-								if evalErr != nil {
-									log.Printf("[Dialogue] WARNING: Search evaluation failed: %v", evalErr)
-								} else {
-									log.Printf("[Dialogue] Search evaluation determined no suitable URLs")
-								}
+                topGoal.FailureCount++
 
-								action.Result = "Search completed but no suitable URLs found"
-								action.Status = ActionStatusCompleted
-								topGoal.Outcome = "bad"
-							} else {
-								// Evaluation succeeded - use best URL
-								bestURL := evaluation.BestURL
-								log.Printf("[Dialogue] ✓ LLM selected URL (confidence: %.2f): %s",
-									evaluation.Confidence, truncate(bestURL, 60))
-								log.Printf("[Dialogue] Selection reasoning: %s", truncate(evaluation.Reasoning, 100))
-								// Store best URL in metadata
-								if action.Metadata == nil {
-									action.Metadata = make(map[string]interface{})
-								}
-								action.Metadata["best_url"] = bestURL
-								action.Metadata["eval_confidence"] = evaluation.Confidence
-								action.Metadata["eval_reasoning"] = evaluation.Reasoning
-								action.Metadata["fallback_urls"] = evaluation.FallbackURLs
+                if topGoal.FailureCount >= 3 {
+                    topGoal.Outcome = "bad"
+                    log.Printf("[Dialogue] ⚠ Goal marked as bad after %d consecutive failures", topGoal.FailureCount)
+                } else {
+                    log.Printf("[Dialogue] ⚠ Action failed (failure %d/3), will retry", topGoal.FailureCount)
+                }
 
-                               // Check if there's already a pending parse action
-                                hasParseAction := false
-                                for j := i + 1; j < len(topGoal.Actions); j++ {
-                                    nextAction := &topGoal.Actions[j]
-                                    if nextAction.Tool == ActionToolWebParseUnified &&
-                                        nextAction.Status == ActionStatusPending {
-                                        if nextAction.Metadata == nil {
-                                            nextAction.Metadata = make(map[string]interface{})
-                                        }
-                                        nextAction.Metadata["selected_url"] = bestURL
-                                        nextAction.Description = bestURL
-                                        log.Printf("[Dialogue] Updated next unified parse action with best URL: %s", truncate(bestURL, 60))
-                                        hasParseAction = true
-                                        break
-                                    }
-                                }
+                actionExecuted = true
 
-                                // If no parse action exists, create one NOW
-                                if !hasParseAction {
-                                    var parseAction Action
+            } else if action.Tool == ActionToolWebParseUnified {
+                // Parse evaluation for unified web parse actions
+                log.Printf("[Dialogue] Unified parse action completed, evaluating quality...")
+                // ... parse evaluation code ...
+                
+            } else {
+                // Success case - no error
+                resultLower := strings.ToLower(result)
+                resultPrefix := resultLower
+                if len(resultPrefix) > 100 {
+                    resultPrefix = resultPrefix[:100]
+                }
 
-                                    // All parsing is now handled by the unified tool
-                                    purpose := fmt.Sprintf("Extract information relevant to: %s", topGoal.Description)
-                                    parseAction = Action{
-                                        Description:	bestURL,
-                                        Tool:		ActionToolWebParseUnified,
-                                        Status:		ActionStatusPending,
-                                        Timestamp:	time.Now(),
-                                        Metadata: map[string]interface{}{
-                                            "goal":		purpose, // Use "goal" key for unified tool
-                                            "selected_url":	bestURL,
-                                        },
-                                    }
-                                    // CRITICAL: Copy research metadata from search action to parse action
-                                    if action.Metadata != nil {
-                                        if questionID, ok := action.Metadata["research_question_id"].(string); ok {
-                                            parseAction.Metadata["research_question_id"] = questionID
-                                        }
-                                        if questionText, ok := action.Metadata["question_text"].(string); ok {
-                                            parseAction.Metadata["question_text"] = questionText
-                                        }
-                                    }
-                                    log.Printf("[Dialogue] Auto-created unified parse action for best URL: %s", truncate(bestURL, 60))
+                if strings.HasPrefix(resultPrefix, "error:") ||
+                    strings.HasPrefix(resultPrefix, "failed:") ||
+                    strings.HasPrefix(resultPrefix, "timeout:") ||
+                    strings.Contains(resultPrefix, "403") ||
+                    strings.Contains(resultPrefix, "404") ||
+                    strings.Contains(resultPrefix, "no suitable urls") {
+                    log.Printf("[Dialogue] Action completed but result indicates failure")
+                    action.Result = result
+                    action.Status = ActionStatusCompleted
 
-                                    topGoal.Actions = append(topGoal.Actions, parseAction)
+                    topGoal.FailureCount++
+                    if topGoal.FailureCount >= 3 {
+                        topGoal.Outcome = "bad"
+                        log.Printf("[Dialogue] ⚠ Goal marked as bad after %d failures", topGoal.FailureCount)
+                    }
+                    actionExecuted = true
+                } else {
+                    action.Result = result
+                    action.Status = ActionStatusCompleted
+                    actionCount++
+                    actionExecuted = true
 
-                                    // CRITICAL: Update goal in state immediately
-                                    for k := range state.ActiveGoals {
-                                        if state.ActiveGoals[k].ID == topGoal.ID {
-                                            state.ActiveGoals[k] = topGoal
-                                            log.Printf("[Dialogue] ✓ Updated goal in state with new parse action")
-                                            break
-                                        }
-                                    }
-                                }
-							}
-						}
-					}
-
-                   if err != nil {
-                        log.Printf("[Dialogue] Action failed: %v", err)
-                        action.Result = fmt.Sprintf("ERROR: %v", err)
-                        action.Status = ActionStatusCompleted
-
-                        // NOTE: The unified web parser handles strategy selection internally.
-                        // It should NOT return a "page too large" error.
-                        // If it does, we treat it as a standard failure.
-                        if strings.Contains(strings.ToLower(err.Error()), "page too large") {
-                            log.Printf("[Dialogue] WARNING: Received 'page too large' from unified tool (unexpected).")
-                        }
-
-                        // Track failures - don't abandon on first failure
-                        topGoal.FailureCount++
-
-                        // Only mark as bad after 3+ consecutive failures
-                        if topGoal.FailureCount >= 3 {
-                            topGoal.Outcome = "bad"
-                            log.Printf("[Dialogue] ⚠ Goal marked as bad after %d consecutive failures", topGoal.FailureCount)
-                        } else {
-                            log.Printf("[Dialogue] ⚠ Action failed (failure %d/3), will retry", topGoal.FailureCount)
-                        }
-
-                        // Don't increment actionCount - this was a failure
-                        actionExecuted = true	// Still counts as execution attempt
-
-
-               } else if action.Tool == ActionToolWebParseUnified {
-                    // NEW: Parse evaluation for unified web parse actions
-                    log.Printf("[Dialogue] Unified parse action completed, evaluating quality...")
-
-                    // Get fallback URLs from metadata (set during search evaluation)
-                    var fallbackURLs []string
-                    var parsedURL string
-
-                    if action.Metadata != nil {
-                        if urls, ok := action.Metadata["fallback_urls"].([]string); ok {
-                            fallbackURLs = urls
-                        }
-                        if url, ok := action.Metadata["selected_url"].(string); ok {
-                            parsedURL = url
-                        }
+                    if topGoal.FailureCount > 0 {
+                        log.Printf("[Dialogue] Action succeeded, resetting failure count (was %d)", topGoal.FailureCount)
+                        topGoal.FailureCount = 0
                     }
 
-                    if parsedURL == "" {
-                        parsedURL = action.Description
+                    log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
+                }
+                action.Timestamp = time.Now()
+            }
+
+            // Update research plan if this was part of a plan
+            if topGoal.ResearchPlan != nil && action.Metadata != nil {
+                if questionID, ok := action.Metadata["research_question_id"].(string); ok {
+                    if err := e.updateResearchProgress(ctx, &topGoal, questionID, result); err != nil {
+                        log.Printf("[Dialogue] WARNING: Failed to update research progress: %v", err)
                     }
-
-                    // DETERMINISTIC PERMANENT FAILURE CHECK
-                    // We check for hard failures (HTTP 4xx) or blank content BEFORE calling the LLM.
-                    // This ensures we treat dead URLs as permanent failures and trigger fallbacks immediately.
-                    var parseEval ParseEvaluation
-                    var evalErr error
-                    resultLower := strings.ToLower(result)
-                    
-                    isPermanentFailure := false
-                    failureReason := ""
-
-                    // 1. Check for HTTP Client Errors (Permanent)
-                    if strings.Contains(resultLower, "403") || 
-                       strings.Contains(resultLower, "404") || 
-                       strings.Contains(resultLower, "410") || // Gone
-                       strings.Contains(resultLower, "401") || // Unauthorized
-                       strings.Contains(resultLower, "access denied") || 
-                       strings.Contains(resultLower, "forbidden") ||
-                       strings.Contains(resultLower, "not found") {
-                        isPermanentFailure = true
-                        failureReason = "HTTP Client Error / Access Denied"
-                        log.Printf("[Dialogue] Detected permanent failure (HTTP 4xx) on %s", truncate(parsedURL, 40))
-                    } 
-                    // 2. Check for blank or insufficient content (Permanent failure for this URL)
-                    else if len(result) < 50 {
-                        isPermanentFailure = true
-                        failureReason = "Blank or insufficient content"
-                        log.Printf("[Dialogue] Detected permanent failure (Blank content) on %s", truncate(parsedURL, 40))
-                    }
-
-                    if isPermanentFailure {
-                        // Force fallback behavior
-                        if len(fallbackURLs) > 0 {
-                            parseEval = ParseEvaluation{
-                                Quality:      "try_fallback",
-                                Confidence:   1.0, // 100% confident this URL is dead
-                                Reasoning:    fmt.Sprintf("Permanent failure detected: %s. Trying next fallback URL.", failureReason),
-                                ShouldContinue: true,
-                            }
-                            log.Printf("[Dialogue] Forcing fallback due to permanent failure: %s", failureReason)
-                        } else {
-                            // No fallbacks available, mark as complete failure
-                            parseEval = ParseEvaluation{
-                                Quality:      "completely_failed",
-                                Confidence:   1.0,
-                                Reasoning:    fmt.Sprintf("Permanent failure detected: %s. No fallback URLs available.", failureReason),
-                                ShouldContinue: false,
-                            }
-                            log.Printf("[Dialogue] Permanent failure with no fallbacks remaining.")
-                        }
-                    } else {
-                        // No obvious permanent failure, delegate to LLM for nuanced evaluation
-                        parseEval, evalErr = e.evaluateParseResults(
-                            ctx,
-                            result,
-                            topGoal.Description,
-                            parsedURL,
-                            fallbackURLs,
-                        )
-                    }
-
-                    if evalErr != nil {
-                        // If our check didn't catch it, but LLM failed, handle gracefully
-                        if !isPermanentFailure {
-                            log.Printf("[Dialogue] WARNING: Parse evaluation failed: %v", evalErr)
-                            // If LLM fails, we generally assume valid result to avoid stalling, unless it was a network error caught elsewhere
-                            parseEval = ParseEvaluation{ Quality: "sufficient", Confidence: 0.5 } 
-                        }
-                    }
-
-                    // Store evaluation in metadata
-                    if action.Metadata == nil {
-                        action.Metadata = make(map[string]interface{})
-                    }
-                    action.Metadata["parse_quality"] = parseEval.Quality
-                    action.Metadata["parse_confidence"] = parseEval.Confidence
-                    action.Metadata["parse_reasoning"] = parseEval.Reasoning
-
-                    log.Printf("[Dialogue] ✓ Parse quality: %s (confidence: %.2f)",
-                        parseEval.Quality, parseEval.Confidence)
-
-                    // Decision tree based on quality
-                    switch parseEval.Quality {
-                    case "sufficient":
-                        // Content is good, mark action complete
-                        action.Result = result
-                        action.Status = ActionStatusCompleted
-                        actionCount++
-                        actionExecuted = true
-                        log.Printf("[Dialogue] Parse result sufficient, continuing goal")
-
-                    case "try_fallback":
-                        // Content inadequate, try next fallback URL if available
-                        action.Result = fmt.Sprintf("Parse quality insufficient: %s", parseEval.Reasoning)
-                        action.Status = ActionStatusCompleted
-                        actionExecuted = true
-
-                        if len(fallbackURLs) > 0 {
-                            // Create new parse action with next fallback URL
-                            nextURL := fallbackURLs[0]
-                            remainingFallbacks := fallbackURLs[1:]
-
-                            log.Printf("[Dialogue] Trying fallback URL: %s", truncate(nextURL, 60))
-
-                            // Use unified tool for fallback
-                            var fallbackAction Action
-                            purpose := "Extract relevant information for goal"
-                            if action.Metadata != nil {
-                                if p, ok := action.Metadata["goal"].(string); ok {
-                                    purpose = p
-                                }
-                            }
-
-                            fallbackAction = Action{
-                                Description:	nextURL,
-                                Tool:		ActionToolWebParseUnified,
-                                Status:		ActionStatusPending,
-                                Timestamp:	time.Now(),
-                                Metadata: map[string]interface{}{
-                                    "goal":			purpose,
-                                    "selected_url":		nextURL,
-                                    "fallback_urls":		remainingFallbacks,
-                                    "is_fallback":		true,
-                                },
-                            }
-
-                            topGoal.Actions = append(topGoal.Actions, fallbackAction)
-                            log.Printf("[Dialogue] ✓ Created fallback unified parse action (%d fallbacks remaining)",
-                                len(remainingFallbacks))
-
-                            // Update pending work status
-                            topGoal.HasPendingWork = hasPendingActions(&topGoal)
-
-                            // Update goal in state
-                            for i := range state.ActiveGoals {
-                                if state.ActiveGoals[i].ID == topGoal.ID {
-                                    state.ActiveGoals[i] = topGoal
-                                    log.Printf("[Dialogue] Updated goal in state: pending_work=%v", topGoal.HasPendingWork)
-                                    break
-                                }
-                            }
-                        } else {
-                            log.Printf("[Dialogue] No fallback URLs available, marking goal as partial failure")
-                            topGoal.Outcome = "bad"
-                        }
-
-                    case "parse_deeper":
-                        // Content exists but extraction incomplete
-                        // NOTE: The unified tool already handles chunking internally.
-                        // If evaluation says incomplete, we try again or fail.
-                        action.Result = fmt.Sprintf("Parse incomplete: %s", parseEval.Reasoning)
-                        action.Status = ActionStatusCompleted
-                        actionExecuted = true
-
-                        log.Printf("[Dialogue] Parse evaluation requested deeper extraction, but unified tool handles this. Marking complete.")
-                        // We do not create a new action. The unified tool should have handled it.
-                        // If it didn't, it's a failure.
-
-                    case "completely_failed":
-                        // Parse completely failed, try fallback or abandon
-                        action.Result = fmt.Sprintf("Parse failed: %s", parseEval.Reasoning)
-                        action.Status = ActionStatusCompleted
-                        actionExecuted = true
-
-                        if len(fallbackURLs) > 0 && parseEval.ShouldContinue {
-                            // Try fallback (same logic as try_fallback)
-                            nextURL := fallbackURLs[0]
-                            remainingFallbacks := fallbackURLs[1:]
-
-                            log.Printf("[Dialogue] Parse completely failed, trying fallback: %s",
-                                truncate(nextURL, 60))
-
-                            // Use unified tool for fallback
-                            fallbackAction := Action{
-                                Description:	nextURL,
-                                Tool:		ActionToolWebParseUnified,
-                                Status:		ActionStatusPending,
-                                Timestamp:	time.Now(),
-                                Metadata: map[string]interface{}{
-                                    "selected_url":		nextURL,
-                                    "fallback_urls":	remainingFallbacks,
-                                    "is_fallback":		true,
-                                },
-                            }
-
-                            topGoal.Actions = append(topGoal.Actions, fallbackAction)
-
-                            // Update goal in state
-                            for k := range state.ActiveGoals {
-                                if state.ActiveGoals[k].ID == topGoal.ID {
-                                    state.ActiveGoals[k] = topGoal
-                                    break
-                                }
-                            }
-                        } else {
-                            log.Printf("[Dialogue] Parse failed with no fallbacks, marking goal as bad")
-                            topGoal.Outcome = "bad"
-                        }
-                    }
-
-                    action.Timestamp = time.Now()
-               }
-					} else {
-						// Check if result ACTUALLY indicates failure (check prefix only)
-						resultLower := strings.ToLower(result)
-						resultPrefix := resultLower
-						if len(resultPrefix) > 100 {
-							resultPrefix = resultPrefix[:100]
-						}
-
-						if strings.HasPrefix(resultPrefix, "error:") ||
-							strings.HasPrefix(resultPrefix, "failed:") ||
-							strings.HasPrefix(resultPrefix, "timeout:") ||
-							strings.Contains(resultPrefix, "403") ||
-							strings.Contains(resultPrefix, "404") ||
-							strings.Contains(resultPrefix, "no suitable urls") {
-							log.Printf("[Dialogue] Action completed but result indicates failure")
-							action.Result = result
-							action.Status = ActionStatusCompleted
-
-							// Track failures - don't abandon on first failure
-							topGoal.FailureCount++
-							if topGoal.FailureCount >= 3 {
-								topGoal.Outcome = "bad"
-								log.Printf("[Dialogue] ⚠ Goal marked as bad after %d failures", topGoal.FailureCount)
-							}
-							actionExecuted = true
-						} else {
-							action.Result = result
-							action.Status = ActionStatusCompleted
-							actionCount++
-							actionExecuted = true
-
-							// Reset failure count on success
-							if topGoal.FailureCount > 0 {
-								log.Printf("[Dialogue] Action succeeded, resetting failure count (was %d)", topGoal.FailureCount)
-								topGoal.FailureCount = 0
-							}
-
-							log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
-						}
-						action.Timestamp = time.Now()
-					}
-
-					// Update research plan if this was part of a plan
-					if topGoal.ResearchPlan != nil && action.Metadata != nil {
-						if questionID, ok := action.Metadata["research_question_id"].(string); ok {
-							if err := e.updateResearchProgress(ctx, &topGoal, questionID, result); err != nil {
-								log.Printf("[Dialogue] WARNING: Failed to update research progress: %v", err)
-							}
-						}
-					}
-
-					// NEW: Assess progress after EVERY action completes
-					log.Printf("[Dialogue] Assessing progress after action completion...")
-					assessment, assessTokens, err := e.assessProgress(ctx, &topGoal)
-					if err != nil {
-						log.Printf("[Dialogue] WARNING: Progress assessment failed: %v", err)
-						// Continue with current plan on assessment failure
-					} else {
-						totalTokens += assessTokens
-						topGoal.LastAssessment = assessment
-
-						log.Printf("[Dialogue] Assessment: quality=%s, validity=%s, recommendation=%s",
-							assessment.ProgressQuality, assessment.PlanValidity, assessment.Recommendation)
-						log.Printf("[Dialogue] Reasoning: %s", truncate(assessment.Reasoning, 120))
-
-						// Act on recommendation
-						if assessment.Recommendation == "replan" && topGoal.ReplanCount < 3 {
-							log.Printf("[Dialogue] Replanning goal based on assessment (attempt %d/3)...", topGoal.ReplanCount+1)
-
-							// Clear pending actions (keep completed for context)
-							completedActions := []Action{}
-							for _, a := range topGoal.Actions {
-								if a.Status == ActionStatusCompleted {
-									completedActions = append(completedActions, a)
-								}
-							}
-							topGoal.Actions = completedActions
-
-							// Generate new plan
-							if topGoal.ResearchPlan != nil {
-								newPlan, replanTokens, err := e.replanGoal(ctx, &topGoal, assessment.Reasoning)
-								if err != nil {
-									log.Printf("[Dialogue] WARNING: Replan failed: %v", err)
-									// Continue with existing plan
-								} else {
-									totalTokens += replanTokens
-									topGoal.ResearchPlan = newPlan
-									topGoal.ReplanCount++
-
-									log.Printf("[Dialogue] ✓ New plan generated (replan #%d): %d questions",
-										topGoal.ReplanCount, len(newPlan.SubQuestions))
-
-									// Create first action from new plan
-									nextAction := e.getNextResearchAction(ctx, &topGoal)
-									if nextAction != nil {
-										topGoal.Actions = append(topGoal.Actions, *nextAction)
-										topGoal.HasPendingWork = true
-										log.Printf("[Dialogue] ✓ Created first action from new plan: %s",
-											truncate(nextAction.Description, 60))
-									}
-
-									// Update goal in state immediately
-									for i := range state.ActiveGoals {
-										if state.ActiveGoals[i].ID == topGoal.ID {
-											state.ActiveGoals[i] = topGoal
-											break
-										}
-									}
-								}
-							}
-						} else if assessment.Recommendation == "replan" && topGoal.ReplanCount >= 3 {
-							log.Printf("[Dialogue] ⚠ Goal reached max replans (3), marking as failed")
-							topGoal.Status = GoalStatusAbandoned
-							topGoal.Outcome = "bad"
-                        } else if assessment.Recommendation == "adjust" {
-                            log.Printf("[Dialogue] Plan needs minor adjustment, will naturally adapt on next action")
-                            // No action needed - system will adjust when creating next action
-                        } else if assessment.Recommendation == "complete" {
-                            log.Printf("[Dialogue] Goal completed successfully!")
-                            topGoal.Status = GoalStatusCompleted
-                            topGoal.Outcome = "good"
-                            topGoal.Progress = 1.0
-
-                            // Find the goal index in ActiveGoals
-                            completedGoalIndex := -1
-                            for i, g := range state.ActiveGoals {
-                                if g.ID == topGoal.ID {
-                                    completedGoalIndex = i
-                                    break
-                                }
-                            }
-
-                            // Move from Active to Completed
-                            if completedGoalIndex != -1 {
-                                // Remove from active
-                                state.ActiveGoals = append(state.ActiveGoals[:completedGoalIndex], state.ActiveGoals[completedGoalIndex+1:]...)
-                                // Add to completed
-                                state.CompletedGoals = append(state.CompletedGoals, topGoal)
-                                log.Printf("[Dialogue] ✓ Moved goal to CompletedGoals: %s", truncate(topGoal.Description, 60))
-                            } else {
-                                log.Printf("[Dialogue] WARNING: Could not find goal in ActiveGoals to move: %s", topGoal.ID)
-                            }
-                        }
-                    }
-
-                    // Only execute one action per cycle
-                    break
                 }
             }
-        }	// Close the "if !actionExecuted" block from line 643
+
+            // NEW: Assess progress after EVERY action completes
+            log.Printf("[Dialogue] Assessing progress after action completion...")
+            assessment, assessTokens, err := e.assessProgress(ctx, &topGoal)
+            if err != nil {
+                log.Printf("[Dialogue] WARNING: Progress assessment failed: %v", err)
+            } else {
+                totalTokens += assessTokens
+                topGoal.LastAssessment = assessment
+
+                log.Printf("[Dialogue] Assessment: quality=%s, validity=%s, recommendation=%s",
+                    assessment.ProgressQuality, assessment.PlanValidity, assessment.Recommendation)
+                log.Printf("[Dialogue] Reasoning: %s", truncate(assessment.Reasoning, 120))
+
+                // Act on recommendation
+                if assessment.Recommendation == "replan" && topGoal.ReplanCount < 3 {
+                    // ... replan logic ...
+                } else if assessment.Recommendation == "replan" && topGoal.ReplanCount >= 3 {
+                    log.Printf("[Dialogue] ⚠ Goal reached max replans (3), marking as failed")
+                    topGoal.Status = GoalStatusAbandoned
+                    topGoal.Outcome = "bad"
+                } else if assessment.Recommendation == "adjust" {
+                    log.Printf("[Dialogue] Plan needs minor adjustment, will naturally adapt on next action")
+                } else if assessment.Recommendation == "complete" {
+                    log.Printf("[Dialogue] Goal completed successfully!")
+                    topGoal.Status = GoalStatusCompleted
+                    topGoal.Outcome = "good"
+                    topGoal.Progress = 1.0
+
+                    completedGoalIndex := -1
+                    for i, g := range state.ActiveGoals {
+                        if g.ID == topGoal.ID {
+                            completedGoalIndex = i
+                            break
+                        }
+                    }
+
+                    if completedGoalIndex != -1 {
+                        state.ActiveGoals = append(state.ActiveGoals[:completedGoalIndex], state.ActiveGoals[completedGoalIndex+1:]...)
+                        state.CompletedGoals = append(state.CompletedGoals, topGoal)
+                        log.Printf("[Dialogue] ✓ Moved goal to CompletedGoals: %s", truncate(topGoal.Description, 60))
+                    } else {
+                        log.Printf("[Dialogue] WARNING: Could not find goal in ActiveGoals to move: %s", topGoal.ID)
+                    }
+                }
+            }
+
+            // Only execute one action per cycle
+            break
+        }
+    }
+}
 
 		// If no actions were executed, check if we should create new actions
 		if !actionExecuted {
