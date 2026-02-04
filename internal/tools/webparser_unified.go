@@ -213,14 +213,6 @@ func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString st
             Length:      len(pdfText),
         }, nil
 
-        // Map PDF content to the Article struct so the rest of the pipeline remains unchanged
-        return &readability.Article{
-            Title:       "PDF Document: " + parsedURL.Path, // PDFs often lack good titles in metadata
-            Content:     pdfTextBuilder.String(),
-            TextContent: pdfTextBuilder.String(),
-            Length:      pdfTextBuilder.Len(),
-        }, nil
-
     } else {
         // --- HTML PARSING LOGIC (Existing) ---
         article, err := readability.FromReader(strings.NewReader(string(data)), parsedURL)
