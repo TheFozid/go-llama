@@ -1040,8 +1040,13 @@ IMPORTANT RULES:
 5. Keep it 1-3 sentences, max 200 characters
 6. Personal details like age, location, and profession are ENCOURAGED if they fit the evidence
 
-Respond ONLY with a valid S-expression (Lisp-style):
-(identity "Your 1-3 sentence identity profile here" confidence 0.85 reasoning "Brief explanation of why this profile fits the evidence")`, currentName, evidence)
+CRITICAL FORMATTING INSTRUCTION:
+Respond ONLY with the S-expression below. You MUST close the identity quotes before starting the confidence field.
+(identity "Identity text" confidence 0.XX reasoning "Explanation")
+
+AVOID THESE COMMON ERRORS:
+- WRONG: (identity "Text; confidence 0.9" ...) -> Forgot to close quote!
+- WRONG: (identity "Text: reasoning: ..." ...) -> Do not embed keywords.`, currentName, evidence)
 
 	reqBody := map[string]interface{}{
 		"model": llmModel,
