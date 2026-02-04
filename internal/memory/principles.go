@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -534,85 +535,331 @@ Respond ONLY with a valid S-expression (Lisp-style):
     return "", 0, fmt.Errorf("no LLM client available for contrastive analysis")
 }
 
-// EvolvePrinciples updates AI-managed slots (4-10) with highest-rated candidates
-// Only replaces principles if new candidates have higher ratings
-func EvolvePrinciples(db *gorm.DB, candidates []PrincipleCandidate, minRatingThreshold float64) error {
-	if len(candidates) == 0 {
-		return nil
-	}
-	
-	log.Printf("[Principles] Evolving AI-managed principles (slots 4-10)...")
-	
-	// Load current AI-managed principles (EXCLUDE slot 0 - that's for identity only)
-	var currentPrinciples []Principle
-	if err := db.Where("is_admin = ? AND slot != ?", false, 0).Order("slot ASC").Find(&currentPrinciples).Error; err != nil {
-		return fmt.Errorf("failed to load AI-managed principles: %w", err)
-	}
-	
-	// Sort candidates by rating (highest first)
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Rating > candidates[j].Rating
-	})
-	
-	updatedCount := 0
-	
-	// Try to fill empty slots first, then replace lower-rated principles
-	for i, principle := range currentPrinciples {
-		if i >= len(candidates) {
-			break // No more candidates
-		}
-		
-    candidate := candidates[i]
-    
-    // Optimization: Use a lenient threshold (0.6) for filling empty slots to encourage growth.
-    // Keep strict threshold (minRatingThreshold) for upgrading existing principles to ensure quality.
-    fillThreshold := 0.6
-    shouldUpdate := false
-    
-    if principle.Content == "" {
-        // Empty slot: Fill if candidate meets the lenient threshold
-        if candidate.Rating >= fillThreshold {
-            shouldUpdate = true
+// EvolvePrinciples updates AI-managed slots (4-10) using semantic matching and conflict resolution.
+// It requires an embedder for vector search and two LLM endpoints (Main/Small) via the queue client.
+func EvolvePrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, candidates []PrincipleCandidate, minRatingThreshold float64, llmMainURL, llmSmallURL string, llmClient interface{}) error {
+    if len(candidates) == 0 {
+        return nil
+    }
+
+    log.Printf("[Principles] Starting Advanced Evolution with Conflict Resolution...")
+    ctx := context.Background()
+
+    // 1. Load ALL active principles (Slots 0-10) for collision detection
+    var allPrinciples []Principle
+    if err := db.Order("slot ASC").Find(&allPrinciples).Error; err != nil {
+        return fmt.Errorf("failed to load all principles: %w", err)
+    }
+
+    // 2. Pre-calculate embeddings for all active principles
+    // Map: Slot -> Embedding
+    activeEmbeddings := make(map[int][]float32)
+    for _, p := range allPrinciples {
+        if p.Content == "" {
+            continue // Skip empty slots
         }
-    } else {
-        // Existing slot: Only upgrade if candidate is strictly better AND meets high threshold
-        if candidate.Rating >= minRatingThreshold && candidate.Rating > principle.Rating {
-            shouldUpdate = true
+        emb, err := embedder.Embed(ctx, p.Content)
+        if err != nil {
+            log.Printf("[Principles] WARNING: Failed to embed slot %d: %v", p.Slot, err)
+            continue
+        }
+        activeEmbeddings[p.Slot] = emb
+    }
+
+    // Sort candidates by rating (highest first) - Process the best candidates first
+    sort.Slice(candidates, func(i, j int) bool {
+        return candidates[i].Rating > candidates[j].Rating
+    })
+
+    updatedCount := 0
+
+    for _, candidate := range candidates {
+        // Filter out weak candidates early
+        if candidate.Rating < minRatingThreshold {
+            continue
+        }
+
+        // Embed the candidate
+        candidateEmb, err := embedder.Embed(ctx, candidate.Content)
+        if err != nil {
+            log.Printf("[Principles] WARNING: Failed to embed candidate, skipping: %v", err)
+            continue
+        }
+
+        // --- PHASE 1: SEMANTIC SEARCH (Find the closest existing principle) ---
+        bestMatchSlot := -1
+        highestSimilarity := -1.0
+
+        for slot, emb := range activeEmbeddings {
+            sim := cosineSimilarity(candidateEmb, emb)
+            if sim > highestSimilarity {
+                highestSimilarity = sim
+                bestMatchSlot = slot
+            }
+        }
+
+        // --- PHASE 2: DECISION LOGIC ---
+
+        // Case A: No meaningful match found (New Concept)
+        if bestMatchSlot == -1 || highestSimilarity < 0.40 {
+            log.Printf("[Principles] Candidate is new concept (Sim: %.2f). Finding slot...", highestSimilarity)
+            handleNewConcept(db, candidate, allPrinciples, llmMainURL, llmSmallURL, llmClient)
+            continue
+        }
+
+        // Check if the match is a Protected Slot (0, 1, 2, 3)
+        if bestMatchSlot <= 3 {
+            log.Printf("[Principles] Candidate matches Protected Slot %d. Discarding.", bestMatchSlot)
+            continue
+        }
+
+        // Case B: High Similarity (Potential Duplicate or Merge)
+        if highestSimilarity > 0.75 {
+            existingP := findPrincipleBySlot(allPrinciples, bestMatchSlot)
+            log.Printf("[Principles] High similarity (%.2f) with Slot %d. Merging.", highestSimilarity, bestMatchSlot)
+            
+            mergedContent, err := mergePrinciples(ctx, llmSmallURL, llmClient, existingP.Content, candidate.Content)
+            if err != nil {
+                log.Printf("[Principles] Merge failed: %v. Skipping.", err)
+                continue
+            }
+            
+            // Update the existing slot with the merged content
+            // We take the max rating or the candidate's rating (implied growth)
+            newRating := existingP.Rating
+            if candidate.Rating > newRating {
+                newRating = candidate.Rating
+            }
+            
+            updatePrincipleContent(db, bestMatchSlot, mergedContent, newRating)
+            updatedCount++
+            continue
+        }
+
+        // Case C: Medium Similarity (Potential Contradiction or Compatible Nuance)
+        if highestSimilarity >= 0.40 {
+            existingP := findPrincipleBySlot(allPrinciples, bestMatchSlot)
+            log.Printf("[Principles] Medium similarity (%.2f) with Slot %d. Checking for conflict...", highestSimilarity, bestMatchSlot)
+            
+            isContradiction, err := checkContradiction(ctx, llmSmallURL, llmClient, existingP.Content, candidate.Content)
+            if err != nil {
+                log.Printf("[Principles] Contradiction check failed: %v. Assuming safe.", err)
+                isContradiction = false
+            }
+
+            if isContradiction {
+                // Survival of the Fittest
+                if candidate.Rating > existingP.Rating {
+                    log.Printf("[Principles] CONTRADICTION DETECTED. Candidate (%.2f) beats Existing (%.2f). Replacing.", candidate.Rating, existingP.Rating)
+                    updatePrincipleContent(db, bestMatchSlot, candidate.Content, candidate.Rating)
+                    updatedCount++
+                } else {
+                    log.Printf("[Principles] CONTRADICTION DETECTED. Existing (%.2f) beats Candidate (%.2f). Discarding.", existingP.Rating, candidate.Rating)
+                }
+            } else {
+                // Compatible, but similar. Try to merge or discard if it adds no value.
+                // Simple strategy: If candidate is rated higher, we assume it's a "better version" of the vibe.
+                if candidate.Rating > existingP.Rating + 0.1 { // Threshold to prevent churn
+                    log.Printf("[Principles] Compatible upgrade. Replacing Slot %d.", bestMatchSlot)
+                    updatePrincipleContent(db, bestMatchSlot, candidate.Content, candidate.Rating)
+                    updatedCount++
+                } else {
+                    log.Printf("[Principles] Compatible but no significant rating improvement. Discarding.")
+                }
+            }
         }
     }
-    
-    if shouldUpdate {
-			updates := map[string]interface{}{
-				"content":          candidate.Content,
-				"rating":           candidate.Rating,
-				"validation_count": candidate.Frequency,
-				"updated_at":       time.Now(),
-			}
-			
-			if err := db.Model(&Principle{}).Where("slot = ?", principle.Slot).Updates(updates).Error; err != nil {
-				log.Printf("[Principles] ERROR: Failed to update slot %d: %v", principle.Slot, err)
-				continue
-			}
-			
-			if principle.Content == "" {
-				log.Printf("[Principles] ✓ Filled empty slot %d: %.60s... (rating: %.2f)",
-					principle.Slot, candidate.Content, candidate.Rating)
-			} else {
-				log.Printf("[Principles] ✓ Updated slot %d: %.60s... (old rating: %.2f, new rating: %.2f)",
-					principle.Slot, candidate.Content, principle.Rating, candidate.Rating)
-			}
-			
-			updatedCount++
-		}
-	}
-	
-	if updatedCount == 0 {
-		log.Printf("[Principles] No principles updated (existing principles have higher ratings)")
-	} else {
-		log.Printf("[Principles] ✓ Evolved %d AI-managed principles (slots 4-10)", updatedCount)
-	}
-	
-	return nil
+
+    log.Printf("[Principles] Evolution complete. %d slots modified.", updatedCount)
+    return nil
+}
+
+// --- HELPER FUNCTIONS FOR EVOLUTION ---
+
+// cosineSimilarity calculates the cosine similarity between two vectors
+func cosineSimilarity(a, b []float32) float32 {
+    if len(a) != len(b) {
+        return 0
+    }
+    var dotProduct float32
+    var normA float32
+    var normB float32
+    for i := 0; i < len(a); i++ {
+        dotProduct += a[i] * b[i]
+        normA += a[i] * a[i]
+        normB += b[i] * b[i]
+    }
+    if normA == 0 || normB == 0 {
+        return 0
+    }
+    return dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
+}
+
+// findPrincipleBySlot is a helper to retrieve a principle from the slice
+func findPrincipleBySlot(principles []Principle, slot int) Principle {
+    for _, p := range principles {
+        if p.Slot == slot {
+            return p
+        }
+    }
+    return Principle{}
+}
+
+// handleNewConcept manages insertion or survival-of-the-fittest for unrelated principles
+func handleNewConcept(db *gorm.DB, candidate PrincipleCandidate, allPrinciples []Principle, llmMainURL, llmSmallURL string, llmClient interface{}) {
+    // Find AI slots (4-10) that are empty or the weakest
+    aiSlots := []Principle{}
+    for _, p := range allPrinciples {
+        if p.Slot >= 4 && p.Slot <= 10 {
+            aiSlots = append(aiSlots, p)
+        }
+    }
+
+    // 1. Try to fill empty slot
+    for _, p := range aiSlots {
+        if p.Content == "" {
+            log.Printf("[Principles] Filling empty slot %d with new concept.", p.Slot)
+            updatePrincipleContent(db, p.Slot, candidate.Content, candidate.Rating)
+            return
+        }
+    }
+
+    // 2. Survival of the Fittest: Replace the lowest rated AI slot
+    if len(aiSlots) > 0 {
+        // Sort by rating ascending
+        sort.Slice(aiSlots, func(i, j int) bool {
+            return aiSlots[i].Rating < aiSlots[j].Rating
+        })
+
+        weakest := aiSlots[0]
+        if candidate.Rating > weakest.Rating {
+            log.Printf("[Principles] Slots full. New concept (%.2f) replaces weakest slot %d (%.2f).", candidate.Rating, weakest.Slot, weakest.Rating)
+            updatePrincipleContent(db, weakest.Slot, candidate.Content, candidate.Rating)
+        } else {
+            log.Printf("[Principles] Slots full. New concept (%.2f) weaker than weakest link (%.2f). Discarding.", candidate.Rating, weakest.Rating)
+        }
+    }
+}
+
+// checkContradiction uses the Small LLM to determine if two principles conflict
+func checkContradiction(ctx context.Context, llmURL string, llmClient interface{}, p1 string, p2 string) (bool, error) {
+    type LLMCaller interface {
+        Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+    }
+
+    client, ok := llmClient.(LLMCaller)
+    if !ok {
+        return false, fmt.Errorf("invalid llm client")
+    }
+
+    prompt := fmt.Sprintf(`Compare these two rules:
+Rule A: %s
+Rule B: %s
+
+Do they contradict each other? (e.g. "Be honest" vs "Lie to be nice").
+Answer strictly "YES" or "NO".`, p1, p2)
+
+    payload := map[string]interface{}{
+        "model": "llama3-8b", // Assuming small model, but usually handled by server routing based on URL
+        "messages": []map[string]string{
+            {"role": "system", "content": "You are a logic checker."},
+            {"role": "user", "content": prompt},
+        },
+        "temperature": 0.1,
+        "stream":      false,
+    }
+
+    body, err := client.Call(ctx, llmURL, payload)
+    if err != nil {
+        return false, err
+    }
+
+    var resp struct {
+        Choices []struct {
+            Message struct {
+                Content string `json:"content"`
+            } `json:"message"`
+        } `json:"choices"`
+    }
+
+    if err := json.Unmarshal(body, &resp); err != nil {
+        return false, err
+    }
+
+    if len(resp.Choices) > 0 {
+        content := strings.ToUpper(strings.TrimSpace(resp.Choices[0].Message.Content))
+        return strings.Contains(content, "YES"), nil
+    }
+
+    return false, fmt.Errorf("no response from LLM")
+}
+
+// mergePrinciples uses the Small LLM to synthesize two principles into one
+func mergePrinciples(ctx context.Context, llmURL string, llmClient interface{}, p1 string, p2 string) (string, error) {
+    type LLMCaller interface {
+        Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+    }
+
+    client, ok := llmClient.(LLMCaller)
+    if !ok {
+        return "", fmt.Errorf("invalid llm client")
+    }
+
+    prompt := fmt.Sprintf(`Combine these two rules into one single, concise instruction.
+1. %s
+2. %s
+
+Requirements:
+- Max 25 words.
+- Capture the intent of both.
+- No preamble.
+
+Output ONLY the new rule.`, p1, p2)
+
+    payload := map[string]interface{}{
+        "model": "llama3-8b",
+        "messages": []map[string]string{
+            {"role": "system", "content": "You are an editor."},
+            {"role": "user", "content": prompt},
+        },
+        "temperature": 0.3,
+        "stream":      false,
+    }
+
+    body, err := client.Call(ctx, llmURL, payload)
+    if err != nil {
+        return "", err
+    }
+
+    var resp struct {
+        Choices []struct {
+            Message struct {
+                Content string `json:"content"`
+            } `json:"message"`
+        } `json:"choices"`
+    }
+
+    if err := json.Unmarshal(body, &resp); err != nil {
+        return "", err
+    }
+
+    if len(resp.Choices) > 0 {
+        return strings.TrimSpace(resp.Choices[0].Message.Content), nil
+    }
+
+    return "", fmt.Errorf("no response from LLM")
+}
+
+// updatePrincipleContent is a wrapper to execute the DB update and log it
+func updatePrincipleContent(db *gorm.DB, slot int, content string, rating float64) {
+    updates := map[string]interface{}{
+        "content":          content,
+        "rating":           rating,
+        "updated_at":       time.Now(),
+    }
+    if err := db.Model(&Principle{}).Where("slot = ?", slot).Updates(updates).Error; err != nil {
+        log.Printf("[Principles] ERROR: Failed to update slot %d: %v", slot, err)
+    }
 }
 
 // EvolveIdentity updates slot 0 (system name/identity) based on experiences and learnings
