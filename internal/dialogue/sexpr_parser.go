@@ -32,18 +32,18 @@ func extractResearchPlanFlat(input string) (*ResearchPlan, error) {
     // Simple state machine to parse flat list
     // (root "text") (q "text")
     for i := 0; i < len(tokens); i++ {
-        token := tokens[i]
+        t := tokens[i]
         
-        if token == "root" {
+        if t.value == "root" {
             // Expect next token to be the string content
-            if i+1 < len(tokens) && tokens[i+1] != "(" && tokens[i+1] != ")" {
-                plan.RootQuestion = tokens[i+1]
+            if i+1 < len(tokens) && tokens[i+1].value != "(" && tokens[i+1].value != ")" {
+                plan.RootQuestion = tokens[i+1].value
                 i++ // Skip next
             }
-        } else if token == "q" {
+        } else if t.value == "q" {
             // Expect next token to be the string content
-            if i+1 < len(tokens) && tokens[i+1] != "(" && tokens[i+1] != ")" {
-                qText := tokens[i+1]
+            if i+1 < len(tokens) && tokens[i+1].value != "(" && tokens[i+1].value != ")" {
+                qText := tokens[i+1].value
                 
                 // Generate ID automatically based on count
                 qID := fmt.Sprintf("q%d", len(plan.SubQuestions)+1)
