@@ -13,8 +13,9 @@ import (
     "time"
 
     "github.com/go-shiori/go-readability"
-	"github.com/ledongthuc/pdf"
     "go-llama/internal/config"
+    "github.com/unidoc/unipdf/v3/model"
+    "github.com/unidoc/unipdf/v3/common/license"
 )
 
 // WebParserUnifiedTool provides intelligent web parsing with strategy selection
@@ -187,35 +188,44 @@ func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString st
     contentType := resp.Header.Get("Content-Type")
 
     if strings.Contains(contentType, "application/pdf") {
-        // --- PDF PARSING LOGIC ---
+        // --- PDF PARSING LOGIC (Using Unidoc) ---
         log.Printf("[WebParser] Detected PDF, extracting text...")
         
-        // Create a reader from the byte data
-        pdfReader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+        // Set Unidoc license (Community edition)
+        err := license.SetMeteredKey("your-key-here") // Optional, removes watermarks if you have one, otherwise runs in community mode
+        if err != nil {
+            log.Printf("[WebParser] Warning: Could not set Unidoc license: %v (continuing in community mode)", err)
+        }
+
+        // Create PDF Reader
+        pdfReader, err := model.NewPdfReader(bytes.NewReader(data))
         if err != nil {
             return nil, fmt.Errorf("failed to open PDF: %w", err)
         }
 
-        var pdfTextBuilder strings.Builder
-        numPages := pdfReader.NumPage()
+        // Get number of pages
+        numPages, err := pdfReader.GetNumPages()
+        if err != nil {
+            return nil, fmt.Errorf("failed to get page count: %w", err)
+        }
 
-        // Limit PDF pages if necessary to prevent massive processing times
-        // Optional: You could add a check like if numPages > 50 { return error }
+        var pdfTextBuilder strings.Builder
         
+        // Iterate and extract
         for i := 1; i <= numPages; i++ {
-            page := pdfReader.Page(i)
-            if page.V.IsNull() {
-                continue // Skip empty pages
+            page, err := pdfReader.GetPage(i)
+            if err != nil {
+                log.Printf("[WebParser] Warning: failed to get page %d: %v", i, err)
+                continue
             }
             
-            var txt pdf.Text
-            err = page.GetContent(&txt, nil)
+            text, err := page.ExtractText()
             if err != nil {
                 log.Printf("[WebParser] Warning: failed to extract text from page %d: %v", i, err)
                 continue
             }
-            pdfTextBuilder.WriteString(txt.String())
-            pdfTextBuilder.WriteString("\n") // Ensure spacing between pages
+            pdfTextBuilder.WriteString(text)
+            pdfTextBuilder.WriteString("\n")
         }
 
         // Map PDF content to the Article struct so the rest of the pipeline remains unchanged
