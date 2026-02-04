@@ -9,13 +9,12 @@ import (
     "log"
     "net/http"
     "net/url"
+    "os/exec"
     "strings"
     "time"
 
     "github.com/go-shiori/go-readability"
     "go-llama/internal/config"
-    "github.com/unidoc/unipdf/v3/model"
-    "github.com/unidoc/unipdf/v3/common/license"
 )
 
 // WebParserUnifiedTool provides intelligent web parsing with strategy selection
@@ -188,45 +187,31 @@ func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString st
     contentType := resp.Header.Get("Content-Type")
 
     if strings.Contains(contentType, "application/pdf") {
-        // --- PDF PARSING LOGIC (Using Unidoc) ---
-        log.Printf("[WebParser] Detected PDF, extracting text...")
+        // --- PDF PARSING LOGIC (CLI Tool) ---
+        log.Printf("[WebParser] Detected PDF, extracting text via pdftotext...")
+
+        // Execute pdftotext: read from stdin (-), write to stdout (-)
+        // -layout preserves layout, -enc UTF-8 ensures encoding
+        cmd := exec.Command("pdftotext", "-layout", "-enc", "UTF-8", "-", "-")
         
-        // Set Unidoc license (Community edition)
-        err := license.SetMeteredKey("your-key-here") // Optional, removes watermarks if you have one, otherwise runs in community mode
-        if err != nil {
-            log.Printf("[WebParser] Warning: Could not set Unidoc license: %v (continuing in community mode)", err)
-        }
-
-        // Create PDF Reader
-        pdfReader, err := model.NewPdfReader(bytes.NewReader(data))
-        if err != nil {
-            return nil, fmt.Errorf("failed to open PDF: %w", err)
-        }
-
-        // Get number of pages
-        numPages, err := pdfReader.GetNumPages()
-        if err != nil {
-            return nil, fmt.Errorf("failed to get page count: %w", err)
-        }
-
-        var pdfTextBuilder strings.Builder
+        // Pipe the PDF data to the command's stdin
+        cmd.Stdin = bytes.NewReader(data)
         
-        // Iterate and extract
-        for i := 1; i <= numPages; i++ {
-            page, err := pdfReader.GetPage(i)
-            if err != nil {
-                log.Printf("[WebParser] Warning: failed to get page %d: %v", i, err)
-                continue
-            }
-            
-            text, err := page.ExtractText()
-            if err != nil {
-                log.Printf("[WebParser] Warning: failed to extract text from page %d: %v", i, err)
-                continue
-            }
-            pdfTextBuilder.WriteString(text)
-            pdfTextBuilder.WriteString("\n")
+        // Capture the output (stdout + stderr)
+        output, err := cmd.CombinedOutput()
+        if err != nil {
+            return nil, fmt.Errorf("pdftotext failed: %w, output: %s", err, string(output))
         }
+
+        pdfText := string(output)
+
+        // Map PDF content to the Article struct
+        return &readability.Article{
+            Title:       "PDF Document: " + parsedURL.Path,
+            Content:     pdfText,
+            TextContent: pdfText,
+            Length:      len(pdfText),
+        }, nil
 
         // Map PDF content to the Article struct so the rest of the pipeline remains unchanged
         return &readability.Article{
