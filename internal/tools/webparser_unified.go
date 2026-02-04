@@ -208,12 +208,13 @@ func (t *WebParserUnifiedTool) fetchAndExtract(ctx context.Context, urlString st
                 continue // Skip empty pages
             }
             
-            text, err := page.ToText()
+            var txt pdf.Text
+            err = page.GetContent(&txt, nil)
             if err != nil {
                 log.Printf("[WebParser] Warning: failed to extract text from page %d: %v", i, err)
                 continue
             }
-            pdfTextBuilder.WriteString(text)
+            pdfTextBuilder.WriteString(txt.String())
             pdfTextBuilder.WriteString("\n") // Ensure spacing between pages
         }
 
