@@ -104,7 +104,7 @@ type GrowerAIConfig struct {
         AIManagedSlots     []int   `json:"ai_managed_slots"`     // Slots 4-10: AI-managed
         MinRatingThreshold float64 `json:"min_rating_threshold"` // Minimum rating to become a principle
         ExtractionLimit    int     `json:"extraction_limit"`    // Max memories to analyze for patterns
-    } `json:"principles"
+    } `json:"principles"`
 	
     // Phase 4: Principles System (10 Commandments)
     Principles struct {
