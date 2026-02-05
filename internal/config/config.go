@@ -110,6 +110,7 @@ type GrowerAIConfig struct {
     Principles struct {
         AdminSlots             []int   `json:"admin_slots"`               // Slots 1-3: admin-controlled
         AIManagedSlots         []int   `json:"ai_managed_slots"`          // Slots 4-10: AI-managed
+        EvolutionScheduleHours int     `json:"evolution_schedule_hours"`  // How often to evolve principles
         MinRatingThreshold     float64 `json:"min_rating_threshold"`      // Minimum rating to become a principle
         ExtractionLimit        int     `json:"extraction_limit"`          // Max memories to analyze for patterns
     } `json:"principles"
