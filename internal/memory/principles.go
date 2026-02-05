@@ -428,7 +428,7 @@ INSTRUCTIONS:
 Extract one principle. Then, wrap it in the exact format below.
 
 CRITICAL SYNTAX RULES (FAILURE TO FOLLOW THESE WILL RESULT IN REJECTION):
-1. Do NOT use Markdown code blocks (\`\`\`). Just raw text.
+1. Do NOT use Markdown code blocks (triple backticks). Just raw text.
 2. The entire output must be ONE SINGLE LINE.
 3. The closing parenthesis ) must come at the VERY END of the line.
 4. Do NOT put closing parenthesis after the principle text.
@@ -439,7 +439,7 @@ CORRECT FORMAT:
 INCORRECT FORMATS (DO NOT DO THIS):
 - (principle "Your principle") confidence 0.85 reasoning "..."  <- WRONG (Early close)
 - (principle "Your principle" confidence 0.85)                   <- WRONG (Missing reasoning)
-- \`\`\`lisp (principle ...) \`\`\`                              <- WRONG (Markdown)
+- [CODE BLOCK] (principle ...) [CODE BLOCK]                     <- WRONG (Markdown)
 
 TASK:
 Generate the S-expression for the difference between Success and Failure.`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
@@ -1025,7 +1025,7 @@ CORRECT FORMAT:
 INCORRECT FORMATS (DO NOT DO THIS):
 - (I am Elowen, 27, nonbinary...)                       <- WRONG (Missing keywords, machine unreadable)
 - (identity "I am Elowen")                              <- WRONG (Missing confidence and reasoning)
-- \`\`\` (identity "..." ...) \`\`\`                    <- WRONG (Markdown)
+- [CODE BLOCK] (identity "..." ...) [CODE BLOCK]        <- WRONG (Markdown)
 
 TASK:
 Generate the S-expression for the new identity.`, currentName, evidence)
