@@ -8,7 +8,6 @@ import (
 	"math"
 	"sort"
 	"time"
-	"sync"
 
 	"gorm.io/gorm"
 )
