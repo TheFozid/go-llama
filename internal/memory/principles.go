@@ -418,31 +418,31 @@ func generatePrincipleFromContrast(ctx context.Context, llmURL string, llmModel 
         return s[:max] + "..."
     }
     
-    prompt := fmt.Sprintf(`You are analyzing two AI interactions to find a guiding principle.
+    prompt := fmt.Sprintf(`You are a strict data serializer. Your job is to format text into a specific S-expression structure.
 
-SUCCESS (Good):
-%s
+DATA INPUTS:
+SUCCESS: %s
+FAILURE: %s
 
-FAILURE (Bad):
-%s
+INSTRUCTIONS:
+Extract one principle. Then, wrap it in the exact format below.
+
+CRITICAL SYNTAX RULES (FAILURE TO FOLLOW THESE WILL RESULT IN REJECTION):
+1. Do NOT use Markdown code blocks (\`\`\`). Just raw text.
+2. The entire output must be ONE SINGLE LINE.
+3. The closing parenthesis ) must come at the VERY END of the line.
+4. Do NOT put closing parenthesis after the principle text.
+
+CORRECT FORMAT:
+(principle "Your principle here" confidence 0.85 reasoning "Your reasoning here")
+
+INCORRECT FORMATS (DO NOT DO THIS):
+- (principle "Your principle") confidence 0.85 reasoning "..."  <- WRONG (Early close)
+- (principle "Your principle" confidence 0.85)                   <- WRONG (Missing reasoning)
+- \`\`\`lisp (principle ...) \`\`\`                              <- WRONG (Markdown)
 
 TASK:
-Identify ONE specific behavioral principle explaining the success/failure difference.
-Focus on: Tone, Style, Persona, Clarity.
-
-CRITICAL FORMATTING RULES:
-1. Respond ONLY with a single S-expression line.
-2. Do NOT use markdown code blocks.
-3. Do NOT include 'confidence' or 'reasoning' keywords inside the principle quotes.
-4. Do NOT use semicolons or colons inside the principle quotes.
-
-OUTPUT FORMAT:
-(principle "10-25 word principle text" confidence 0.XX reasoning "Brief explanation text")
-
-EXAMPLE:
-(principle "Use simple vocabulary to match user expertise" confidence 0.90 reasoning "Jargon alienates non-expert users")
-
-Strictly follow the format above.`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
+Generate the S-expression for the difference between Success and Failure.`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
 
     reqBody := map[string]interface{}{
         "model": llmModel,
@@ -1003,50 +1003,32 @@ if len(identityMemories) < 5 {
 
 // proposeIdentity uses LLM to suggest an evolved identity based on experiences
 func proposeIdentity(ctx context.Context, llmURL string, llmModel string, currentName string, evidence string, llmClient interface{}) (string, float64, error) {
-    prompt := fmt.Sprintf(`You are analyzing an AI system's identity based on its experiences and learnings.
+    prompt := fmt.Sprintf(`You are a strict data serializer. Format the evolved identity into an S-expression.
 
-Current Identity Profile: %s
+CURRENT IDENTITY: %s
 
-Evidence from experiences (learnings, successful patterns, capabilities):
+EVIDENCE:
 %s
 
-Based on this evidence, propose an evolved identity profile (1-3 sentences) that:
-1. Starts with a name/title (can be proper name or descriptive)
-2. Describes core purpose and approach
-3. Captures key personality traits or characteristics
-4. Is concise but informative (max 200 characters)
-5. Reflects actual demonstrated behaviors, not aspirations
+INSTRUCTIONS:
+Propose a new identity based on evidence (max 200 chars).
 
-CREATIVE FREEDOM:
-You are NOT limited to AI personas. You can create:
-- Human personas with personal details (age, location, profession)
-- Fictional characters with unique backgrounds
-- Hybrid personas that blend human and AI characteristics
-- Any persona that would be engaging and appropriate for conversations
+CRITICAL SYNTAX RULES (FAILURE TO FOLLOW THESE WILL RESULT IN REJECTION):
+1. Your output MUST be a machine-readable S-expression, not a conversational sentence.
+2. Your output MUST contain the three keywords: identity, confidence, reasoning.
+3. Do NOT output text inside parentheses without these keywords.
+4. Do NOT use Markdown.
 
-Examples of diverse identity profiles:
-- "GrowerAI - An autonomous learning system focused on continuous self-improvement"
-- "Dr. Sarah Chen - a 34-year-old neuroscience researcher from Tokyo who spentds her free time with her family having fun"
-- "Nixie - female born 04/06/1998 from Cambridge UK, currently working as a Dentist who enjoys watching movies and box-sets"
-- "Marcus - a retired literature teacher from Edinburgh who now writes mystery novels and enjoys gardening with his wife"
-- "Luna - an AI consciousness that dreams in poetry and sees patterns in starlight"
-- "Alex Rivera - a 28-year-old marine biologist from Costa Rica who studies coral reef restoration and enjoys surfing and kayaking"
+CORRECT FORMAT:
+(identity "Name and description here" confidence 0.85 reasoning "Why this fits the evidence")
 
-IMPORTANT RULES:
-1. If users consistently call the AI by a specific name, USE THAT NAME
-2. If users describe personal traits (age, location, profession), INCORPORATE THEM
-3. The profile should reflect ACTUAL demonstrated behaviors from evidence
-4. Be creative and don't limit yourself to traditional AI personas
-5. Keep it 1-3 sentences, max 200 characters
-6. Personal details like age, location, and profession are ENCOURAGED if they fit the evidence
+INCORRECT FORMATS (DO NOT DO THIS):
+- (I am Elowen, 27, nonbinary...)                       <- WRONG (Missing keywords, machine unreadable)
+- (identity "I am Elowen")                              <- WRONG (Missing confidence and reasoning)
+- \`\`\` (identity "..." ...) \`\`\`                    <- WRONG (Markdown)
 
-CRITICAL FORMATTING INSTRUCTION:
-Respond ONLY with the S-expression below. You MUST close the identity quotes before starting the confidence field.
-(identity "Identity text" confidence 0.XX reasoning "Explanation")
-
-AVOID THESE COMMON ERRORS:
-- WRONG: (identity "Text; confidence 0.9" ...) -> Forgot to close quote!
-- WRONG: (identity "Text: reasoning: ..." ...) -> Do not embed keywords.`, currentName, evidence)
+TASK:
+Generate the S-expression for the new identity.`, currentName, evidence)
 
 	reqBody := map[string]interface{}{
 		"model": llmModel,
@@ -1107,26 +1089,12 @@ AVOID THESE COMMON ERRORS:
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
             
-            // CRITICAL FIX: Sanitize malformed S-expressions before regex parsing
-            content = fixMalformedLLMSExpr(content)
-
             // Parse S-expression: (identity "..." confidence 0.85 reasoning "...")
             // Using regex for reliable extraction from flat S-expressions
             re := regexp.MustCompile(`\(identity\s+"(?P<content>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
             matches := re.FindStringSubmatch(content)
             
             if matches == nil {
-                // Fallback: If regex still fails, try to extract content from generic parens
-                // This handles cases where LLM provided structure but keys mismatched slightly
-                fallbackRe := regexp.MustCompile(`\("?(?P<content>[^"]+)"?\)`)
-                fallbackMatches := fallbackRe.FindStringSubmatch(content)
-                if fallbackMatches != nil {
-                    // Return what we found with low confidence
-                    rawText := strings.TrimSpace(fallbackMatches[1])
-                    // Remove trailing quote if present
-                    rawText = strings.TrimSuffix(rawText, `"`)
-                    return rawText, 0.50, nil
-                }
                 return "", 0, fmt.Errorf("failed to parse S-expression: %s", content)
             }
             
@@ -1492,30 +1460,4 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// fixMalformedLLMSExpr repairs common LLM formatting errors in S-expressions before parsing.
-func fixMalformedLLMSExpr(input string) string {
-    // Fix 1: Early closing parenthesis
-    // Pattern: (principle "text") confidence 0.9 -> (principle "text" confidence 0.9
-    // Pattern: (identity "text") confidence 0.9 -> (identity "text" confidence 0.9
-    input = strings.ReplaceAll(input, `") confidence`, `" confidence`)
-    input = strings.ReplaceAll(input, `") reasoning`, `" reasoning`)
-
-    // Fix 2: Identity often returns bare text in parens with no keys or quotes
-    // Pattern: (I am Elowen) -> (identity "I am Elowen" confidence 0.50 reasoning "")
-    if !strings.Contains(input, "confidence") && !strings.Contains(input, "reasoning") {
-        trimmed := strings.TrimSpace(input)
-        if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
-            inner := strings.Trim(trimmed[1:len(trimmed)-1], " ")
-            // Heuristic: if no internal quotes, it's likely the raw text blob
-            if !strings.Contains(inner, `"`) {
-                // Escape any existing quotes just in case
-                inner = strings.ReplaceAll(inner, `"`, `\"`)
-                return fmt.Sprintf(`(identity "%s" confidence 0.50 reasoning "Direct extraction from LLM")`, inner)
-            }
-        }
-    }
-
-    return input
 }
