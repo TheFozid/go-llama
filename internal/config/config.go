@@ -106,12 +106,13 @@ type GrowerAIConfig struct {
         ExtractionLimit    int     `json:"extraction_limit"`    // Max memories to analyze for patterns
     } `json:"principles"
 	
-	// Phase 4: Personality Control
-	Personality struct {
-		GoodBehaviorBias  float64 `json:"good_behavior_bias"`   // 0.0-1.0: prioritize good-tagged memories
-		AllowDisagreement bool    `json:"allow_disagreement"`   // Can AI refuse/challenge requests?
-		TrustLearningRate float64 `json:"trust_learning_rate"`  // How fast trust scores adjust (0.0-1.0)
-	} `json:"personality"`
+    // Phase 4: Principles System (10 Commandments)
+    Principles struct {
+        AdminSlots             []int   `json:"admin_slots"`               // Slots 1-3: admin-controlled
+        AIManagedSlots         []int   `json:"ai_managed_slots"`          // Slots 4-10: AI-managed
+        MinRatingThreshold     float64 `json:"min_rating_threshold"`      // Minimum rating to become a principle
+        ExtractionLimit        int     `json:"extraction_limit"`          // Max memories to analyze for patterns
+    } `json:"principles"
 	
 	// Phase 4: Memory Linking (Neural Network)
 	Linking struct {
