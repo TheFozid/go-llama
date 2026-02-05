@@ -23,14 +23,13 @@ type LLMConfig struct {
 type GrowerAIConfig struct {
     Enabled bool `json:"enabled"`
 
-    // LLM Queue Configuration
     LLMQueue struct {
-        Enabled                bool `json:"enabled"`
-        MaxConcurrent          int  `json:"max_concurrent"`
-        CriticalQueueSize      int  `json:"critical_queue_size"`
-        BackgroundQueueSize    int  `json:"background_queue_size"`
-        CriticalTimeoutSeconds int  `json:"critical_timeout_seconds"`
-        BackgroundTimeoutSec   int  `json:"background_timeout_seconds"`
+        Enabled                  bool `json:"enabled"`
+        MaxConcurrent            int  `json:"max_concurrent"`
+        CriticalQueueSize        int  `json:"critical_queue_size"`
+        BackgroundQueueSize      int  `json:"background_queue_size"`
+        CriticalTimeoutSeconds   int  `json:"critical_timeout_seconds"`
+        BackgroundTimeoutSeconds int  `json:"background_timeout_seconds"`
     } `json:"llm_queue"`
     ReasoningModel struct {
         Name        string `json:"name"`
@@ -255,8 +254,8 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
     if gai.LLMQueue.CriticalTimeoutSeconds == 0 {
         gai.LLMQueue.CriticalTimeoutSeconds = 60
     }
-    if gai.LLMQueue.BackgroundTimeoutSec == 0 {
-        gai.LLMQueue.BackgroundTimeoutSec = 180
+    if gai.LLMQueue.BackgroundTimeoutSeconds == 0 {
+        gai.LLMQueue.BackgroundTimeoutSeconds = 180
     }
     // Enable queue by default
     if !gai.LLMQueue.Enabled {
