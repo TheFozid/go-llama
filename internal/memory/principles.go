@@ -1107,12 +1107,26 @@ AVOID THESE COMMON ERRORS:
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
             
+            // CRITICAL FIX: Sanitize malformed S-expressions before regex parsing
+            content = fixMalformedLLMSExpr(content)
+
             // Parse S-expression: (identity "..." confidence 0.85 reasoning "...")
             // Using regex for reliable extraction from flat S-expressions
             re := regexp.MustCompile(`\(identity\s+"(?P<content>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
             matches := re.FindStringSubmatch(content)
             
             if matches == nil {
+                // Fallback: If regex still fails, try to extract content from generic parens
+                // This handles cases where LLM provided structure but keys mismatched slightly
+                fallbackRe := regexp.MustCompile(`\("?(?P<content>[^"]+)"?\)`)
+                fallbackMatches := fallbackRe.FindStringSubmatch(content)
+                if fallbackMatches != nil {
+                    // Return what we found with low confidence
+                    rawText := strings.TrimSpace(fallbackMatches[1])
+                    // Remove trailing quote if present
+                    rawText = strings.TrimSuffix(rawText, `"`)
+                    return rawText, 0.50, nil
+                }
                 return "", 0, fmt.Errorf("failed to parse S-expression: %s", content)
             }
             
@@ -1478,4 +1492,30 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// fixMalformedLLMSExpr repairs common LLM formatting errors in S-expressions before parsing.
+func fixMalformedLLMSExpr(input string) string {
+    // Fix 1: Early closing parenthesis
+    // Pattern: (principle "text") confidence 0.9 -> (principle "text" confidence 0.9
+    // Pattern: (identity "text") confidence 0.9 -> (identity "text" confidence 0.9
+    input = strings.ReplaceAll(input, `") confidence`, `" confidence`)
+    input = strings.ReplaceAll(input, `") reasoning`, `" reasoning`)
+
+    // Fix 2: Identity often returns bare text in parens with no keys or quotes
+    // Pattern: (I am Elowen) -> (identity "I am Elowen" confidence 0.50 reasoning "")
+    if !strings.Contains(input, "confidence") && !strings.Contains(input, "reasoning") {
+        trimmed := strings.TrimSpace(input)
+        if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+            inner := strings.Trim(trimmed[1:len(trimmed)-1], " ")
+            // Heuristic: if no internal quotes, it's likely the raw text blob
+            if !strings.Contains(inner, `"`) {
+                // Escape any existing quotes just in case
+                inner = strings.ReplaceAll(inner, `"`, `\"`)
+                return fmt.Sprintf(`(identity "%s" confidence 0.50 reasoning "Direct extraction from LLM")`, inner)
+            }
+        }
+    }
+
+    return input
 }
