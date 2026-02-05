@@ -56,22 +56,19 @@ type DecayWorker struct {
     llmSmallURL            string     // LLM URL for simple evaluations (Fast/Light)
     llmSmallModel          string     // LLM model name for simple evaluations
     scheduleHours          int
-    principleScheduleHours int
     minRatingThreshold     float64
     extractionLimit        int        // Max memories to analyze for principles
     tierRules              TierRules  // DEPRECATED: kept for backwards compatibility
-	mergeWindows           MergeWindows
-	importanceMod          float64    // DEPRECATED: kept for backwards compatibility
-	accessMod              float64    // DEPRECATED: kept for backwards compatibility
-	
-	// Space-based compression configuration
-	storageLimits          StorageLimits
-	compressionWeights     CompressionWeights
-	
-	stopChan               chan struct{}
-	lastPrincipleEvolution time.Time
-	evolutionMutex         sync.Mutex // Protects lastPrincipleEvolution
-	migrationComplete      bool       // One-time memory_id migration flag (in-memory only, check DB on start)
+    mergeWindows           MergeWindows
+    importanceMod          float64    // DEPRECATED: kept for backwards compatibility
+    accessMod              float64    // DEPRECATED: kept for backwards compatibility
+    
+    // Space-based compression configuration
+    storageLimits          StorageLimits
+    compressionWeights     CompressionWeights
+    
+    stopChan               chan struct{}
+    migrationComplete      bool       // One-time memory_id migration flag (in-memory only, check DB on start)
 }
 
 // TierRules defines age thresholds for tier transitions
@@ -90,58 +87,55 @@ type MergeWindows struct {
 
 // NewDecayWorker creates a new background compression worker
 func NewDecayWorker(
-	storage *Storage,
-	compressor *Compressor,
-	embedder *Embedder,
-	taggerQueue TaggerQueueInterface,
-	linker *Linker,
-	db *gorm.DB,
-	llmURL string,
-	llmModel string,
-	llmClient interface{}, // NEW: LLM queue client
-	scheduleHours int,
-	principleScheduleHours int,
-	minRatingThreshold float64,
-	extractionLimit int,
-	tierRules TierRules,           // DEPRECATED: kept for backwards compatibility
-	mergeWindows MergeWindows,
-	importanceMod float64,          // DEPRECATED: kept for backwards compatibility
-	accessMod float64,              // DEPRECATED: kept for backwards compatibility
-	storageLimits StorageLimits,   // NEW: space-based compression config
-	compressionWeights CompressionWeights, // NEW: compression scoring weights
+    storage *Storage,
+    compressor *Compressor,
+    embedder *Embedder,
+    taggerQueue TaggerQueueInterface,
+    linker *Linker,
+    db *gorm.DB,
+    llmURL string,
+    llmModel string,
+    llmClient interface{}, // NEW: LLM queue client
+    scheduleHours int,
+    minRatingThreshold float64,
+    extractionLimit int,
+    tierRules TierRules,           // DEPRECATED: kept for backwards compatibility
+    mergeWindows MergeWindows,
+    importanceMod float64,          // DEPRECATED: kept for backwards compatibility
+    accessMod float64,              // DEPRECATED: kept for backwards compatibility
+    storageLimits StorageLimits,   // NEW: space-based compression config
+    compressionWeights CompressionWeights, // NEW: compression scoring weights
 ) *DecayWorker {
-	return &DecayWorker{
-		storage:                storage,
-		compressor:             compressor,
-		embedder:               embedder,
-		taggerQueue:            taggerQueue,
-		linker:                 linker,
-		db:                     db,
-		llmURL:                 llmURL,
-		llmModel:               llmModel,
-		llmClient:              llmClient, // NEW: Store LLM client
-		scheduleHours:          scheduleHours,
-		principleScheduleHours: principleScheduleHours,
-		minRatingThreshold:     minRatingThreshold,
-		extractionLimit:        extractionLimit,
-		tierRules:              tierRules,        // DEPRECATED
-		mergeWindows:           mergeWindows,
-		importanceMod:          importanceMod,    // DEPRECATED
-		accessMod:              accessMod,        // DEPRECATED
-		storageLimits:          storageLimits,
-		compressionWeights:     compressionWeights,
-		stopChan:               make(chan struct{}),
-		lastPrincipleEvolution: time.Now(), // Initialize to now
-		migrationComplete:      false, // Will check DB on first cycle
-	}
+    return &DecayWorker{
+        storage:            storage,
+        compressor:         compressor,
+        embedder:           embedder,
+        taggerQueue:        taggerQueue,
+        linker:             linker,
+        db:                 db,
+        llmURL:             llmURL,
+        llmModel:           llmModel,
+        llmClient:          llmClient, // NEW: Store LLM client
+        scheduleHours:      scheduleHours,
+        minRatingThreshold: minRatingThreshold,
+        extractionLimit:    extractionLimit,
+        tierRules:          tierRules,        // DEPRECATED
+        mergeWindows:       mergeWindows,
+        importanceMod:      importanceMod,    // DEPRECATED
+        accessMod:          accessMod,        // DEPRECATED
+        storageLimits:      storageLimits,
+        compressionWeights: compressionWeights,
+        stopChan:           make(chan struct{}),
+        migrationComplete:  false, // Will check DB on first cycle
+    }
 }
 
 // Start begins the background compression loop
 func (w *DecayWorker) Start() {
-	log.Printf("[DecayWorker] Starting compression worker (runs every %d hours)", w.scheduleHours)
-	log.Printf("[DecayWorker] Principle evolution runs every %d hours", w.principleScheduleHours)
+    log.Printf("[DecayWorker] Starting compression worker (runs every %d hours)", w.scheduleHours)
+    log.Printf("[DecayWorker] Principle evolution will run during every compression cycle")
 
-	ticker := time.NewTicker(time.Duration(w.scheduleHours) * time.Hour)
+    ticker := time.NewTicker(time.Duration(w.scheduleHours) * time.Hour)
 	defer ticker.Stop()
 
 	// Run immediately on start
@@ -280,45 +274,17 @@ func (w *DecayWorker) runCompressionCycle() {
 	if err := w.recalculateTrustScores(ctx); err != nil {
 		log.Printf("[DecayWorker] ERROR in trust recalculation phase: %v", err)
 	}
-	// PHASE 4.5: Semantic deduplication (consolidate duplicate memories)
-	log.Println("[DecayWorker] PHASE 4.5: Consolidating duplicate memories...")
-	if err := w.consolidateDuplicatesPhase(ctx); err != nil {
-		log.Printf("[DecayWorker] ERROR in consolidation phase: %v", err)
-	}
-
-	
-	// PHASE 5: Evolve principles (only if schedule interval has passed)
-	w.evolutionMutex.Lock()
-	timeSinceLastEvolution := time.Since(w.lastPrincipleEvolution)
-	principleInterval := time.Duration(w.principleScheduleHours) * time.Hour
-	shouldEvolve := timeSinceLastEvolution >= principleInterval
-	
-	// Log detailed timing info for debugging
-	log.Printf("[DecayWorker] Principle evolution check: last=%s, elapsed=%s, interval=%s, shouldEvolve=%v",
-		w.lastPrincipleEvolution.Format("2006-01-02 15:04:05"),
-		timeSinceLastEvolution.Round(time.Minute),
-		principleInterval,
-		shouldEvolve)
-	w.evolutionMutex.Unlock()
-	
-	if shouldEvolve {
-		log.Printf("[DecayWorker] PHASE 5: Evolving principles (last evolution: %s ago)...",
-			timeSinceLastEvolution.Round(time.Hour))
-		
-		if err := w.evolvePrinciplesPhase(ctx); err != nil {
-			log.Printf("[DecayWorker] ERROR in principle evolution phase: %v", err)
-		} else {
-			// Update timestamp with mutex protection
-			w.evolutionMutex.Lock()
-			w.lastPrincipleEvolution = time.Now()
-			w.evolutionMutex.Unlock()
-			log.Printf("[DecayWorker] ✓ Principle evolution timestamp updated")
-		}
-	} else {
-		timeUntilNext := principleInterval - timeSinceLastEvolution
-		log.Printf("[DecayWorker] PHASE 5: Skipping principle evolution (next in %s)",
-			timeUntilNext.Round(time.Hour))
-	}
+    // PHASE 4.5: Semantic deduplication (consolidate duplicate memories)
+    log.Println("[DecayWorker] PHASE 4.5: Consolidating duplicate memories...")
+    if err := w.consolidateDuplicatesPhase(ctx); err != nil {
+        log.Printf("[DecayWorker] ERROR in consolidation phase: %v", err)
+    }
+    
+    // PHASE 5: Evolve principles (runs every compression cycle)
+    log.Println("[DecayWorker] PHASE 5: Evolving principles...")
+    if err := w.evolvePrinciplesPhase(ctx); err != nil {
+        log.Printf("[DecayWorker] ERROR in principle evolution phase: %v", err)
+    }
 	
 	duration := time.Since(startTime)
 	log.Printf("[DecayWorker] Compression cycle complete (took %s)", duration.Round(time.Second))

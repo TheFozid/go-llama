@@ -98,14 +98,13 @@ type GrowerAIConfig struct {
 		MergeWindowLong   int `json:"merge_window_long"`   // Days
 	} `json:"compression"`
 	
-	// Phase 4: Principles System (10 Commandments)
-	Principles struct {
-		AdminSlots             []int   `json:"admin_slots"`               // Slots 1-3: admin-controlled
-		AIManagedSlots         []int   `json:"ai_managed_slots"`          // Slots 4-10: AI-managed
-		EvolutionScheduleHours int     `json:"evolution_schedule_hours"`  // How often to evolve principles
-		MinRatingThreshold     float64 `json:"min_rating_threshold"`      // Minimum rating to become a principle
-		ExtractionLimit        int     `json:"extraction_limit"`          // Max memories to analyze for patterns
-	} `json:"principles"`
+    // Phase 4: Principles System (10 Commandments)
+    Principles struct {
+        AdminSlots         []int   `json:"admin_slots"`          // Slots 1-3: admin-controlled
+        AIManagedSlots     []int   `json:"ai_managed_slots"`     // Slots 4-10: AI-managed
+        MinRatingThreshold float64 `json:"min_rating_threshold"` // Minimum rating to become a principle
+        ExtractionLimit    int     `json:"extraction_limit"`    // Max memories to analyze for patterns
+    } `json:"principles"
 	
 	// Phase 4: Personality Control
 	Personality struct {
@@ -279,15 +278,12 @@ func applyGrowerAIDefaults(gai *GrowerAIConfig) {
 	if len(gai.Principles.AdminSlots) == 0 {
 		gai.Principles.AdminSlots = []int{1, 2, 3}
 	}
-	if len(gai.Principles.AIManagedSlots) == 0 {
-		gai.Principles.AIManagedSlots = []int{4, 5, 6, 7, 8, 9, 10}
-	}
-	if gai.Principles.EvolutionScheduleHours == 0 {
-		gai.Principles.EvolutionScheduleHours = 168 // 1 week
-	}
-	if gai.Principles.MinRatingThreshold == 0 {
-		gai.Principles.MinRatingThreshold = 0.75
-	}
+    if len(gai.Principles.AIManagedSlots) == 0 {
+        gai.Principles.AIManagedSlots = []int{4, 5, 6, 7, 8, 9, 10}
+    }
+    if gai.Principles.MinRatingThreshold == 0 {
+        gai.Principles.MinRatingThreshold = 0.75
+    }
 	if gai.Principles.ExtractionLimit == 0 {
 		gai.Principles.ExtractionLimit = 1000 // Analyze up to 1000 good memories
 	}

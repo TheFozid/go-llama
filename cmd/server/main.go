@@ -218,17 +218,16 @@ func main() {
                     config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
                     cfg.GrowerAI.ReasoningModel.Name,
                     decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
-					cfg.GrowerAI.Compression.ScheduleHours,
-					cfg.GrowerAI.Principles.EvolutionScheduleHours,
-					cfg.GrowerAI.Principles.MinRatingThreshold,
-					cfg.GrowerAI.Principles.ExtractionLimit,
-					tierRules,
-					mergeWindows,
-					cfg.GrowerAI.Compression.ImportanceMod,
-					cfg.GrowerAI.Compression.AccessMod,
-					storageLimits,
-					compressionWeights,
-				)
+                    cfg.GrowerAI.Compression.ScheduleHours,
+                    cfg.GrowerAI.Principles.MinRatingThreshold,
+                    cfg.GrowerAI.Principles.ExtractionLimit,
+                    tierRules,
+                    mergeWindows,
+                    cfg.GrowerAI.Compression.ImportanceMod,
+                    cfg.GrowerAI.Compression.AccessMod,
+                    storageLimits,
+                    compressionWeights,
+                )
 				// Start linking worker
 				linkWorker := memory.NewLinkWorker(
 					storage,
@@ -237,13 +236,12 @@ func main() {
 				)
 				go linkWorker.Start()
 
-				go worker.Start()
+                go worker.Start()
 
-				log.Printf("[Main] ✓ GrowerAI compression worker started (schedule: every %d hours)",
-					cfg.GrowerAI.Compression.ScheduleHours)
-				log.Printf("[Main] ✓ Principle evolution worker started (schedule: every %d hours)",
-					cfg.GrowerAI.Principles.EvolutionScheduleHours)
-				log.Printf("[Main] ✓ Memory linking enabled (similarity: %.2f, max links: %d)",
+                log.Printf("[Main] ✓ GrowerAI compression worker started (schedule: every %d hours)",
+                    cfg.GrowerAI.Compression.ScheduleHours)
+                log.Printf("[Main] ✓ Principle evolution integrated into compression cycle")
+                log.Printf("[Main] ✓ Memory linking enabled (similarity: %.2f, max links: %d)",
 					cfg.GrowerAI.Linking.SimilarityThreshold, cfg.GrowerAI.Linking.MaxLinksPerMemory)
 				log.Printf("[Main] ✓ Cluster compression enabled (merge windows: %d/%d/%d days)",
 					mergeWindows.RecentDays, mergeWindows.MediumDays, mergeWindows.LongDays)
