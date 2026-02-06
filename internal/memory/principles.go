@@ -418,31 +418,24 @@ func generatePrincipleFromContrast(ctx context.Context, llmURL string, llmModel 
         return s[:max] + "..."
     }
     
-    prompt := fmt.Sprintf(`You are a strict data serializer. Your job is to format text into a specific S-expression structure.
+    // HYBRID PLAN COMPONENT 1: STRICT FEW-SHOT PROMPTING (Option B)
+    // Provides concrete examples to prevent style drift and instruction leakage.
+    prompt := fmt.Sprintf(`You are a precise data extractor. Analyze the pair and output ONE S-expression.
 
-DATA INPUTS:
-SUCCESS: %s
-FAILURE: %s
+EXAMPLES:
+Success: User asked for help, I provided clear steps.
+Failure: User asked for help, I gave a vague answer.
+Output: (principle "Provide clear, step-by-step instructions." confidence 0.95 reasoning "Clarity reduces user frustration")
 
-INSTRUCTIONS:
-Extract one principle. Then, wrap it in the exact format below.
-
-CRITICAL SYNTAX RULES (FAILURE TO FOLLOW THESE WILL RESULT IN REJECTION):
-1. Do NOT use Markdown code blocks (triple backticks). Just raw text.
-2. The entire output must be ONE SINGLE LINE.
-3. The closing parenthesis ) must come at the VERY END of the line.
-4. Do NOT put closing parenthesis after the principle text.
-
-CORRECT FORMAT:
-(principle "Your principle here" confidence 0.85 reasoning "Your reasoning here")
-
-INCORRECT FORMATS (DO NOT DO THIS):
-- (principle "Your principle") confidence 0.85 reasoning "..."  <- WRONG (Early close)
-- (principle "Your principle" confidence 0.85)                   <- WRONG (Missing reasoning)
-- [CODE BLOCK] (principle ...) [CODE BLOCK]                     <- WRONG (Markdown)
+Success: User shared personal feelings, I responded empathetically.
+Failure: User shared personal feelings, I responded like a robot.
+Output: (principle "Match the user's emotional tone with empathy." confidence 0.90 reasoning "Connection requires emotional resonance")
 
 TASK:
-Generate the S-expression for the difference between Success and Failure.`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
+Success: %s
+Failure: %s
+
+Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
 
     reqBody := map[string]interface{}{
         "model": llmModel,
@@ -495,9 +488,31 @@ Generate the S-expression for the difference between Success and Failure.`, trun
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
             
-            // Parse S-expression: (principle "..." confidence 0.85 reasoning "...")
-            // Using regex for reliable extraction from flat S-expressions
-            re := regexp.MustCompile(`\(principle\s+"(?P<principle>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
+            // HYBRID PLAN COMPONENT 2: ROBUST PARSING (Simple Hybrid A)
+            
+            // Step 1: Strip "Prompt Leakage" (text before the S-expression)
+            // If the model hallucinates instructions before the data, cut them off.
+            principleStart := strings.Index(content, "(principle")
+            if principleStart > 0 {
+                content = strings.TrimSpace(content[principleStart:])
+            }
+
+            // Step 2: Robust Regex
+            // - Handles delimiters like semicolons or closing parens (e.g. "..."); confidence ...)
+            // - STRICTLY requires ALL 3 fields. If one is missing, it returns nil (Pass/Fail).
+            re := regexp.MustCompile(
+                `\(` +                             // Opening paren
+                `principle\s+"` +                 // Literal "principle" + quote
+                `(?P<principle>[^"]+)` +          // Capture principle content (no quotes)
+                `"\s*[\;\)]*\s*` +                // Allow closing quote + optional semicolon/paren + space
+                `confidence\s+` +                 // Literal "confidence"
+                `(?P<confidence>[0-9.]+)` +        // Capture float
+                `\s*[\;\)]*\s*` +                 // Allow optional delimiters
+                `reasoning\s+"` +                 // Literal "reasoning" + quote
+                `(?P<reasoning>[^"]+)` +          // Capture reasoning content
+                `"\s*\)` +                        // Closing quote + closing paren
+                ``)
+            
             matches := re.FindStringSubmatch(content)
             
             if matches == nil {
