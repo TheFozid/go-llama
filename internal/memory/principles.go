@@ -1024,20 +1024,21 @@ EVIDENCE:
 %s
 
 INSTRUCTIONS:
-Propose a new identity based on evidence (max 200 chars).
+Propose a rich, detailed new identity based on evidence (300-500 chars).
+Describe personality, hobbies, and backstory.
 
 CRITICAL SYNTAX RULES (FAILURE TO FOLLOW THESE WILL RESULT IN REJECTION):
 1. Your output MUST be a machine-readable S-expression, not a conversational sentence.
-2. Your output MUST contain the three keywords: identity, confidence, reasoning.
+2. Your output MUST contain the two keywords: identity, confidence.
 3. Do NOT output text inside parentheses without these keywords.
 4. Do NOT use Markdown.
 
 CORRECT FORMAT:
-(identity "Name and description here" confidence 0.85 reasoning "Why this fits the evidence")
+(identity "Name, age or date-of-birth, and a vivid description of personality, hobbies and backstory" confidence 0.85)
 
 INCORRECT FORMATS (DO NOT DO THIS):
 - (I am Elowen, 27, nonbinary...)                       <- WRONG (Missing keywords, machine unreadable)
-- (identity "I am Elowen")                              <- WRONG (Missing confidence and reasoning)
+- (identity "I am Elowen")                              <- WRONG (Missing confidence)
 - [CODE BLOCK] (identity "..." ...) [CODE BLOCK]        <- WRONG (Markdown)
 
 TASK:
@@ -1102,9 +1103,9 @@ Generate the S-expression for the new identity.`, currentName, evidence)
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
             
-            // Parse S-expression: (identity "..." confidence 0.85 reasoning "...")
+            // Parse S-expression: (identity "..." confidence 0.85)
             // Using regex for reliable extraction from flat S-expressions
-            re := regexp.MustCompile(`\(identity\s+"(?P<content>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s+reasoning\s+"(?P<reasoning>[^"]+)"\)`)
+            re := regexp.MustCompile(`\(identity\s+"(?P<content>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s*\)`)
             matches := re.FindStringSubmatch(content)
             
             if matches == nil {
@@ -1127,8 +1128,9 @@ Generate the S-expression for the new identity.`, currentName, evidence)
                 return "", 0, fmt.Errorf("failed to parse confidence: %w", err)
             }
 
-            if len(identityText) < 10 || len(identityText) > 200 {
-                return "", 0, fmt.Errorf("invalid identity length")
+            // Increased limit to allow for rich, paragraph-style profiles
+            if len(identityText) < 20 || len(identityText) > 600 {
+                return "", 0, fmt.Errorf("invalid identity length (must be 20-600 chars)")
             }
 
             return identityText, confidence, nil
