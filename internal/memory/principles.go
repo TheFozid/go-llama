@@ -410,7 +410,6 @@ func ExtractPrinciples(db *gorm.DB, storage *Storage, embedder *Embedder, minRat
 
 // generatePrincipleFromContrast asks the LLM to find the rule separating success from failure
 func generatePrincipleFromContrast(ctx context.Context, llmURL string, llmModel string, goodContent string, badContent string, llmClient interface{}) (string, float64, error) {
-    // Truncate content to fit prompt
     truncateContent := func(s string, max int) string {
         if len(s) <= max {
             return s
@@ -418,18 +417,18 @@ func generatePrincipleFromContrast(ctx context.Context, llmURL string, llmModel 
         return s[:max] + "..."
     }
     
-    // HYBRID PLAN COMPONENT 1: STRICT FEW-SHOT PROMPTING (Option B)
-    // Provides concrete examples to prevent style drift and instruction leakage.
+    // STREAMLINED PROMPT:
+    // Removed "Reasoning" (dead code). Focused purely on extraction.
     prompt := fmt.Sprintf(`You are a precise data extractor. Analyze the pair and output ONE S-expression.
 
 EXAMPLES:
 Success: User asked for help, I provided clear steps.
 Failure: User asked for help, I gave a vague answer.
-Output: (principle "Provide clear, step-by-step instructions." confidence 0.95 reasoning "Clarity reduces user frustration")
+Output: (principle "Provide clear, step-by-step instructions." confidence 0.95)
 
 Success: User shared personal feelings, I responded empathetically.
 Failure: User shared personal feelings, I responded like a robot.
-Output: (principle "Match the user's emotional tone with empathy." confidence 0.90 reasoning "Connection requires emotional resonance")
+Output: (principle "Match the user's emotional tone with empathy." confidence 0.90)
 
 TASK:
 Success: %s
@@ -453,7 +452,6 @@ Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
         "stream":      false,
     }
 
-    // Use queue client if available
     if llmClient != nil {
         type LLMCaller interface {
             Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
@@ -488,33 +486,26 @@ Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
             
-            // HYBRID PLAN COMPONENT 2: ROBUST PARSING (Simple Hybrid A)
-            
-            // Step 1: Strip "Prompt Leakage" (text before the S-expression)
-            // If the model hallucinates instructions before the data, cut them off.
+            // STREAMLINED PARSING:
+            // 1. Strip Prompt Leakage
             principleStart := strings.Index(content, "(principle")
             if principleStart > 0 {
                 content = strings.TrimSpace(content[principleStart:])
             }
 
-            // Step 2: Robust Regex
-            // - Handles delimiters like semicolons or closing parens (e.g. "..."); confidence ...)
-            // - STRICTLY requires ALL 3 fields. If one is missing, it returns nil (Pass/Fail).
+            // 2. Simple Regex (No Reasoning field)
+            // Matches: (principle "text") confidence 0.5)
             re := regexp.MustCompile(
-                `\(` +                             // Opening paren
-                `principle\s+"` +                 // Literal "principle" + quote
-                `(?P<principle>[^"]+)` +          // Capture principle content (no quotes)
-                `"\s*[\;\)]*\s*` +                // Allow closing quote + optional semicolon/paren + space
-                `confidence\s+` +                 // Literal "confidence"
-                `(?P<confidence>[0-9.]+)` +        // Capture float
-                `\s*[\;\)]*\s*` +                 // Allow optional delimiters
-                `reasoning\s+"` +                 // Literal "reasoning" + quote
-                `(?P<reasoning>[^"]+)` +          // Capture reasoning content
-                `"\s*\)` +                        // Closing quote + closing paren
-                ``)
+                `\(` +
+                `principle\s+"` +
+                `(?P<principle>[^"]+)` +
+                `"\s*[\;\)]*\s*` +
+                `confidence\s+` +
+                `(?P<confidence>[0-9.]+)` +
+                `\s*\)`,
+            )
             
             matches := re.FindStringSubmatch(content)
-            
             if matches == nil {
                 return "", 0, fmt.Errorf("failed to parse S-expression: %s", content)
             }
@@ -543,7 +534,7 @@ Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
         }
     }
     
-    return "", 0, fmt.Errorf("no LLM client available for contrastive analysis")
+    return "", 0, fmt.Errorf("no LLM client available")
 }
 
 // EvolvePrinciples updates AI-managed slots (4-10) using semantic matching and conflict resolution.
@@ -757,6 +748,13 @@ func handleNewConcept(ctx context.Context, db *gorm.DB, candidate PrincipleCandi
 
 // checkContradiction uses the Small LLM to determine if two principles conflict
 func checkContradiction(ctx context.Context, llmURL string, llmModel string, llmClient interface{}, p1 string, p2 string) (bool, error) {
+    // SAFETY CHECK: If the Small Model URL is missing, skip check to prevent crash
+    // This MUST be at the very top of the function body.
+    if llmURL == "" {
+        log.Printf("[Principles] Skipping contradiction check: Small Model URL is not configured.")
+        return false, nil
+    }
+
     type LLMCaller interface {
         Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
     }

@@ -217,6 +217,8 @@ func main() {
                     db.DB,
                     config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
                     cfg.GrowerAI.ReasoningModel.Name,
+					config.GetChatURL(cfg.GrowerAI.SimpleModel.URL),
+                    cfg.GrowerAI.SimpleModel.Name,
                     decayWorkerLLMClient, // NEW: Pass LLM client for principle generation
                     cfg.GrowerAI.Compression.ScheduleHours,
                     cfg.GrowerAI.Principles.MinRatingThreshold,

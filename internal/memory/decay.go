@@ -94,6 +94,8 @@ func NewDecayWorker(
     db *gorm.DB,
     llmURL string,
     llmModel string,
+    llmSmallURL string, // ADD THIS
+    llmSmallModel string, // ADD THIS
     llmClient interface{}, // NEW: LLM queue client
     scheduleHours int,
     minRatingThreshold float64,
@@ -114,6 +116,8 @@ func NewDecayWorker(
         db:                 db,
         llmURL:             llmURL,
         llmModel:           llmModel,
+		llmSmallURL:        llmSmallURL,        // ADD THIS
+        llmSmallModel:      llmSmallModel,      // ADD THIS
         llmClient:          llmClient, // NEW: Store LLM client
         scheduleHours:      scheduleHours,
         minRatingThreshold: minRatingThreshold,
