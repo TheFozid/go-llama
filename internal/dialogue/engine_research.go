@@ -502,60 +502,103 @@ RULES:
 }
 
 // parseGoalSupportValidation extracts validation from S-expression
+// Refactored to handle nested parentheses within string fields (e.g. "reasoning (example)")
 func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportValidation, error) {
-	content := strings.TrimSpace(rawResponse)
-	content = strings.TrimPrefix(content, "```lisp")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
+    content := strings.TrimSpace(rawResponse)
+    content = strings.TrimPrefix(content, "```lisp")
+    content = strings.TrimPrefix(content, "```")
+    content = strings.TrimSuffix(content, "```")
+    content = strings.TrimSpace(content)
 
-	// Find goal_support_validation block
-	blocks := findBlocksRecursive(content, "goal_support_validation")
-	if len(blocks) == 0 {
-		blocks = findBlocksRecursive(content, "goal-support-validation")
-	}
+    // Use robust tokenizer instead of naive findBlocks to handle text like "Some (context)"
+    tokens := tokenize(content)
 
-	if len(blocks) == 0 {
-		return nil, fmt.Errorf("no goal_support_validation block found")
-	}
+    validation := &GoalSupportValidation{
+        Confidence: 0.5, // Default
+        IsValid:    false,
+    }
 
-	block := blocks[0]
+    // We need to find the 'goal_support_validation' list and extract fields
+    // Since we can't use the full parser from sexpr_parser.go without refactoring imports,
+    // we perform a depth-first walk of the tokens manually.
+    
+    // Helper to find the start index of a specific atom sequence
+    findBlockStart := func(name string) int {
+        for i := 0; i < len(tokens); i++ {
+            if tokens[i].typ == "lparen" && i+1 < len(tokens) && tokens[i+1].value == name {
+                return i
+            }
+        }
+        return -1
+    }
 
-	validation := &GoalSupportValidation{
-		Confidence: 0.5, // Default
-		IsValid:    false,
-	}
+    blockStart := findBlockStart("goal_support_validation")
+    if blockStart == -1 {
+        blockStart = findBlockStart("goal-support-validation")
+    }
 
-	// Extract fields
-	if goalID := extractFieldContent(block, "supports_goal_id"); goalID != "" {
-		validation.SupportsGoalID = goalID
-	} else if goalID := extractFieldContent(block, "supports-goal-id"); goalID != "" {
-		validation.SupportsGoalID = goalID
-	}
+    if blockStart == -1 {
+        return nil, fmt.Errorf("no goal_support_validation block found")
+    }
 
-	if reasoning := extractFieldContent(block, "reasoning"); reasoning != "" {
-		validation.Reasoning = reasoning
-	}
+    // Extract fields from the list
+    // We iterate inside the block (depth 1)
+    depth := 0
+    i := blockStart
+    for i < len(tokens) {
+        tok := tokens[i]
+        if tok.typ == "lparen" {
+            depth++
+        } else if tok.typ == "rparen" {
+            depth--
+            if depth == 0 {
+                break // End of block
+            }
+        } else if depth == 1 && tok.typ == "atom" {
+            fieldName := tok.value
+            
+            // Extract value based on field name
+            // Pattern: (field value) or (field "value")
+            
+            if i+1 < len(tokens) {
+                valToken := tokens[i+1]
+                
+                // String value
+                if valToken.typ == "string" {
+                    switch fieldName {
+                    case "supports_goal_id", "supports-goal-id":
+                        validation.SupportsGoalID = valToken.value
+                    case "reasoning":
+                        validation.Reasoning = valToken.value
+                    }
+                } 
+                // Atom value (bool or float)
+                else if valToken.typ == "atom" {
+                    switch fieldName {
+                    case "supports_goal_id", "supports-goal-id":
+                        validation.SupportsGoalID = valToken.value
+                    case "confidence":
+                        if conf, err := strconv.ParseFloat(valToken.value, 64); err == nil {
+                            validation.Confidence = conf
+                        }
+                    case "is_valid", "is-valid":
+                        lower := strings.ToLower(valToken.value)
+                        validation.IsValid = (lower == "true" || lower == "t")
+                    case "reasoning":
+                        validation.Reasoning = valToken.value
+                    }
+                }
+            }
+        }
+        i++
+    }
 
-	if confStr := extractFieldContent(block, "confidence"); confStr != "" {
-		if conf, err := parseFloat(confStr); err == nil {
-			validation.Confidence = conf
-		}
-	}
+    // Validation: if is_valid is true, must have a goal ID
+    if validation.IsValid && validation.SupportsGoalID == "" {
+        return nil, fmt.Errorf("is_valid true but no supports_goal_id found")
+    }
 
-	if validStr := extractFieldContent(block, "is_valid"); validStr != "" {
-		validation.IsValid = (validStr == "true" || validStr == "t")
-	} else if validStr := extractFieldContent(block, "is-valid"); validStr != "" {
-		validation.IsValid = (validStr == "true" || validStr == "t")
-	}
-
-	// Validation: if is_valid is true, must have a goal ID
-	if validation.IsValid && validation.SupportsGoalID == "" {
-		// Try to find the goal ID from the reasoning
-		return nil, fmt.Errorf("is_valid true but no supports_goal_id found")
-	}
-
-	return validation, nil
+    return validation, nil
 }
 
 // parseActionFromPlan parses a plan step into an Action
@@ -1325,4 +1368,78 @@ func cleanLLMWrappers(content string) string {
     }
 
     return content
+}
+
+// Local tokenizer helper for engine_research.go
+// Prevents issues with text containing parentheses like "Some (content)"
+type sToken struct {
+    typ   string
+    value string
+}
+
+func tokenize(input string) []sToken {
+    var tokens []sToken
+    i := 0
+
+    for i < len(input) {
+        ch := input[i]
+
+        if ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r' {
+            i++
+            continue
+        }
+
+        if ch == '(' {
+            tokens = append(tokens, sToken{typ: "lparen", value: "("})
+            i++
+            continue
+        }
+
+        if ch == ')' {
+            tokens = append(tokens, sToken{typ: "rparen", value: ")"})
+            i++
+            continue
+        }
+
+        if ch == '"' {
+            i++
+            start := i
+            escaped := false
+            for i < len(input) {
+                if escaped {
+                    escaped = false
+                    i++
+                    continue
+                }
+                if input[i] == '\\' {
+                    escaped = true
+                    i++
+                    continue
+                }
+                if input[i] == '"' {
+                    break
+                }
+                i++
+            }
+
+            value := input[start:i]
+            value = strings.ReplaceAll(value, `\"`, `"`)
+            value = strings.ReplaceAll(value, `\\`, `\`)
+            tokens = append(tokens, sToken{typ: "string", value: value})
+            i++
+            continue
+        }
+
+        start := i
+        for i < len(input) && input[i] != '(' && input[i] != ')' &&
+            input[i] != ' ' && input[i] != '\n' && input[i] != '\t' && input[i] != '\r' {
+            i++
+        }
+        atom := input[start:i]
+        if atom != "" {
+            tokens = append(tokens, sToken{typ: "atom", value: atom})
+        }
+    }
+
+    return tokens
 }

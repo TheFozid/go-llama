@@ -416,7 +416,7 @@ func generatePrincipleFromContrast(ctx context.Context, llmURL string, llmModel 
         }
         return s[:max] + "..."
     }
-    
+
     // STREAMLINED PROMPT:
     // Removed "Reasoning" (dead code). Focused purely on extraction.
     prompt := fmt.Sprintf(`You are a precise data extractor. Analyze the pair and output ONE S-expression.
@@ -456,13 +456,13 @@ Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
         type LLMCaller interface {
             Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
         }
-        
+
         if client, ok := llmClient.(LLMCaller); ok {
             body, err := client.Call(ctx, llmURL, reqBody)
             if err != nil {
                 return "", 0, err
             }
-            
+
             var result struct {
                 Choices []struct {
                     Message struct {
@@ -470,11 +470,11 @@ Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
                     } `json:"message"`
                 } `json:"choices"`
             }
-            
+
             if err := json.Unmarshal(body, &result); err != nil {
                 return "", 0, err
             }
-            
+
             if len(result.Choices) == 0 {
                 return "", 0, fmt.Errorf("no choices returned")
             }
@@ -485,45 +485,13 @@ Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
             content = strings.TrimPrefix(content, "```")
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
-            
-            // STREAMLINED PARSING:
-            // 1. Strip Prompt Leakage
-            principleStart := strings.Index(content, "(principle")
-            if principleStart > 0 {
-                content = strings.TrimSpace(content[principleStart:])
-            }
 
-            // 2. Simple Regex (No Reasoning field)
-            // Matches: (principle "text") confidence 0.5)
-            re := regexp.MustCompile(
-                `\(` +
-                `principle\s+"` +
-                `(?P<principle>[^"]+)` +
-                `"\s*[\;\)]*\s*` +
-                `confidence\s+` +
-                `(?P<confidence>[0-9.]+)` +
-                `\s*\)`,
-            )
-            
-            matches := re.FindStringSubmatch(content)
-            if matches == nil {
-                return "", 0, fmt.Errorf("failed to parse S-expression: %s", content)
-            }
-            
-            resultMap := make(map[string]string)
-            for i, name := range re.SubexpNames() {
-                if i != 0 && name != "" {
-                    resultMap[name] = matches[i]
-                }
-            }
-            
-            principleText := resultMap["principle"]
-            confidenceStr := resultMap["confidence"]
-            
-            var confidence float64
-            _, err = fmt.Sscanf(confidenceStr, "%f", &confidence)
+            // --- NEW ROBUST PARSING LOGIC ---
+            // We expect: (principle "..." confidence 0.5)
+            // Handles: (principle "..." confidence: 0.5), (Principle "..." Confidence 0.5), etc.
+            principleText, confidence, err := parsePrincipleSExpr(content)
             if err != nil {
-                return "", 0, fmt.Errorf("failed to parse confidence: %w", err)
+                return "", 0, fmt.Errorf("failed to parse S-expression: %w (raw: %s)", err, content)
             }
 
             if len(principleText) < 10 || len(principleText) > 200 {
@@ -533,7 +501,7 @@ Output:`, truncateContent(goodContent, 400), truncateContent(badContent, 400))
             return principleText, confidence, nil
         }
     }
-    
+
     return "", 0, fmt.Errorf("no LLM client available")
 }
 
@@ -1044,174 +1012,155 @@ INCORRECT FORMATS (DO NOT DO THIS):
 TASK:
 Generate the S-expression for the new identity.`, currentName, evidence)
 
-	reqBody := map[string]interface{}{
-		"model": llmModel,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are an identity evolution analyzer. Propose meaningful, appropriate names based on evidence.",
-			},
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"temperature": 0.5,
-		"stream":      false,
-	}
+    reqBody := map[string]interface{}{
+        "model": llmModel,
+        "messages": []map[string]string{
+            {
+                "role":    "system",
+                "content": "You are an identity evolution analyzer. Propose meaningful, appropriate names based on evidence.",
+            },
+            {
+                "role":    "user",
+                "content": prompt,
+            },
+        },
+        "temperature": 0.5,
+        "stream":      false,
+    }
 
-	// Use queue client if available
-	if llmClient != nil {
-		type LLMCaller interface {
-			Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
-		}
-		
-		if client, ok := llmClient.(LLMCaller); ok {
-			log.Printf("[Principles] Identity evolution LLM call via queue (prompt length: %d chars)", len(prompt))
-			startTime := time.Now()
-			
-			body, err := client.Call(ctx, llmURL, reqBody)
-			if err != nil {
-				log.Printf("[Principles] Identity evolution queue call failed after %s: %v", time.Since(startTime), err)
-				return "", 0, fmt.Errorf("LLM call failed: %w", err)
-			}
-			
-			log.Printf("[Principles] Identity evolution response received in %s", time.Since(startTime))
-			
-			var result struct {
-				Choices []struct {
-					Message struct {
-						Content string `json:"content"`
-					} `json:"message"`
-				} `json:"choices"`
-			}
-			
-			if err := json.Unmarshal(body, &result); err != nil {
-				return "", 0, fmt.Errorf("failed to decode response: %w", err)
-			}
-			
-			if len(result.Choices) == 0 {
-				return "", 0, fmt.Errorf("no choices returned from LLM")
-			}
-			
+    // Use queue client if available
+    if llmClient != nil {
+        type LLMCaller interface {
+            Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+        }
+
+        if client, ok := llmClient.(LLMCaller); ok {
+            log.Printf("[Principles] Identity evolution LLM call via queue (prompt length: %d chars)", len(prompt))
+            startTime := time.Now()
+
+            body, err := client.Call(ctx, llmURL, reqBody)
+            if err != nil {
+                log.Printf("[Principles] Identity evolution queue call failed after %s: %v", time.Since(startTime), err)
+                return "", 0, fmt.Errorf("LLM call failed: %w", err)
+            }
+
+            log.Printf("[Principles] Identity evolution response received in %s", time.Since(startTime))
+
+            var result struct {
+                Choices []struct {
+                    Message struct {
+                        Content string `json:"content"`
+                    } `json:"message"`
+                } `json:"choices"`
+            }
+
+            if err := json.Unmarshal(body, &result); err != nil {
+                return "", 0, fmt.Errorf("failed to decode response: %w", err)
+            }
+
+            if len(result.Choices) == 0 {
+                return "", 0, fmt.Errorf("no choices returned from LLM")
+            }
+
             content := strings.TrimSpace(result.Choices[0].Message.Content)
-            
+
             // Remove markdown fences (handling lisp, json, or plain)
             content = strings.TrimPrefix(content, "```lisp")
             content = strings.TrimPrefix(content, "```json")
             content = strings.TrimPrefix(content, "```")
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
-            
-            // Parse S-expression: (identity "..." confidence 0.85)
-            // Using regex for reliable extraction from flat S-expressions
-            re := regexp.MustCompile(`\(identity\s+"(?P<content>[^"]+)"\s+confidence\s+(?P<confidence>[0-9.]+)\s*\)`)
-            matches := re.FindStringSubmatch(content)
-            
-            if matches == nil {
-                return "", 0, fmt.Errorf("failed to parse S-expression: %s", content)
-            }
-            
-            resultMap := make(map[string]string)
-            for i, name := range re.SubexpNames() {
-                if i != 0 && name != "" {
-                    resultMap[name] = matches[i]
-                }
-            }
-            
-            identityText := resultMap["content"]
-            confidenceStr := resultMap["confidence"]
-            
-            var confidence float64
-            _, err = fmt.Sscanf(confidenceStr, "%f", &confidence)
+
+            // --- NEW ROBUST PARSING LOGIC ---
+            // We expect: (identity "..." confidence 0.85)
+            identityText, confidence, err := parseIdentitySExpr(content)
             if err != nil {
-                return "", 0, fmt.Errorf("failed to parse confidence: %w", err)
+                return "", 0, fmt.Errorf("failed to parse S-expression: %w (content: %s)", err, content)
             }
 
-            // Increased limit to allow for rich, paragraph-style profiles
             if len(identityText) < 20 || len(identityText) > 600 {
                 return "", 0, fmt.Errorf("invalid identity length (must be 20-600 chars)")
             }
 
             return identityText, confidence, nil
-		}
-	}
-	
-	// Fallback to direct HTTP (shouldn't happen in production)
-	log.Printf("[Principles] WARNING: No queue client available, using direct HTTP with 30s timeout")
-	
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to marshal request: %w", err)
-	}
+        }
+    }
 
-	req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+    // Fallback to direct HTTP (shouldn't happen in production)
+    log.Printf("[Principles] WARNING: No queue client available, using direct HTTP with 30s timeout")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
+    jsonData, err := json.Marshal(reqBody)
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to marshal request: %w", err)
+    }
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", 0, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-	}
+    req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to create request: %w", err)
+    }
+    req.Header.Set("Content-Type", "application/json")
 
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
+    client := &http.Client{Timeout: 30 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return "", 0, fmt.Errorf("failed to send request: %w", err)
+    }
+    defer resp.Body.Close()
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, fmt.Errorf("failed to decode response: %w", err)
-	}
+    if resp.StatusCode != http.StatusOK {
+        body, _ := io.ReadAll(resp.Body)
+        return "", 0, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
+    }
 
-	if len(result.Choices) == 0 {
-		return "", 0, fmt.Errorf("no choices returned from LLM")
-	}
+    var result struct {
+        Choices []struct {
+            Message struct {
+                Content string `json:"content"`
+            } `json:"message"`
+        } `json:"choices"`
+    }
 
-	content := strings.TrimSpace(result.Choices[0].Message.Content)
-	
-	// Remove markdown fences if present
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-	
-	// Parse JSON response
-	var proposal struct {
-		ProposedName string  `json:"proposed_name"`
-		Confidence   float64 `json:"confidence"`
-		Reasoning    string  `json:"reasoning"`
-	}
-	
-	if err := json.Unmarshal([]byte(content), &proposal); err != nil {
-		return "", 0, fmt.Errorf("failed to parse identity proposal: %w", err)
-	}
-	
-	// Validate proposal
-	if len(proposal.ProposedName) < 10 || len(proposal.ProposedName) > 250 {
-		return "", 0, fmt.Errorf("proposed identity profile length invalid (%d chars): %s", 
-			len(proposal.ProposedName), proposal.ProposedName)
-	}
-	
-	if proposal.Confidence < 0 || proposal.Confidence > 1 {
-		proposal.Confidence = 0.5 // Default to neutral
-	}
-	
-	log.Printf("[Principles] Identity proposal: '%s' (confidence: %.2f) - %s", 
-		proposal.ProposedName, proposal.Confidence, proposal.Reasoning)
-	
-	return proposal.ProposedName, proposal.Confidence, nil
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return "", 0, fmt.Errorf("failed to decode response: %w", err)
+    }
+
+    if len(result.Choices) == 0 {
+        return "", 0, fmt.Errorf("no choices returned from LLM")
+    }
+
+    content := strings.TrimSpace(result.Choices[0].Message.Content)
+
+    // Remove markdown fences if present
+    content = strings.TrimPrefix(content, "```json")
+    content = strings.TrimPrefix(content, "```")
+    content = strings.TrimSuffix(content, "```")
+    content = strings.TrimSpace(content)
+
+    // Parse JSON response
+    var proposal struct {
+        ProposedName string  `json:"proposed_name"`
+        Confidence   float64 `json:"confidence"`
+        Reasoning    string  `json:"reasoning"`
+    }
+
+    if err := json.Unmarshal([]byte(content), &proposal); err != nil {
+        return "", 0, fmt.Errorf("failed to parse identity proposal: %w", err)
+    }
+
+    // Validate proposal
+    if len(proposal.ProposedName) < 10 || len(proposal.ProposedName) > 250 {
+        return "", 0, fmt.Errorf("proposed identity profile length invalid (%d chars): %s",
+            len(proposal.ProposedName), proposal.ProposedName)
+    }
+
+    if proposal.Confidence < 0 || proposal.Confidence > 1 {
+        proposal.Confidence = 0.5 // Default to neutral
+    }
+
+    log.Printf("[Principles] Identity proposal: '%s' (confidence: %.2f) - %s",
+        proposal.ProposedName, proposal.Confidence, proposal.Reasoning)
+
+    return proposal.ProposedName, proposal.Confidence, nil
 }
 
 // generatePrincipleFromPattern uses LLM to synthesize an actionable principle from evidence
@@ -1475,4 +1424,175 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// --- ROBUST S-EXPRESSION PARSING HELPERS ---
+// These helpers are localized here to avoid circular imports with internal/dialogue
+
+// parseIdentitySExpr extracts identity and confidence from (identity "..." confidence 0.85)
+func parseIdentitySExpr(input string) (string, float64, error) {
+    tokens := tokenize(input)
+    
+    for i := 0; i < len(tokens); i++ {
+        if tokens[i].typ == "atom" && strings.ToLower(tokens[i].value) == "identity" {
+            // Expect next token to be string content
+            if i+1 < len(tokens) && tokens[i+1].typ == "string" {
+                identityText := tokens[i+1].value
+                
+                // Look for confidence in remaining tokens
+                var confidence float64
+                for j := i + 2; j < len(tokens); j++ {
+                    if tokens[j].typ == "atom" && (strings.ToLower(tokens[j].value) == "confidence" || strings.ToLower(tokens[j].value) == "conf") {
+                        if j+1 < len(tokens) && tokens[j+1].typ == "atom" {
+                            if c, err := strconv.ParseFloat(tokens[j+1].value, 64); err == nil {
+                                confidence = c
+                            }
+                            break 
+                        }
+                    } else if tokens[j].typ == "atom" {
+                        // Handle float immediately following identity string
+                        if c, err := strconv.ParseFloat(tokens[j].value, 64); err == nil {
+                            confidence = c
+                            break
+                        }
+                    }
+                }
+                
+                if confidence == 0 {
+                    confidence = 0.5 // Default if not found
+                }
+                
+                return identityText, confidence, nil
+            }
+        }
+    }
+    
+    return "", 0, fmt.Errorf("identity block not found")
+}
+
+// parsePrincipleSExpr extracts principle and confidence
+func parsePrincipleSExpr(input string) (string, float64, error) {
+    tokens := tokenize(input)
+    
+    for i := 0; i < len(tokens); i++ {
+        if tokens[i].typ == "atom" && strings.ToLower(tokens[i].value) == "principle" {
+            if i+1 < len(tokens) && tokens[i+1].typ == "string" {
+                principleText := tokens[i+1].value
+                
+                var confidence float64
+                // Scan for confidence
+                for j := i + 2; j < len(tokens); j++ {
+                    // Case: confidence 0.5
+                    if tokens[j].typ == "atom" && strings.ToLower(tokens[j].value) == "confidence" {
+                        if j+1 < len(tokens) && tokens[j+1].typ == "atom" {
+                            if c, err := strconv.ParseFloat(tokens[j+1].value, 64); err == nil {
+                                confidence = c
+                            }
+                            break
+                        }
+                    } else if tokens[j].typ == "atom" {
+                        // Case: 0.5 appearing directly
+                        if c, err := strconv.ParseFloat(tokens[j].value, 64); err == nil {
+                            confidence = c
+                            break
+                        }
+                    }
+                }
+                
+                if confidence == 0 {
+                    confidence = 0.5 
+                }
+                
+                return principleText, confidence, nil
+            }
+        }
+    }
+    
+    return "", 0, fmt.Errorf("principle block not found")
+}
+
+// Local token definitions to avoid importing dialogue package
+type sToken struct {
+    typ   string // "lparen", "rparen", "atom", "string"
+    value string
+}
+
+// tokenize breaks input into tokens (Local copy of logic from dialogue/sexpr_parser.go)
+func tokenize(input string) []sToken {
+    var tokens []sToken
+    i := 0
+
+    for i < len(input) {
+        ch := input[i]
+
+        // Skip whitespace
+        if ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r' {
+            i++
+            continue
+        }
+
+        // Left paren
+        if ch == '(' {
+            tokens = append(tokens, sToken{typ: "lparen", value: "("})
+            i++
+            continue
+        }
+
+        // Right paren
+        if ch == ')' {
+            tokens = append(tokens, sToken{typ: "rparen", value: ")"})
+            i++
+            continue
+        }
+
+        // String literal
+        if ch == '"' {
+            i++ // Skip opening quote
+            start := i
+            escaped := false
+
+            for i < len(input) {
+                if escaped {
+                    escaped = false
+                    i++
+                    continue
+                }
+
+                if input[i] == '\\' {
+                    escaped = true
+                    i++
+                    continue
+                }
+
+                if input[i] == '"' {
+                    break
+                }
+
+                i++
+            }
+
+            value := input[start:i]
+            // Unescape
+            value = strings.ReplaceAll(value, `\"`, `"`)
+            value = strings.ReplaceAll(value, `\\`, `\`)
+
+            tokens = append(tokens, sToken{typ: "string", value: value})
+            i++ // Skip closing quote
+            continue
+        }
+
+        // Atom (symbol or number)
+        start := i
+        for i < len(input) && input[i] != '(' && input[i] != ')' &&
+            input[i] != ' ' && input[i] != '\n' && input[i] != '\t' && input[i] != '\r' {
+            i++
+        }
+
+        atom := input[start:i]
+        if atom != "" {
+            tokens = append(tokens, sToken{typ: "atom", value: atom})
+        }
+    }
+
+    return tokens
 }
