@@ -511,7 +511,7 @@ func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportVal
     content = strings.TrimSpace(content)
 
     // Use robust tokenizer instead of naive findBlocks to handle text like "Some (context)"
-    tokens := tokenize(content)
+    tokens := tokenizeSimple(content)
 
     validation := &GoalSupportValidation{
         Confidence: 0.5, // Default
@@ -1372,14 +1372,14 @@ func cleanLLMWrappers(content string) string {
 }
 
 // Local tokenizer helper for engine_research.go
-// Prevents issues with text containing parentheses like "Some (content)"
-type sToken struct {
+// Renamed to avoid conflict with tokenize() in sexpr_parser.go
+type simpleToken struct {
     typ   string
     value string
 }
 
-func tokenize(input string) []sToken {
-    var tokens []sToken
+func tokenizeSimple(input string) []simpleToken {
+    var tokens []simpleToken
     i := 0
 
     for i < len(input) {
@@ -1391,13 +1391,13 @@ func tokenize(input string) []sToken {
         }
 
         if ch == '(' {
-            tokens = append(tokens, sToken{typ: "lparen", value: "("})
+            tokens = append(tokens, simpleToken{typ: "lparen", value: "("})
             i++
             continue
         }
 
         if ch == ')' {
-            tokens = append(tokens, sToken{typ: "rparen", value: ")"})
+            tokens = append(tokens, simpleToken{typ: "rparen", value: ")"})
             i++
             continue
         }
@@ -1426,7 +1426,7 @@ func tokenize(input string) []sToken {
             value := input[start:i]
             value = strings.ReplaceAll(value, `\"`, `"`)
             value = strings.ReplaceAll(value, `\\`, `\`)
-            tokens = append(tokens, sToken{typ: "string", value: value})
+            tokens = append(tokens, simpleToken{typ: "string", value: value})
             i++
             continue
         }
@@ -1438,7 +1438,7 @@ func tokenize(input string) []sToken {
         }
         atom := input[start:i]
         if atom != "" {
-            tokens = append(tokens, sToken{typ: "atom", value: atom})
+            tokens = append(tokens, simpleToken{typ: "atom", value: atom})
         }
     }
 
