@@ -571,7 +571,7 @@ func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportVal
                     case "reasoning":
                         validation.Reasoning = valToken.value
                     }
-                } 
+                }
                 // Atom value (bool or float)
                 else if valToken.typ == "atom" {
                     switch fieldName {
