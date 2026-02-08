@@ -519,8 +519,7 @@ func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportVal
     }
 
     // We need to find the 'goal_support_validation' list and extract fields
-    // Since we can't use the full parser from sexpr_parser.go without refactoring imports,
-    // we perform a depth-first walk of the tokens manually.
+    // We perform a depth-first walk of tokens manually.
     
     // Helper to find the start index of a specific atom sequence
     findBlockStart := func(name string) int {
@@ -545,6 +544,7 @@ func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportVal
     // We iterate inside the block (depth 1)
     depth := 0
     i := blockStart
+    
     for i < len(tokens) {
         tok := tokens[i]
         if tok.typ == "lparen" {
@@ -571,21 +571,22 @@ func (e *Engine) parseGoalSupportValidation(rawResponse string) (*GoalSupportVal
                     case "reasoning":
                         validation.Reasoning = valToken.value
                     }
-                }
-                // Atom value (bool or float)
-                else if valToken.typ == "atom" {
-                    switch fieldName {
-                    case "supports_goal_id", "supports-goal-id":
-                        validation.SupportsGoalID = valToken.value
-                    case "confidence":
-                        if conf, err := strconv.ParseFloat(valToken.value, 64); err == nil {
-                            validation.Confidence = conf
+                } else {
+                    // Atom value (bool or float) - FIX: Valid Go 'else' block
+                    if valToken.typ == "atom" {
+                        switch fieldName {
+                        case "supports_goal_id", "supports-goal-id":
+                            validation.SupportsGoalID = valToken.value
+                        case "confidence":
+                            if conf, err := strconv.ParseFloat(valToken.value, 64); err == nil {
+                                validation.Confidence = conf
+                            }
+                        case "is_valid", "is-valid":
+                            lower := strings.ToLower(valToken.value)
+                            validation.IsValid = (lower == "true" || lower == "t")
+                        case "reasoning":
+                            validation.Reasoning = valToken.value
                         }
-                    case "is_valid", "is-valid":
-                        lower := strings.ToLower(valToken.value)
-                        validation.IsValid = (lower == "true" || lower == "t")
-                    case "reasoning":
-                        validation.Reasoning = valToken.value
                     }
                 }
             }
