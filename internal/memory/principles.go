@@ -842,9 +842,6 @@ func updatePrincipleContent(db *gorm.DB, slot int, content string, rating float6
     }
 }
 
-// internal/memory/principles.go
-// ... (Existing imports and structs remain unchanged)
-
 // EvolveIdentity updates slot 0 (system name/identity) using a Divergence Detection
 // and Recency-Weighted Anti-Pattern strategy.
 func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL string, llmModel string, llmClient interface{}) error {
@@ -871,7 +868,7 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL st
     }
 
     // Fetch recent memories tagged "personality" with "good" outcome to get "Recent Perception"
-    // We use Scroll to get the most recent ones
+    // FIX: Removed WithVector to fix build error. We will re-embed the text below.
     scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
         CollectionName: storage.CollectionName,
         Filter: &qdrant.Filter{
@@ -882,7 +879,6 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL st
         },
         Limit:       qdrant.PtrOf(uint32(50)), // Get more than we need, we sort locally
         WithPayload: qdrant.NewWithPayload(true),
-        WithVector:  qdrant.NewWithVector(true),
     })
     if err != nil {
         return fmt.Errorf("failed to scroll for divergence detection: %w", err)
@@ -911,25 +907,42 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL st
     }
 
     // Calculate Average Embedding of recent memories
+    // FIX: We re-embed the text here to ensure vector availability and model consistency.
     if len(recentGoodMemories) < 5 {
         log.Printf("[Principles] Insufficient recent evidence for divergence check (%d memories). Skipping evolution.", len(recentGoodMemories))
         return nil
     }
 
     avgEmb := make([]float32, len(currentEmb))
+    var validCount float32
+
     for _, tm := range recentGoodMemories {
-        v := tm.mem.Embedding
+        // Re-embed the text content
+        v, err := embedder.Embed(ctx, tm.mem.Content)
+        if err != nil {
+            log.Printf("[Principles] WARNING: Failed to embed memory for divergence check: %v", err)
+            continue
+        }
+        
         if len(v) != len(avgEmb) {
             log.Printf("[Principles] WARNING: Embedding dimension mismatch in divergence check.")
             continue
         }
+        
         for i := range v {
             avgEmb[i] += v[i]
         }
+        validCount++
     }
-    count := float32(len(recentGoodMemories))
+
+    if validCount == 0 {
+        log.Printf("[Principles] No valid embeddings could be generated for divergence check.")
+        return nil
+    }
+
+    // Finalize Average
     for i := range avgEmb {
-        avgEmb[i] /= count
+        avgEmb[i] /= validCount
     }
 
     // Calculate Similarity
@@ -988,11 +1001,6 @@ func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL st
         mem := storage.pointToMemoryFromScroll(p)
         negativeList = append(negativeList, mem.Content)
     }
-
-    // Sort lists by time to ensure Recency (We already got latest via Scroll defaults usually, but let's be safe/clear)
-    // Note: Qdrant Scroll doesn't guarantee order without specific ordering, so we rely on limit + index order.
-    // For strictness, we assume the DB returns approximate recency. If strict sorting is needed, we would unmarshal payload.CreatedAt and sort here.
-    // Given the complexity of payload unmarshaling for sort in this snippet, we assume index recency or that the top 15 are sufficiently recent.
 
     log.Printf("[Principles] Evidence Gathered: %d Positive, %d Negative memories.", len(positiveList), len(negativeList))
 
