@@ -953,8 +953,8 @@ if len(identityMemories) < 5 {
 		return nil // Non-fatal
 	}
 	
-	// Only update if confidence is high enough and name is different
-	if confidence >= 0.7 && newIdentity != currentName && newIdentity != "" {
+    // Only update if confidence is high enough (0.7 floor), higher than current (evolution), and name is different
+    if confidence >= 0.7 && confidence > currentIdentity.Rating && newIdentity != currentName && newIdentity != "" {
 		updates := map[string]interface{}{
 			"content":          newIdentity,
 			"rating":           confidence,
@@ -1595,4 +1595,60 @@ func tokenize(input string) []sToken {
     }
 
     return tokens
+}
+
+// ApplyConfidenceDecay checks all principles and applies a 0.01 rating decay
+// if the record has not been updated in the last 24 hours.
+// - Excludes Admin slots (1-3) to prevent safety rule decay.
+// - Enforces a minimum rating floor of 0.1.
+// - Updates the 'updated_at' timestamp to reset the 24h timer.
+func ApplyConfidenceDecay(db *gorm.DB) error {
+    // 1. Load all principles to check their status
+    var principles []Principle
+    if err := db.Find(&principles).Error; err != nil {
+        return fmt.Errorf("failed to load principles for decay check: %w", err)
+    }
+
+    now := time.Now()
+    decayedCount := 0
+
+    for _, p := range principles {
+        // CONSTRAINT: Skip Admin Slots (1-3)
+        if p.Slot >= 1 && p.Slot <= 3 {
+            continue
+        }
+
+        // CHECK: Has 24 hours passed since the last update?
+        // We use 'UpdatedAt' because every modification (evolution or decay) resets it.
+        if now.Sub(p.UpdatedAt) >= 24*time.Hour {
+            newRating := p.Rating - 0.01
+
+            // CONSTRAINT: Enforce floor of 0.1
+            if newRating < 0.1 {
+                newRating = 0.1
+            }
+
+            // Only perform a DB write if a change is actually needed
+            if newRating != p.Rating {
+                updates := map[string]interface{}{
+                    "rating":     newRating,
+                    "updated_at": now, // Reset timer to NOW
+                }
+
+                if err := db.Model(&Principle{}).Where("slot = ?", p.Slot).Updates(updates).Error; err != nil {
+                    log.Printf("[Principles] ERROR: Failed to apply decay to slot %d: %v", p.Slot, err)
+                    continue
+                }
+
+                log.Printf("[Principles] Decay applied to Slot %d: %.2f -> %.2f", p.Slot, p.Rating, newRating)
+                decayedCount++
+            }
+        }
+    }
+
+    if decayedCount > 0 {
+        log.Printf("[Principles] Decay cycle complete: %d slots updated.", decayedCount)
+    }
+
+    return nil
 }

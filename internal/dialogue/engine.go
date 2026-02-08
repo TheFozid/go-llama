@@ -152,6 +152,11 @@ func (e *Engine) RunDialogueCycle(ctx context.Context) error {
 
 // runDialoguePhases executes the dialogue phases with safety mechanisms
 func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, metrics *CycleMetrics) (string, error) {
+    // MAINTENANCE: Apply time-based confidence decay to principles
+    // This runs every cycle to check if 24h has passed since last update
+    if err := memory.ApplyConfidenceDecay(e.db); err != nil {
+        log.Printf("[Dialogue] WARNING: Failed to apply principle decay: %v", err)
+    }
 	thoughtCount := 0
 	actionCount := 0
 	totalTokens := 0
