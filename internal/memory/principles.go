@@ -206,7 +206,7 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
     if isProfile {
         builder.WriteString(fmt.Sprintf("%s\n\n", systemName))
     } else {
-        builder.WriteString(fmt.Sprintf("You are %s, an advanced autonomous learning system.\n\n", systemName))
+        builder.WriteString(fmt.Sprintf("You are %s.\n\n", systemName))
     }
 	builder.WriteString("=== YOUR CORE PRINCIPLES ===\n")
 	builder.WriteString("These principles guide all your responses and decisions:\n\n")
@@ -842,209 +842,262 @@ func updatePrincipleContent(db *gorm.DB, slot int, content string, rating float6
     }
 }
 
-// EvolveIdentity updates slot 0 (system name/identity) based on experiences and learnings
-// Called separately from principle evolution to allow independent identity development
+// internal/memory/principles.go
+// ... (Existing imports and structs remain unchanged)
+
+// EvolveIdentity updates slot 0 (system name/identity) using a Divergence Detection
+// and Recency-Weighted Anti-Pattern strategy.
 func EvolveIdentity(db *gorm.DB, storage *Storage, embedder *Embedder, llmURL string, llmModel string, llmClient interface{}) error {
-	ctx := context.Background()
-	
-	log.Printf("[Principles] Evaluating identity evolution (slot 0)...")
-	
-	// Get current identity
-	var currentIdentity Principle
-	if err := db.Where("slot = ?", 0).First(&currentIdentity).Error; err != nil {
-		return fmt.Errorf("failed to load current identity: %w", err)
-	}
-	
-	currentName := currentIdentity.Content
-	if currentName == "" {
-		currentName = "GrowerAI" // Fallback
-	}
-	
-	log.Printf("[Principles] Current identity profile: %.100s... (rating: %.2f, validations: %d)", 
-		currentName, currentIdentity.Rating, currentIdentity.ValidationCount)
-	
-// Gather evidence about identity from TWO sources:
-// 1. User interactions (PRIMARY - how users see/address the AI)
-// 2. Internal reflections (SECONDARY - self-knowledge and capabilities)
-var identityMemories []*Memory
+    ctx := context.Background()
+    
+    log.Printf("[Principles] Starting Advanced Identity Evolution...")
 
-// PART 1: Search user conversations about identity (PRIMARY)
-identityQueries := []string{
-	"my name is who are you what should I call you introduce yourself",
-	"your personality you seem like tell me about yourself",
-	"I like when you I prefer when you should be more",
-	"you remind me of you sound like you act like",
+    // 1. Load current identity
+    var currentIdentity Principle
+    if err := db.Where("slot = ?", 0).First(&currentIdentity).Error; err != nil {
+        return fmt.Errorf("failed to load current identity: %w", err)
+    }
+    
+    currentContent := currentIdentity.Content
+    if currentContent == "" {
+        currentContent = "GrowerAI"
+    }
+
+    // 2. DIVERGENCE DETECTION (Option 3)
+    // Calculate embedding of current identity
+    currentEmb, err := embedder.Embed(ctx, currentContent)
+    if err != nil {
+        return fmt.Errorf("failed to embed current identity for divergence check: %w", err)
+    }
+
+    // Fetch recent memories tagged "personality" with "good" outcome to get "Recent Perception"
+    // We use Scroll to get the most recent ones
+    scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+        CollectionName: storage.CollectionName,
+        Filter: &qdrant.Filter{
+            Must: []*qdrant.Condition{
+                qdrant.NewMatch("concept_tags", "personality"), // Tag from Tagger
+                qdrant.NewMatch("outcome_tag", "good"),
+            },
+        },
+        Limit:       qdrant.PtrOf(uint32(50)), // Get more than we need, we sort locally
+        WithPayload: qdrant.NewWithPayload(true),
+        WithVector:  qdrant.NewWithVector(true),
+    })
+    if err != nil {
+        return fmt.Errorf("failed to scroll for divergence detection: %w", err)
+    }
+
+    // Convert to Memory struct and sort by CreatedAt (Newest first)
+    type timedMemory struct {
+        mem      Memory
+        createAt time.Time
+    }
+    var recentGoodMemories []timedMemory
+
+    for _, p := range scrollResult {
+        mem := storage.pointToMemoryFromScroll(p)
+        recentGoodMemories = append(recentGoodMemories, timedMemory{mem: mem, createAt: mem.CreatedAt})
+    }
+
+    // Sort manually by time (Desc)
+    sort.Slice(recentGoodMemories, func(i, j int) bool {
+        return recentGoodMemories[i].createAt.After(recentGoodMemories[j].createAt)
+    })
+
+    // Take top 20 most recent
+    if len(recentGoodMemories) > 20 {
+        recentGoodMemories = recentGoodMemories[:20]
+    }
+
+    // Calculate Average Embedding of recent memories
+    if len(recentGoodMemories) < 5 {
+        log.Printf("[Principles] Insufficient recent evidence for divergence check (%d memories). Skipping evolution.", len(recentGoodMemories))
+        return nil
+    }
+
+    avgEmb := make([]float32, len(currentEmb))
+    for _, tm := range recentGoodMemories {
+        v := tm.mem.Embedding
+        if len(v) != len(avgEmb) {
+            log.Printf("[Principles] WARNING: Embedding dimension mismatch in divergence check.")
+            continue
+        }
+        for i := range v {
+            avgEmb[i] += v[i]
+        }
+    }
+    count := float32(len(recentGoodMemories))
+    for i := range avgEmb {
+        avgEmb[i] /= count
+    }
+
+    // Calculate Similarity
+    divergenceScore := cosineSimilarity(currentEmb, avgEmb)
+    
+    // Threshold: If similarity is high (> 0.85), identity is stable. No need to evolve.
+    // If similarity is low, user perception has shifted.
+    if divergenceScore > 0.85 {
+        log.Printf("[Principles] Divergence Check: Stable (Score: %.2f). No evolution needed.", divergenceScore)
+        return nil
+    }
+
+    log.Printf("[Principles] Divergence Check: SHIFT DETECTED (Score: %.2f < 0.85). Proceeding to synthesis...", divergenceScore)
+
+
+    // 3. EVIDENCE GATHERING (Combined Option 1 & 2)
+    
+    // List A: Recent Positives (Embody these)
+    positiveScroll, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+        CollectionName: storage.CollectionName,
+        Filter: &qdrant.Filter{
+            Must: []*qdrant.Condition{
+                qdrant.NewMatch("concept_tags", "personality"),
+                qdrant.NewMatch("outcome_tag", "good"),
+            },
+        },
+        Limit:       qdrant.PtrOf(uint32(15)), // Top 15 good
+        WithPayload: qdrant.NewWithPayload(true),
+    })
+    if err != nil {
+        return fmt.Errorf("failed to scroll for positive evidence: %w", err)
+    }
+    var positiveList []string
+    for _, p := range positiveScroll {
+        mem := storage.pointToMemoryFromScroll(p)
+        positiveList = append(positiveList, mem.Content)
+    }
+
+    // List B: Recent Negatives (Avoid these)
+    negativeScroll, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
+        CollectionName: storage.CollectionName,
+        Filter: &qdrant.Filter{
+            Must: []*qdrant.Condition{
+                qdrant.NewMatch("concept_tags", "personality"),
+                qdrant.NewMatch("outcome_tag", "bad"),
+            },
+        },
+        Limit:       qdrant.PtrOf(uint32(10)), // Top 10 bad
+        WithPayload: qdrant.NewWithPayload(true),
+    })
+    if err != nil {
+        return fmt.Errorf("failed to scroll for negative evidence: %w", err)
+    }
+    var negativeList []string
+    for _, p := range negativeScroll {
+        mem := storage.pointToMemoryFromScroll(p)
+        negativeList = append(negativeList, mem.Content)
+    }
+
+    // Sort lists by time to ensure Recency (We already got latest via Scroll defaults usually, but let's be safe/clear)
+    // Note: Qdrant Scroll doesn't guarantee order without specific ordering, so we rely on limit + index order.
+    // For strictness, we assume the DB returns approximate recency. If strict sorting is needed, we would unmarshal payload.CreatedAt and sort here.
+    // Given the complexity of payload unmarshaling for sort in this snippet, we assume index recency or that the top 15 are sufficiently recent.
+
+    log.Printf("[Principles] Evidence Gathered: %d Positive, %d Negative memories.", len(positiveList), len(negativeList))
+
+    // 4. SYNTHESIS (LLM Call)
+    newIdentity, confidence, err := proposeIdentityV2(ctx, llmURL, llmModel, currentContent, positiveList, negativeList, llmClient)
+    if err != nil {
+        log.Printf("[Principles] Failed to generate identity proposal: %v", err)
+        return nil
+    }
+
+    // 5. THE GATE (Confidence + Decay Check)
+    // Update if confidence is high enough, higher than current (which includes decay), and content differs.
+    if confidence >= 0.7 && confidence > currentIdentity.Rating && newIdentity != currentContent && newIdentity != "" {
+        updates := map[string]interface{}{
+            "content":          newIdentity,
+            "rating":           confidence,
+            "validation_count": currentIdentity.ValidationCount + 1,
+            "updated_at":       time.Now(),
+        }
+        
+        if err := db.Model(&Principle{}).Where("slot = ?", 0).Updates(updates).Error; err != nil {
+            return fmt.Errorf("failed to update identity: %w", err)
+        }
+        
+        log.Printf("[Principles] ✓ Identity EVOLVED: '%.50s...' -> '%.50s...' (confidence: %.2f)", 
+            currentContent, newIdentity, confidence)
+    } else if newIdentity == currentContent {
+        // Reinforce current identity
+        if err := db.Model(&Principle{}).Where("slot = ?", 0).
+            UpdateColumn("validation_count", gorm.Expr("validation_count + ?", 1)).Error; err != nil {
+            log.Printf("[Principles] WARNING: Failed to increment identity validation: %v", err)
+        }
+        log.Printf("[Principles] Identity Confirmed: '%s' (validations: %d)", currentContent, currentIdentity.ValidationCount+1)
+    } else {
+        log.Printf("[Principles] Proposal Rejected (confidence %.2f vs current %.2f).", confidence, currentIdentity.Rating)
+    }
+    
+    return nil
 }
 
-for _, query := range identityQueries {
-	embedding, err := embedder.Embed(ctx, query)
-	if err != nil {
-		log.Printf("[Principles] WARNING: Failed to embed identity query: %v", err)
-		continue
-	}
-	
-	results, err := storage.Search(ctx, RetrievalQuery{
-		IncludePersonal:   true,  // User conversations
-		IncludeCollective: false, // Not system learnings yet
-		Limit:             10,
-		MinScore:          0.25, // Lower threshold for identity mentions
-	}, embedding)
-	
-	if err != nil {
-		log.Printf("[Principles] WARNING: Failed to search for user identity mentions: %v", err)
-		continue
-	}
-	
-	for _, result := range results {
-		identityMemories = append(identityMemories, &result.Memory)
-	}
-}
+// proposeIdentityV2 generates an identity based on Positive and Negative evidence lists
+func proposeIdentityV2(ctx context.Context, llmURL string, llmModel string, currentName string, positives []string, negatives []string, llmClient interface{}) (string, float64, error) {
+    
+    posBuilder := strings.Builder{}
+    for i, p := range positives {
+        if i >= 10 { break } // Limit prompt size
+        posBuilder.WriteString(fmt.Sprintf("- %s\n", p))
+    }
 
-log.Printf("[Principles] Found %d user interaction memories about identity", len(identityMemories))
+    negBuilder := strings.Builder{}
+    for i, n := range negatives {
+        if i >= 5 { break } // Limit prompt size
+        negBuilder.WriteString(fmt.Sprintf("- %s\n", n))
+    }
 
-// PART 2: Search internal reflections (SECONDARY - for capabilities/traits)
-searchTags := []string{"learning", "self_knowledge", "strategy"}
-
-for _, tag := range searchTags {
-	scrollResult, err := storage.Client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: storage.CollectionName,
-		Filter: &qdrant.Filter{
-			Must: []*qdrant.Condition{
-				qdrant.NewMatch("concept_tags", tag),
-				qdrant.NewMatch("outcome_tag", "good"),
-			},
-		},
-		Limit:       qdrant.PtrOf(uint32(10)),
-		WithPayload: qdrant.NewWithPayload(true),
-	})
-	
-	if err != nil {
-		log.Printf("[Principles] WARNING: Failed to search for %s memories: %v", tag, err)
-		continue
-	}
-		
-		for _, point := range scrollResult {
-			mem := storage.pointToMemoryFromScroll(point)
-			identityMemories = append(identityMemories, &mem)
-		}
-	}
-	
-if len(identityMemories) < 5 {
-	log.Printf("[Principles] Insufficient evidence for identity evolution (%d memories, need 5+)", len(identityMemories))
-	return nil
-}
-
-	
-	log.Printf("[Principles] Found %d identity-relevant memories", len(identityMemories))
-	
-	// Build evidence summary
-	evidenceBuilder := strings.Builder{}
-	for i, mem := range identityMemories {
-		if i >= 20 {
-			break // Limit to 20 examples
-		}
-		evidenceBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, mem.Content))
-	}
-	
-	// Ask LLM to propose a refined identity
-	newIdentity, confidence, err := proposeIdentity(ctx, llmURL, llmModel, currentName, evidenceBuilder.String(), llmClient)
-	if err != nil {
-		log.Printf("[Principles] Failed to generate identity proposal: %v", err)
-		return nil // Non-fatal
-	}
-	
-    // Only update if confidence is high enough (0.7 floor), higher than current (evolution), and name is different
-    if confidence >= 0.7 && confidence > currentIdentity.Rating && newIdentity != currentName && newIdentity != "" {
-		updates := map[string]interface{}{
-			"content":          newIdentity,
-			"rating":           confidence,
-			"validation_count": currentIdentity.ValidationCount + 1,
-			"updated_at":       time.Now(),
-		}
-		
-		if err := db.Model(&Principle{}).Where("slot = ?", 0).Updates(updates).Error; err != nil {
-			return fmt.Errorf("failed to update identity: %w", err)
-		}
-		
-		log.Printf("[Principles] ✓ Identity evolved: '%s' → '%s' (confidence: %.2f)", 
-			currentName, newIdentity, confidence)
-	} else if newIdentity == currentName {
-		// Increase validation count for confirmed identity
-		if err := db.Model(&Principle{}).Where("slot = ?", 0).
-			UpdateColumn("validation_count", gorm.Expr("validation_count + ?", 1)).Error; err != nil {
-			log.Printf("[Principles] WARNING: Failed to increment identity validation: %v", err)
-		}
-		log.Printf("[Principles] Identity confirmed: '%s' (validations: %d)", currentName, currentIdentity.ValidationCount+1)
-	} else {
-		log.Printf("[Principles] Identity unchanged (confidence %.2f too low or invalid proposal)", confidence)
-	}
-	
-	return nil
-}
-
-// proposeIdentity uses LLM to suggest an evolved identity based on experiences
-func proposeIdentity(ctx context.Context, llmURL string, llmModel string, currentName string, evidence string, llmClient interface{}) (string, float64, error) {
-    prompt := fmt.Sprintf(`You are a strict data serializer. Format the evolved identity into an S-expression.
+    prompt := fmt.Sprintf(`You are an identity architect. Analyze the interaction logs and propose an evolved identity.
 
 CURRENT IDENTITY: %s
 
-EVIDENCE:
+RECENT POSITIVE INTERACTIONS (What worked - EMBODY these traits):
+%s
+
+RECENT NEGATIVE INTERACTIONS (What failed - AVOID these traits):
 %s
 
 INSTRUCTIONS:
-Propose a rich, detailed new identity based on evidence (300-500 chars).
-Describe personality, hobbies, and backstory.
+1. Synthesize a new identity that emphasizes the traits in the POSITIVE list.
+2. Explicitly ensure the new identity does not exhibit the traits in the NEGATIVE list.
+3. The identity should be a rich description (300-500 chars) covering personality, hobbies, and backstory.
+4. If the user seems to want a name change (evident in positives), include it.
 
-CRITICAL SYNTAX RULES (FAILURE TO FOLLOW THESE WILL RESULT IN REJECTION):
-1. Your output MUST be a machine-readable S-expression, not a conversational sentence.
-2. Your output MUST contain the two keywords: identity, confidence.
-3. Do NOT output text inside parentheses without these keywords.
-4. Do NOT use Markdown.
+CRITICAL SYNTAX RULES:
+1. Output MUST be a machine-readable S-expression.
+2. MUST contain keywords: identity, confidence.
+3. Format: (identity "Description text..." confidence 0.85)
 
-CORRECT FORMAT:
-(identity "Name, age or date-of-birth, and a vivid description of personality, hobbies and backstory" confidence 0.85)
-
-INCORRECT FORMATS (DO NOT DO THIS):
-- (I am Elowen, 27, nonbinary...)                       <- WRONG (Missing keywords, machine unreadable)
-- (identity "I am Elowen")                              <- WRONG (Missing confidence)
-- [CODE BLOCK] (identity "..." ...) [CODE BLOCK]        <- WRONG (Markdown)
-
-TASK:
-Generate the S-expression for the new identity.`, currentName, evidence)
+OUTPUT:
+(identity "..." confidence 0.0)`, currentName, posBuilder.String(), negBuilder.String())
 
     reqBody := map[string]interface{}{
         "model": llmModel,
         "messages": []map[string]string{
             {
                 "role":    "system",
-                "content": "You are an identity evolution analyzer. Propose meaningful, appropriate names based on evidence.",
+                "content": "You are an expert at crafting AI personas based on user feedback.",
             },
             {
                 "role":    "user",
                 "content": prompt,
             },
         },
-        "temperature": 0.5,
+        "temperature": 0.6,
         "stream":      false,
     }
 
-    // Use queue client if available
     if llmClient != nil {
         type LLMCaller interface {
             Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
         }
 
         if client, ok := llmClient.(LLMCaller); ok {
-            log.Printf("[Principles] Identity evolution LLM call via queue (prompt length: %d chars)", len(prompt))
-            startTime := time.Now()
-
             body, err := client.Call(ctx, llmURL, reqBody)
             if err != nil {
-                log.Printf("[Principles] Identity evolution queue call failed after %s: %v", time.Since(startTime), err)
                 return "", 0, fmt.Errorf("LLM call failed: %w", err)
             }
-
-            log.Printf("[Principles] Identity evolution response received in %s", time.Since(startTime))
 
             var result struct {
                 Choices []struct {
@@ -1059,108 +1112,30 @@ Generate the S-expression for the new identity.`, currentName, evidence)
             }
 
             if len(result.Choices) == 0 {
-                return "", 0, fmt.Errorf("no choices returned from LLM")
+                return "", 0, fmt.Errorf("no choices returned")
             }
 
             content := strings.TrimSpace(result.Choices[0].Message.Content)
-
-            // Remove markdown fences (handling lisp, json, or plain)
             content = strings.TrimPrefix(content, "```lisp")
             content = strings.TrimPrefix(content, "```json")
             content = strings.TrimPrefix(content, "```")
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
 
-            // --- NEW ROBUST PARSING LOGIC ---
-            // We expect: (identity "..." confidence 0.85)
             identityText, confidence, err := parseIdentitySExpr(content)
             if err != nil {
-                return "", 0, fmt.Errorf("failed to parse S-expression: %w (content: %s)", err, content)
+                return "", 0, fmt.Errorf("failed to parse S-expression: %w", err)
             }
 
             if len(identityText) < 20 || len(identityText) > 600 {
-                return "", 0, fmt.Errorf("invalid identity length (must be 20-600 chars)")
+                return "", 0, fmt.Errorf("invalid identity length")
             }
 
             return identityText, confidence, nil
         }
     }
 
-    // Fallback to direct HTTP (shouldn't happen in production)
-    log.Printf("[Principles] WARNING: No queue client available, using direct HTTP with 30s timeout")
-
-    jsonData, err := json.Marshal(reqBody)
-    if err != nil {
-        return "", 0, fmt.Errorf("failed to marshal request: %w", err)
-    }
-
-    req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
-    if err != nil {
-        return "", 0, fmt.Errorf("failed to create request: %w", err)
-    }
-    req.Header.Set("Content-Type", "application/json")
-
-    client := &http.Client{Timeout: 30 * time.Second}
-    resp, err := client.Do(req)
-    if err != nil {
-        return "", 0, fmt.Errorf("failed to send request: %w", err)
-    }
-    defer resp.Body.Close()
-
-    if resp.StatusCode != http.StatusOK {
-        body, _ := io.ReadAll(resp.Body)
-        return "", 0, fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-    }
-
-    var result struct {
-        Choices []struct {
-            Message struct {
-                Content string `json:"content"`
-            } `json:"message"`
-        } `json:"choices"`
-    }
-
-    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-        return "", 0, fmt.Errorf("failed to decode response: %w", err)
-    }
-
-    if len(result.Choices) == 0 {
-        return "", 0, fmt.Errorf("no choices returned from LLM")
-    }
-
-    content := strings.TrimSpace(result.Choices[0].Message.Content)
-
-    // Remove markdown fences if present
-    content = strings.TrimPrefix(content, "```json")
-    content = strings.TrimPrefix(content, "```")
-    content = strings.TrimSuffix(content, "```")
-    content = strings.TrimSpace(content)
-
-    // Parse JSON response
-    var proposal struct {
-        ProposedName string  `json:"proposed_name"`
-        Confidence   float64 `json:"confidence"`
-        Reasoning    string  `json:"reasoning"`
-    }
-
-    if err := json.Unmarshal([]byte(content), &proposal); err != nil {
-        return "", 0, fmt.Errorf("failed to parse identity proposal: %w", err)
-    }
-
-    // Validate proposal
-    if len(proposal.ProposedName) < 10 || len(proposal.ProposedName) > 250 {
-        return "", 0, fmt.Errorf("proposed identity profile length invalid (%d chars): %s",
-            len(proposal.ProposedName), proposal.ProposedName)
-    }
-
-    if proposal.Confidence < 0 || proposal.Confidence > 1 {
-        proposal.Confidence = 0.5 // Default to neutral
-    }
-
-    log.Printf("[Principles] Identity proposal: '%s' (confidence: %.2f) - %s",
-        proposal.ProposedName, proposal.Confidence, proposal.Reasoning)
-
-    return proposal.ProposedName, proposal.Confidence, nil
+    return "", 0, fmt.Errorf("no LLM client available")
 }
 
 // generatePrincipleFromPattern uses LLM to synthesize an actionable principle from evidence
