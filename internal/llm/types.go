@@ -24,6 +24,7 @@ type Request struct {
 	URL         string
 	Payload     map[string]interface{}
 	IsStreaming bool
+	DoneCh		chan struct{}
 
 	// Response handling
 	ResponseCh chan<- *Response

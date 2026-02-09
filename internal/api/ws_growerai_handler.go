@@ -413,12 +413,19 @@ if len(allLinkedIDs) > 0 {
 			
             // Get streaming HTTP response from queue
             llmURL := config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL)
-            httpResp, queueErr := llmClient.CallStreaming(ctx, llmURL, payload)
-if queueErr != nil {
-	log.Printf("[GrowerAI-WS] ERROR: LLM queue streaming failed: %v", queueErr)
-	conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
-	return
-}
+            httpResp, doneCh, queueErr := llmClient.CallStreaming(ctx, llmURL, payload)
+
+            if queueErr != nil {
+                log.Printf("[GrowerAI-WS] ERROR: LLM queue streaming failed: %v", queueErr)
+                conn.WriteJSON(map[string]string{"error": "llm streaming failed"})
+                return
+            }
+
+            // CRITICAL FIX: Ensure we close the Done channel when we exit this handler
+            // This signals the Manager that the slot is free.
+            if doneCh != nil {
+                defer close(doneCh)
+            }
 
 // Use helper to stream from HTTP response
 err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)

@@ -59,7 +59,7 @@ func (c *Client) Call(ctx context.Context, url string, payload map[string]interf
 }
 
 // CallStreaming submits a streaming request and returns the HTTP response
-func (c *Client) CallStreaming(ctx context.Context, url string, payload map[string]interface{}) (*http.Response, error) {
+func (c *Client) CallStreaming(ctx context.Context, url string, payload map[string]interface{}) (*http.Response, chan struct{}, error) {
 	respCh := make(chan *Response, 1)
 	errCh := make(chan error, 1)
 
@@ -71,6 +71,7 @@ func (c *Client) CallStreaming(ctx context.Context, url string, payload map[stri
 		Payload:     payload,
 		IsStreaming: true,
 		ResponseCh:  respCh,
+		DoneCh: make(chan struct{}),
 		ErrorCh:     errCh,
 		SubmitTime:  time.Now(),
 		Timeout:     c.timeout,
@@ -80,15 +81,15 @@ func (c *Client) CallStreaming(ctx context.Context, url string, payload map[stri
 		return nil, fmt.Errorf("failed to submit: %w", err)
 	}
 
-	select {
-	case resp := <-respCh:
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("LLM returned status %d", resp.StatusCode)
-		}
-		return resp.HTTPResp, nil
-	case err := <-errCh:
-		return nil, err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+    select {
+    case resp := <-respCh:
+        if resp.StatusCode != http.StatusOK {
+            return nil, req.DoneCh, fmt.Errorf("LLM returned status %d", resp.StatusCode)
+        }
+        return resp.HTTPResp, req.DoneCh, nil
+    case err := <-errCh:
+        return nil, req.DoneCh, err
+    case <-ctx.Done():
+        return nil, req.DoneCh, ctx.Err()
+    }
 }

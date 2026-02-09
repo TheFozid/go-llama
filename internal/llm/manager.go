@@ -207,8 +207,22 @@ func (m *Manager) processRequest(req *Request) {
     // Send response
     select {
     case req.ResponseCh <- resp:
+        
+        // CRITICAL FIX:
+        // If this is a streaming request, we must wait for the caller to finish
+        // reading the stream before we release the semaphore (lock).
+        if req.IsStreaming {
+            select {
+            case <-req.DoneCh:
+                // Caller finished reading the stream
+            case <-req.Context.Done():
+                // Caller disconnected or request was cancelled
+            }
+        }
+
         log.Printf("[LLM Queue] Request %s completed in %s",
             req.ID, time.Since(startTime))
+
     case <-ctx.Done():
         if req.IsStreaming {
             cancel()
