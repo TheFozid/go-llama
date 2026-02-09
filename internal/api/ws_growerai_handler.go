@@ -346,10 +346,11 @@ if queueErr != nil {
 // Use helper to stream from HTTP response
 err = streamLLMResponseFromHTTP(conn, conn.conn, httpResp, &botResponse, &toksPerSec)
 // Context cleanup happens automatically via httpResp.Body.Close()
-		} else {
-			log.Printf("[GrowerAI-WS] Using legacy direct LLM call")
-			err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
-		}
+        } else {
+            log.Printf("[GrowerAI-WS] ERROR: Queue not configured. Refusing to bypass queue.")
+            conn.WriteJSON(map[string]string{"error": "llm queue disabled"})
+            return
+        }
 	} else {
 		log.Printf("[GrowerAI-WS] Using legacy direct LLM call (no queue manager)")
 		err = streamLLMResponseWS(conn, conn.conn, cfg.GrowerAI.ReasoningModel.URL, payload, &botResponse, &toksPerSec)
@@ -593,50 +594,9 @@ Be honest about mistakes. Don't create goals for simple questions that were alre
 			}
 			
 			content = strings.TrimSpace(result.Choices[0].Message.Content)
-		} else {
-			// Fallback to legacy
-			log.Printf("[Reflection] Using legacy direct HTTP call")
-			jsonData, err := json.Marshal(reqBody)
-			if err != nil {
-				return fmt.Errorf("failed to marshal request: %w", err)
-			}
-
-			req, err := http.NewRequestWithContext(ctx, "POST", cfg.GrowerAI.ReasoningModel.URL, bytes.NewBuffer(jsonData))
-			if err != nil {
-				return fmt.Errorf("failed to create request: %w", err)
-			}
-			req.Header.Set("Content-Type", "application/json")
-
-			client := &http.Client{Timeout: 90 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Errorf("failed to send request: %w", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				body, _ := io.ReadAll(resp.Body)
-				return fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-			}
-
-			var result struct {
-				Choices []struct {
-					Message struct {
-						Content string `json:"content"`
-					} `json:"message"`
-				} `json:"choices"`
-			}
-
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				return fmt.Errorf("failed to decode response: %w", err)
-			}
-
-			if len(result.Choices) == 0 {
-				return fmt.Errorf("no choices returned from LLM")
-			}
-
-			content = strings.TrimSpace(result.Choices[0].Message.Content)
-		}
+        } else {
+            return fmt.Errorf("reflection requires queue client (configured but unavailable)")
+        }
 	} else {
 		// No queue manager available - legacy path
 		log.Printf("[Reflection] Using legacy direct HTTP call (no queue manager)")
