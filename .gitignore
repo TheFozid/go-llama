@@ -4,5 +4,4 @@ coverage.out
 go-llama-backend
 *.log
 *.backup
-push.sh
 .gitignore

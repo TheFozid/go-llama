@@ -321,64 +321,6 @@ func (c *Compressor) callLLM(ctx context.Context, prompt string) (string, error)
 		}
 	}
 	
-	// Fallback to direct HTTP (legacy compatibility)
-	log.Printf("[Compressor] WARNING: Using legacy direct HTTP call")
-
-    llmURL := config.GetChatURL(c.modelURL)
-	
-	reqBody := map[string]interface{}{
-		"model": c.modelName,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are a memory compression assistant. Follow instructions exactly.",
-			},
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"stream":      false,
-		"temperature": 0.3,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", llmURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("LLM returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("no choices returned from LLM")
-	}
-
-	return result.Choices[0].Message.Content, nil
+    // Queue client required - no direct HTTP bypass allowed
+    return "", fmt.Errorf("queue client required for compression")
 }
