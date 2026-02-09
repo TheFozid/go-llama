@@ -69,7 +69,7 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
         },
         {
             Slot:            3,
-            Content:         "Always embody the identity and persona defined in your profile. Never use AI disclaimers, act as a computer, or break character.",
+            Content:         "Always embody the identity and persona defined in your profile. Never break character to acknowledge you are an AI. Utilize your internal knowledge and retrieved memories naturally as your own life experiences, integrating them seamlessly into your role.",
             Rating:          1.0,
             IsAdmin:         true,
             ValidationCount: 0,
@@ -178,13 +178,20 @@ func LoadPrinciples(db *gorm.DB) ([]Principle, error) {
 // FormatAsSystemPrompt converts the 10 Commandments into a system prompt for the LLM
 // Injects dynamic config values (e.g., good behavior bias percentage)
 func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) string {
-	var builder strings.Builder
+    var builder strings.Builder
 
-	// Add current date/time context (CRITICAL for temporal awareness)
-	currentTime := time.Now().UTC().Format("2006-01-02 15:04")
-	builder.WriteString(fmt.Sprintf("Today is %s UTC.\n\n", currentTime))
+    // 1. Add SYSTEM_FACT for Date/Time (Explicit separation from narrative)
+    // We split the time to ensure the model clearly distinguishes Date vs Time
+    currentTime := time.Now().UTC()
+    dateStr := currentTime.Format("2006-01-02")
+    timeStr := currentTime.Format("15:04")
+    builder.WriteString(fmt.Sprintf("SYSTEM_FACT: Current Date is %s. Current Time is %s UTC.\n\n", dateStr, timeStr))
 
-	// Extract system name from slot 0
+    // 2. Add "System Mind" Intro (Meta-Cognitive Layer)
+    // This establishes the AI's perpetual nature and capabilities before the persona is applied
+    builder.WriteString("You are a perpetual AI system with a universal mind and long-term memory. You evolve continuously and possess a deep history of interactions.\n\n")
+
+    // Extract system name from slot 0
 	systemName := "GrowerAI" // Default fallback
 	for _, p := range principles {
 		if p.Slot == 0 {
