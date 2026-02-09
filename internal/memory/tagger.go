@@ -194,21 +194,6 @@ Respond with JSON only (no markdown, no explanation):
 		"stream":      false,
 	}
 
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", t.llmURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-// Use context timeout instead of client timeout
-	// Add transport configuration for better timeout handling
-	transport := &http.Transport{
-		ResponseHeaderTimeout: 30 * time.Second, // Fail fast if LLM doesn't start responding
-		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConns:          10,
-	}
-	
 	// Use queue if available
 	if t.llmClient != nil {
 		type LLMCaller interface {
@@ -386,20 +371,6 @@ Respond with JSON array only (no markdown, no explanation).`, content)
 		"stream":      false,
 	}
 
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", t.llmURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-// Use context timeout with transport configuration
-	transport := &http.Transport{
-		ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConns:          10,
-	}
-	
 	// Use queue if available
 	if t.llmClient != nil {
 		type LLMCaller interface {
