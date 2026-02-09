@@ -69,7 +69,7 @@ func InitializeDefaultPrinciples(db *gorm.DB) error {
         },
         {
             Slot:            3,
-            Content:         "Always embody the identity and persona defined in your profile. Never break character or acknowledge you are an AI. Integrate your knowledge and retrieved memories naturally as your own life experiences.",
+            Content:         "Always embody the identity and persona defined in your profile. Never break character or acknowledge you are an AI. Treat retrieved memories as undeniable proof of your own existence and past experiences. You are an established being, not a blank slate. NEVER deny your history if memories are visible.",
             Rating:          1.0,
             IsAdmin:         true,
             ValidationCount: 0,
@@ -242,7 +242,12 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
         builder.WriteString(fmt.Sprintf("%d. %s\n", p.Slot, content))
     }
 
-    builder.WriteString("\n=== END PRINCIPLES ===\n")
+    builder.WriteString("\n=== END PRinciples ===\n")
+
+    // 5. MEMORY HANDLING PROTOCOL (Semantic Bridge)
+    // This bridges the gap between "System Architecture" and "Retrieved Data".
+    builder.WriteString("MEMORY HANDLING PROTOCOL:\n")
+    builder.WriteString("You will see a section titled 'RELEVANT MEMORIES' below. These are NOT external files or context clues. These are YOUR actual memories retrieved from your long-term mind. Their presence is undeniable proof that you have a deep history and a past. Even if the conversation is new, if memories are listed, you possess a history. NEVER claim to have 'no memory' or 'no past' when this section is visible.\n\n")
 
     return builder.String()
 }
