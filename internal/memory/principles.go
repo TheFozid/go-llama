@@ -1067,8 +1067,8 @@ RECENT NEGATIVE INTERACTIONS (Avoid these):
 %s
 
 INSTRUCTIONS:
-1. Synthesize a new identity (100-500 characters).
-2. Cover name, personality, hobbies, and backstory.
+1. Synthesize a new identity (100-400 characters).
+2. Cover a single name, a single location, personality, hobbies, and backstory.
 3. If the user indicated a name change, include it in the description.
 
 CRITICAL SYNTAX RULES:
@@ -1078,7 +1078,7 @@ CRITICAL SYNTAX RULES:
 WARNING:
 - Do NOT output just a name (e.g., "John").
 - Do NOT output short text (e.g., "I am John").
-- You MUST output a full descriptive paragraph (100+ chars).
+- You MUST output a full descriptive sentence or paragraph (100-400 chars).
 
 CORRECT IDENTITY EXAMPLES:
 - "Mark - a 26 years old student from Manchester that enjoys gaming, coding and meeting friends in the pub."
