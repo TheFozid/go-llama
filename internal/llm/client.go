@@ -77,9 +77,9 @@ func (c *Client) CallStreaming(ctx context.Context, url string, payload map[stri
 		Timeout:     c.timeout,
 	}
 
-	if err := c.manager.Submit(req); err != nil {
-		return nil, fmt.Errorf("failed to submit: %w", err)
-	}
+    if err := c.manager.Submit(req); err != nil {
+        return nil, nil, fmt.Errorf("failed to submit: %w", err)
+    }
 
     select {
     case resp := <-respCh:
