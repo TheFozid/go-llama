@@ -278,6 +278,7 @@ if len(allLinkedIDs) > 0 {
 				i+1, result.Score, result.Memory.Tier,
 				time.Since(result.Memory.CreatedAt).Round(time.Minute),
 				result.Memory.OutcomeTag)
+			log.Printf("[GrowerAI-WS]   Memory %d Content: %s", i+1, result.Memory.Content)
 			
 			// Show link info if memory was retrieved via link
 			linkInfo := ""
