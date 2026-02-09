@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"sync"
-	"time"
 )
 
 // TaggerQueue handles asynchronous memory tagging with parallel workers
