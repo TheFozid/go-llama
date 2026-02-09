@@ -86,26 +86,45 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	}
 	log.Printf("[GrowerAI-WS] ✓ Generated %d-dimensional embedding", len(queryEmbedding))
 
-	// Search memory for relevant context
-	userIDStr := fmt.Sprintf("%d", userID)
-	query := memory.RetrievalQuery{
-		Query:             content,
-		UserID:            &userIDStr,
-		IncludePersonal:   true,
-		IncludeCollective: false,
-		Limit:             cfg.GrowerAI.Retrieval.MaxMemories,
-		MinScore:          cfg.GrowerAI.Retrieval.MinScore,
-		GoodBehaviorBias:  cfg.GrowerAI.Personality.GoodBehaviorBias, // Use config bias
-	}
+    // --- PHASE 1: Retrieve Personal Memories (User History) ---
+    userIDStr := fmt.Sprintf("%d", userID)
+    personalQuery := memory.RetrievalQuery{
+        Query:             content,
+        UserID:            &userIDStr,
+        IncludePersonal:   true,
+        IncludeCollective: false, // Explicitly exclude collective here
+        Limit:             cfg.GrowerAI.Retrieval.MaxMemories,
+        MinScore:          cfg.GrowerAI.Retrieval.MinScore,
+        GoodBehaviorBias:  cfg.GrowerAI.Personality.GoodBehaviorBias,
+    }
 
-	log.Printf("[GrowerAI-WS] Searching memory (user=%s, limit=%d, min_score=%.2f)...", 
-		userIDStr, cfg.GrowerAI.Retrieval.MaxMemories, cfg.GrowerAI.Retrieval.MinScore)
-	results, err := storage.Search(ctx, query, queryEmbedding)
-	if err != nil {
-		log.Printf("[GrowerAI-WS] WARNING: Memory search failed: %v", err)
-		results = []memory.RetrievalResult{}
-	}
-	log.Printf("[GrowerAI-WS] ✓ Found %d relevant memories", len(results))
+    log.Printf("[GrowerAI-WS] Searching PERSONAL memory (user=%s, limit=%d, min_score=%.2f)...", 
+        userIDStr, cfg.GrowerAI.Retrieval.MaxMemories, cfg.GrowerAI.Retrieval.MinScore)
+    results, err := storage.Search(ctx, personalQuery, queryEmbedding)
+    if err != nil {
+        log.Printf("[GrowerAI-WS] WARNING: Personal memory search failed: %v", err)
+        results = []memory.RetrievalResult{}
+    }
+    log.Printf("[GrowerAI-WS] ✓ Found %d relevant personal memories", len(results))
+
+    // --- PHASE 2: Retrieve Collective Memories (Learnings / Encyclopedia) ---
+    // We search specifically for collective memories to build the Knowledge Section
+    collectiveQuery := memory.RetrievalQuery{
+        Query:             content,
+        IncludePersonal:   false, // Ignore personal user chat logs
+        IncludeCollective: true,  // Only get global learnings
+        Limit:             5, // Limit to 5 as requested
+        MinScore:          0.25, // Lower threshold to ensure we catch broad learnings
+        GoodBehaviorBias:  0.0, // No bias needed for factual data
+    }
+
+    log.Printf("[GrowerAI-WS] Searching COLLECTIVE memory (limit=5, min_score=0.25)...")
+    collectiveResults, err := storage.Search(ctx, collectiveQuery, queryEmbedding)
+    if err != nil {
+        log.Printf("[GrowerAI-WS] WARNING: Collective memory search failed: %v", err)
+        collectiveResults = []memory.RetrievalResult{}
+    }
+    log.Printf("[GrowerAI-WS] ✓ Found %d relevant collective learnings", len(collectiveResults))
 
     // --- FALLBACK RETRIEVAL STRATEGY ---
     // If no memories were found (e.g., generic "Good morning" query),
@@ -341,6 +360,24 @@ if len(allLinkedIDs) > 0 {
             "role":    "system",
             "content": systemPrompt, // Clean system prompt without memory blocks
         },
+    }
+
+    // 0. NEW: Inject Knowledge Section (Learnings) BEFORE Historical Narrative
+    // This acts as the "Encyclopedia" fact layer.
+    if len(collectiveResults) > 0 {
+        knowledgeBuilder := "### RELEVANT KNOWLEDGE (Encyclopedia) ###\n"
+        knowledgeBuilder += "The following are verified learnings from your internal knowledge base. Treat these as established facts.\n\n"
+        
+        for _, cr := range collectiveResults {
+            knowledgeBuilder += fmt.Sprintf("- %s\n", cr.Memory.Content)
+        }
+        
+        llmMessages = append(llmMessages, map[string]string{
+            "role":    "system",
+            "content": knowledgeBuilder,
+        })
+        
+        log.Printf("[GrowerAI-WS] ✓ Injected %d collective learnings into Knowledge Section", len(collectiveResults))
     }
 
     // 1. Inject Historical Narrative (Oldest -> Newest)
