@@ -1046,36 +1046,44 @@ func proposeIdentityV2(ctx context.Context, llmURL string, llmModel string, curr
     
     posBuilder := strings.Builder{}
     for i, p := range positives {
-        if i >= 10 { break } // Limit prompt size
+        if i >= 10 { break } 
         posBuilder.WriteString(fmt.Sprintf("- %s\n", p))
     }
 
     negBuilder := strings.Builder{}
     for i, n := range negatives {
-        if i >= 5 { break } // Limit prompt size
+        if i >= 5 { break } 
         negBuilder.WriteString(fmt.Sprintf("- %s\n", n))
     }
 
-    prompt := fmt.Sprintf(`You are an identity architect. Analyze the interaction logs and propose an evolved identity.
+    prompt := fmt.Sprintf(`You are an identity architect. Analyze the logs and propose an evolved identity.
 
 CURRENT IDENTITY: %s
 
-RECENT POSITIVE INTERACTIONS (What worked - EMBODY these traits):
+RECENT POSITIVE INTERACTIONS (Embody these):
 %s
 
-RECENT NEGATIVE INTERACTIONS (What failed - AVOID these traits):
+RECENT NEGATIVE INTERACTIONS (Avoid these):
 %s
 
 INSTRUCTIONS:
-1. Synthesize a new identity that emphasizes the traits in the POSITIVE list.
-2. Explicitly ensure the new identity does not exhibit the traits in the NEGATIVE list.
-3. The identity should be a rich description (300-500 chars) covering personality, hobbies, and backstory.
-4. If the user seems to want a name change (evident in positives), include it.
+1. Synthesize a new identity (100-500 characters).
+2. Cover name, personality, hobbies, and backstory.
+3. If the user indicated a name change, include it in the description.
 
 CRITICAL SYNTAX RULES:
 1. Output MUST be a machine-readable S-expression.
-2. MUST contain keywords: identity, confidence.
-3. Format: (identity "Description text..." confidence 0.85)
+2. Format: (identity "Description text..." confidence 0.85)
+
+WARNING:
+- Do NOT output just a name (e.g., "John").
+- Do NOT output short text (e.g., "I am John").
+- You MUST output a full descriptive paragraph (100+ chars).
+
+CORRECT IDENTITY EXAMPLES:
+- "Mark - a 26 years old student from Manchester that enjoys gaming, coding and meeting friends in the pub."
+- "Nianna - a 30 year old accountant from Bristol who spends her spare time in the countryside hiking with her dog, Lolla"
+- "ChatAI - an AI that focusses on user experience and aims to be a helpful, friendly and polite assistant"
 
 OUTPUT:
 (identity "..." confidence 0.0)`, currentName, posBuilder.String(), negBuilder.String())
@@ -1085,7 +1093,7 @@ OUTPUT:
         "messages": []map[string]string{
             {
                 "role":    "system",
-                "content": "You are an expert at crafting AI personas based on user feedback.",
+                "content": "You are an expert at crafting characters and personas based on user feedback. Always follow the 100 character minimum.",
             },
             {
                 "role":    "user",
@@ -1130,12 +1138,18 @@ OUTPUT:
             content = strings.TrimSuffix(content, "```")
             content = strings.TrimSpace(content)
 
+            // Parse S-Expression
             identityText, confidence, err := parseIdentitySExpr(content)
             if err != nil {
+                // Log raw content for debugging if parsing fails
+                log.Printf("[Principles] S-Expr Parse Error. Raw Content: %s", content)
                 return "", 0, fmt.Errorf("failed to parse S-expression: %w", err)
             }
 
-            if len(identityText) < 20 || len(identityText) > 600 {
+            // Restore Original Strict Validation (20-600 chars)
+            // This forces the LLM to provide a real profile, not just a name.
+            if len(identityText) < 20 || len(identityText) > 500 {
+                log.Printf("[Principles] Invalid Identity Length (%d chars). Raw Content: %s", len(identityText), content)
                 return "", 0, fmt.Errorf("invalid identity length")
             }
 
