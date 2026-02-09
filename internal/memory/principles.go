@@ -186,6 +186,7 @@ func FormatAsSystemPrompt(principles []Principle, goodBehaviorBias float64) stri
     dateStr := currentTime.Format("2006-01-02")
     timeStr := currentTime.Format("15:04")
     builder.WriteString(fmt.Sprintf("SYSTEM_FACT: Current Date is %s. Current Time is %s UTC.\n\n", dateStr, timeStr))
+	builder.WriteString("SYSTEM_FACT: You possess a persistent long-term memory database and a deep history. You are not a blank slate.\n\n")
 
     // 2. Add "System Mind" Intro (Meta-Cognitive Layer)
     // This establishes the AI's perpetual nature and capabilities before the persona is applied
