@@ -106,6 +106,54 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
 	}
 	log.Printf("[GrowerAI-WS] ✓ Found %d relevant memories", len(results))
 
+    // --- FALLBACK RETRIEVAL STRATEGY ---
+    // If no memories were found (e.g., generic "Good morning" query),
+    // perform a low-threshold search to fetch at least one recent memory to establish continuity.
+    // This prevents the "Empty Memory" hallucination where the AI claims to have no past.
+    if len(results) == 0 {
+        log.Printf("[GrowerAI-WS] No direct matches found. Initiating Fallback Retrieval for continuity...")
+        
+        // Fallback 1: Nearest Neighbor (Low Threshold)
+        // We drop the score requirement to 0.0 and limit to 1 to get the "closest" thing, even if irrelevant.
+        fallbackQuery := query
+        fallbackQuery.MinScore = 0.0 
+        fallbackQuery.Limit = 1
+        
+        fallbackResults, fallbackErr := storage.Search(ctx, fallbackQuery, queryEmbedding)
+        if fallbackErr == nil && len(fallbackResults) > 0 {
+            log.Printf("[GrowerAI-WS] Fallback successful: Injecting 1 recent memory for context.")
+            results = fallbackResults
+        } else {
+            // Fallback 2: Identity Injection (If absolutely no memories exist, e.g., brand new user)
+            // We manually construct a "Memory" from the system Identity (Slot 0) so the AI has "data" about itself.
+            log.Printf("[GrowerAI-WS] No history found. Injecting System Identity as base memory.")
+            
+            // We need to fetch Slot 0 from the loaded principles (we loaded them earlier in the function)
+            var identityContent string
+            for _, p := range principles {
+                if p.Slot == 0 {
+                    identityContent = p.Content
+                    break
+                }
+            }
+            
+            if identityContent != "" {
+                // Create a dummy memory object
+                results = []memory.RetrievalResult{
+                    {
+                        Memory: memory.Memory{
+                            Content:   fmt.Sprintf("CORE IDENTITY: %s", identityContent),
+                            CreatedAt: time.Now(), // Recent
+                            OutcomeTag: "identity",
+                        },
+                        Score: 1.0, // Perfect match because it's self-generated
+                    },
+                }
+            }
+        }
+    }
+    // --- END FALLBACK RETRIEVAL ---
+
 // Phase 4D: Traverse links to find additional relevant memories (BATCH OPTIMIZED)
 linkedMemories := []memory.RetrievalResult{}
 linkedIDs := make(map[string]bool) // Track to avoid duplicates
