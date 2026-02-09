@@ -18,7 +18,7 @@ type OutcomeAnalysis struct {
 
 // Timeout configuration for tagger operations
 const (
-	taggerBaseTimeout = 90 * time.Second
+	taggerBaseTimeout = 120 * time.Second
 	taggerMaxRetries  = 3
 	taggerRetryDelay  = 5 * time.Second
 )

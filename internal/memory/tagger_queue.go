@@ -112,23 +112,21 @@ func (tq *TaggerQueue) worker(id int) {
 			log.Printf("[TaggerQueue] Worker %d processing memory %s (queue: %d remaining)", 
 				id, memID, len(tq.queue))
 			
-			// Process with timeout
-			ctx, cancel := context.WithTimeout(tq.ctx, 120*time.Second) // 2 minute max per memory
-			
-			err := tq.processMemory(ctx, memID)
-			
-			tq.mu.Lock()
-			tq.stats.WorkersActive--
-			if err != nil {
-				tq.stats.Failed++
-				log.Printf("[TaggerQueue] Worker %d failed to tag %s: %v (total failures: %d)", 
-					id, memID, err, tq.stats.Failed)
-			} else {
-				tq.stats.Processed++
-			}
-			tq.mu.Unlock()
-			
-			cancel()
+        // Process with queue context (no outer timeout, relies on internal LLM timeouts)
+        err := tq.processMemory(tq.ctx, memID)
+        
+        tq.mu.Lock()
+        tq.stats.WorkersActive--
+        if err != nil {
+            tq.stats.Failed++
+            log.Printf("[TaggerQueue] Worker %d failed to tag %s: %v (total failures: %d)", 
+                id, memID, err, tq.stats.Failed)
+        } else {
+            tq.stats.Processed++
+        }
+        tq.mu.Unlock()
+        
+        // No cancel() needed here as we are using the parent queue context
 		}
 	}
 }

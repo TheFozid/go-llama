@@ -157,13 +157,13 @@ func main() {
 					taggerLLMClient,
 				)
 
-				// Initialize async tagger queue with parallel workers
-				taggerQueue := memory.NewTaggerQueue(
-					tagger,
-					storage,
-					3,    // 3 parallel workers
-					1000, // Queue buffer size
-				)
+                // Initialize async tagger queue with parallel workers
+                taggerQueue := memory.NewTaggerQueue(
+                    tagger,
+                    storage,
+                    cfg.GrowerAI.LLMQueue.MaxConcurrent, // Dynamic 1:1 mapping with LLM workers
+                    1000, // Queue buffer size
+                )
 				defer taggerQueue.Stop()
 				log.Printf("[Main] ✓ Async tagger queue initialized (workers: 3, queue: 1000)")
 
