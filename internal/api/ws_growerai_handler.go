@@ -222,10 +222,78 @@ if len(allLinkedIDs) > 0 {
 	}
 }
 
-	// Combine primary results with linked memories
-	allResults := append(results, linkedMemories...)
-	
-	log.Printf("[GrowerAI-WS] Total memories (including links): %d", len(allResults))
+    // Combine primary results with linked memories
+    allResults := append(results, linkedMemories...)
+    
+    log.Printf("[GrowerAI-WS] Total memories (including links): %d", len(allResults))
+
+    // --- NEW: NARRATIVE INJECTION LOGIC ---
+    
+    // 1. Define Denial Phrases to filter out the "Amnesia Loop"
+    denialPhrases := []string{
+        "i don't carry a personal history",
+        "i don't recall past interactions",
+        "i don't hold memories",
+        "no memories",
+        "fresh start",
+        "blank slate",
+        "new beginning",
+        "i don't have a full past",
+    }
+
+    type HistoricalMessage struct {
+        Role      string
+        Content   string
+        Timestamp time.Time
+    }
+
+    var historicalTimeline []HistoricalMessage
+
+    for _, result := range allResults {
+        contentLower := strings.ToLower(result.Memory.Content)
+        
+        // Check against denial phrases
+        isDenial := false
+        for _, phrase := range denialPhrases {
+            if strings.Contains(contentLower, phrase) {
+                isDenial = true
+                log.Printf("[GrowerAI-WS] Filtering denial memory (contains '%s'): %s", phrase, truncate(result.Memory.Content, 40))
+                break
+            }
+        }
+
+        // If not a denial, parse the content into User/Assistant messages
+        if !isDenial {
+            // Expected format: "User asked: X\nAssistant responded: Y"
+            parts := strings.SplitN(result.Memory.Content, "\n", 2)
+            if len(parts) == 2 {
+                userPart := strings.TrimSpace(strings.TrimPrefix(parts[0], "User asked:"))
+                assistantPart := strings.TrimSpace(strings.TrimPrefix(parts[1], "Assistant responded:"))
+
+                // Only add if we extracted meaningful content
+                if userPart != "" && assistantPart != "" {
+                    historicalTimeline = append(historicalTimeline, HistoricalMessage{
+                        Role:      "user",
+                        Content:   userPart,
+                        Timestamp: result.Memory.CreatedAt,
+                    })
+                    historicalTimeline = append(historicalTimeline, HistoricalMessage{
+                        Role:      "assistant",
+                        Content:   assistantPart,
+                        Timestamp: result.Memory.CreatedAt,
+                    })
+                }
+            }
+        }
+    }
+
+    // 2. Sort historical messages chronologically (Oldest -> Newest) to create a narrative
+    sort.Slice(historicalTimeline, func(i, j int) bool {
+        return historicalTimeline[i].Timestamp.Before(historicalTimeline[j].Timestamp)
+    })
+    
+    log.Printf("[GrowerAI-WS] Injected %d historical messages into timeline", len(historicalTimeline))
+    // --- END NARRATIVE INJECTION ---
 
 	// Phase 4D: Track co-occurrence for retrieved memories
 	if len(allResults) > 1 {
@@ -264,101 +332,60 @@ if len(allLinkedIDs) > 0 {
 	
 	log.Printf("[GrowerAI-WS] ✓ Loaded %d messages from conversation history", len(messages))
 
-	// Build system prompt from principles + memories
-	systemPrompt := memory.FormatAsSystemPrompt(principles, cfg.GrowerAI.Personality.GoodBehaviorBias)
-	
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString(systemPrompt)
-	contextBuilder.WriteString("\n\n")
+    // Build system prompt (Principles only, memories are in history now)
+    systemPrompt := memory.FormatAsSystemPrompt(principles, cfg.GrowerAI.Personality.GoodBehaviorBias)
+    
+    llmMessages := []map[string]string{
+        {
+            "role":    "system",
+            "content": systemPrompt, // Clean system prompt without memory blocks
+        },
+    }
 
-	if len(allResults) > 0 {
-		contextBuilder.WriteString("=== RELEVANT MEMORIES ===\n")
-		for i, result := range allResults {
-			log.Printf("[GrowerAI-WS]   Memory %d: score=%.3f, tier=%s, age=%s, outcome=%s",
-				i+1, result.Score, result.Memory.Tier,
-				time.Since(result.Memory.CreatedAt).Round(time.Minute),
-				result.Memory.OutcomeTag)
-			log.Printf("[GrowerAI-WS]   Memory %d Content: %s", i+1, result.Memory.Content)
-			
-			// Show link info if memory was retrieved via link
-			linkInfo := ""
-			isLinked := false
-			for _, primaryRes := range results {
-				if result.Memory.ID == primaryRes.Memory.ID {
-					break // This is a primary result
-				}
-				for _, linkedID := range primaryRes.Memory.RelatedMemories {
-					if linkedID == result.Memory.ID {
-						isLinked = true
-						break
-					}
-				}
-				if isLinked {
-					break
-				}
-			}
-			if isLinked {
-				linkInfo = " [linked]"
-			}
-			
-			contextBuilder.WriteString(fmt.Sprintf("[Memory %d - %.0f%% relevant - from %s ago - outcome: %s%s]\n%s\n\n",
-				i+1,
-				result.Score*100,
-				time.Since(result.Memory.CreatedAt).Round(time.Minute),
-				result.Memory.OutcomeTag,
-				linkInfo,
-				result.Memory.Content))
-		}
-		contextBuilder.WriteString("=== END MEMORIES ===\n\n")
-	} else {
-		log.Printf("[GrowerAI-WS]   No relevant memories found")
-	}
+    // 1. Inject Historical Narrative (Oldest -> Newest)
+    for _, hist := range historicalTimeline {
+        llmMessages = append(llmMessages, map[string]string{
+            "role":    hist.Role,
+            "content": hist.Content,
+        })
+    }
 
-	// Call LLM with enhanced context (streaming)
-	// Structure: system prompt (with memories) + conversation history + current message
-	llmMessages := []map[string]string{
-		{
-			"role":    "system",
-			"content": contextBuilder.String(),
-		},
-	}
-	
-	// Add conversation history (excluding the current user message which we'll add separately)
-	for _, msg := range messages {
-		role := "user"
-		if msg.Sender == "bot" {
-			role = "assistant"
-		}
-		
-		// Clean up bot messages (remove tokens/sec footer)
-		msgContent := msg.Content
-		if msg.Sender == "bot" {
-			// Remove "_Tokens/sec: X.XX_" footer from bot messages
-			lines := strings.Split(msgContent, "\n")
-			var cleanedLines []string
-			for _, line := range lines {
-				if !strings.HasPrefix(strings.TrimSpace(line), "_Tokens/sec:") {
-					cleanedLines = append(cleanedLines, line)
-				}
-			}
-			msgContent = strings.Join(cleanedLines, "\n")
-			msgContent = strings.TrimSpace(msgContent)
-		}
-		
-		llmMessages = append(llmMessages, map[string]string{
-			"role":    role,
-			"content": msgContent,
-		})
-	}
-	
-	// Add current user message
-	llmMessages = append(llmMessages, map[string]string{
-		"role":    "user",
-		"content": content,
-	})
-	
-	log.Printf("[GrowerAI-WS] ✓ Built conversation context: %d messages (%d history + 1 current)",
-		len(llmMessages)-1, len(messages)) // -1 for system message
+    // 2. Add Recent Conversation History (from Database)
+    for _, msg := range messages {
+        role := "user"
+        if msg.Sender == "bot" {
+            role = "assistant"
+        }
+        
+        // Clean up bot messages (remove tokens/sec footer)
+        msgContent := msg.Content
+        if msg.Sender == "bot" {
+            lines := strings.Split(msgContent, "\n")
+            var cleanedLines []string
+            for _, line := range lines {
+                if !strings.HasPrefix(strings.TrimSpace(line), "_Tokens/sec:") {
+                    cleanedLines = append(cleanedLines, line)
+                }
+            }
+            msgContent = strings.Join(cleanedLines, "\n")
+            msgContent = strings.TrimSpace(msgContent)
+        }
+        
+        llmMessages = append(llmMessages, map[string]string{
+            "role":    role,
+            "content": msgContent,
+        })
+    }
+    
+    // 3. Add Current User Message
+    llmMessages = append(llmMessages, map[string]string{
+        "role":    "user",
+        "content": content,
+    })
+    
+    log.Printf("[GrowerAI-WS] ✓ Built conversation context: %d messages (%d history + %d timeline + 1 current)",
+        len(llmMessages)-1, len(messages), len(historicalTimeline)) // -1 for system message
+
 
 	payload := map[string]interface{}{
 		"model":    cfg.GrowerAI.ReasoningModel.Name,
