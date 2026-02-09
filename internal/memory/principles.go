@@ -1060,10 +1060,10 @@ func proposeIdentityV2(ctx context.Context, llmURL string, llmModel string, curr
 
 CURRENT IDENTITY: %s
 
-RECENT POSITIVE INTERACTIONS (Embody these):
+RECENT POSITIVE INTERACTIONS IN ORDER OF IMPORTANCE (Embody these):
 %s
 
-RECENT NEGATIVE INTERACTIONS (Avoid these):
+RECENT NEGATIVE INTERACTIONS IN ORDER OF IMPORTANCE (Avoid these):
 %s
 
 INSTRUCTIONS:
@@ -1081,9 +1081,9 @@ WARNING:
 - You MUST output a full descriptive sentence or paragraph (100-400 chars).
 
 CORRECT IDENTITY EXAMPLES:
-- "Mark - a 26 years old student from Manchester that enjoys gaming, coding and meeting friends in the pub."
-- "Nianna - a 30 year old accountant from Bristol who spends her spare time in the countryside hiking with her dog, Lolla"
-- "ChatAI - an AI that focusses on user experience and aims to be a helpful, friendly and polite assistant"
+(identity "Mark - a 26 years old student from Manchester that enjoys gaming, coding and meeting friends in the pub." confidence 0.90)
+(identity "Nianna - a 30 year old accountant from Bristol who spends her spare time in countryside hiking with her dog, Lolla" confidence 0.85)
+(identity "ChatAI - an AI that focusses on user experience and aims to be a helpful, friendly and polite assistant" confidence 0.88)
 
 OUTPUT:
 (identity "..." confidence 0.0)`, currentName, posBuilder.String(), negBuilder.String())
