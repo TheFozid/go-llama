@@ -135,7 +135,7 @@ func handleGrowerAIWebSocket(conn *safeWSConn, cfg *config.Config, chatInst *cha
         
         // Fallback 1: Nearest Neighbor (Low Threshold)
         // We drop the score requirement to 0.0 and limit to 1 to get the "closest" thing, even if irrelevant.
-        fallbackQuery := query
+        fallbackQuery := personalQuery
         fallbackQuery.MinScore = 0.0 
         fallbackQuery.Limit = 1
         
