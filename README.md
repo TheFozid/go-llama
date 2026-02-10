@@ -219,7 +219,7 @@ docker compose up -d
 All user data in Docker volumes is preserved across updates.
 
 <p align="center">
-  <a href="https://buymeacoffee.com/danny_and_serin">
-    <img src="https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png" alt="Buy Me A Coffee">
+  <a href="https://en.tipeee.com/thefozid/">
+    <img src="https://fr.tipeee.com/img/tipeee-logo-com.png" alt="Leave a Tip!">
   </a>
 </p>
