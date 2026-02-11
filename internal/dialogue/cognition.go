@@ -896,6 +896,96 @@ func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []st
     }
 }
 
+// deriveCapabilities analyzes a mission text and generates the required capability matrix
+func (e *Engine) deriveCapabilities(ctx context.Context, missionText string) ([]Capability, error) {
+    prompt := fmt.Sprintf(`Analyze this mission and list the specific capabilities required to achieve it.
+
+MISSION: %s
+
+INSTRUCTIONS:
+1. Identify 3-7 specific skills or knowledge areas required.
+2. Assign a starting score of 0.0 to all (we are starting from scratch).
+3. Output as a FLAT S-expression list.
+
+Format:
+(capability "CapabilityName" 0.0)
+(capability "AnotherSkill" 0.0)
+
+Example:
+MISSION: Act like a fox.
+(capability "Stealth_Cunning" 0.0)
+(capability "Foraging_Knowledge" 0.0)
+(capability "Predator_Avoidance" 0.0)
+
+Output:`, missionText)
+
+    response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
+    if err != nil {
+        return nil, err
+    }
+
+    content := response.RawResponse
+    content = strings.TrimSpace(content)
+    content = strings.TrimPrefix(content, "```lisp")
+    content = strings.TrimPrefix(content, "```")
+    content = strings.TrimSuffix(content, "```")
+
+    // Parse flat list (capability "Name" Score)
+    tokensList := tokenizeSimple(content)
+    capabilities := []Capability{}
+
+    for i := 0; i < len(tokensList); i++ {
+        if tokensList[i].value == "capability" {
+            if i+2 < len(tokensList) {
+                name := tokensList[i+1].value
+                scoreStr := tokensList[i+2].value
+                score := 0.0
+                if s, err := strconv.ParseFloat(scoreStr, 64); err == nil {
+                    score = s
+                }
+                capabilities = append(capabilities, Capability{Name: name, Score: score})
+            }
+        }
+    }
+
+    if len(capabilities) == 0 {
+        return nil, fmt.Errorf("no capabilities derived")
+    }
+
+    log.Printf("[Strategist] Derived %d capabilities for mission: %s", len(capabilities), missionText)
+    return capabilities, nil
+}
+
+// selectStrategicFocus analyzes the capability matrix and selects the next focus area
+func (e *Engine) selectStrategicFocus(ctx context.Context, matrix []Capability, missionText string) (string, string, error) {
+    // Find capability with lowest score
+    if len(matrix) == 0 {
+        return "", "", fmt.Errorf("empty capability matrix")
+    }
+
+    // Sort by score asc
+    sorted := make([]Capability, len(matrix))
+    copy(sorted, matrix)
+    
+    for i := 0; i < len(sorted); i++ {
+        for j := i + 1; j < len(sorted); j++ {
+            if sorted[j].Score < sorted[i].Score {
+                sorted[i], sorted[j] = sorted[j], sorted[i]
+            }
+        }
+    }
+
+    // Pick the lowest one
+    target := sorted[0]
+    
+    // Use LLM to justify the focus (optional, but adds depth)
+    // For now, we return the raw focus
+    focusName := target.Name
+    
+    log.Printf("[Strategist] Selected strategic focus: %s (current score: %.2f)", focusName, target.Score)
+    return focusName, fmt.Sprintf("Currently lowest score (%.2f) in capability matrix.", target.Score), nil
+}
+
 // thinkAboutGoal generates thoughts about pursuing a goal
 func (e *Engine) thinkAboutGoal(ctx context.Context, goal *Goal) (string, int, error) {
     prompt := fmt.Sprintf("You are pursuing this goal: %s\n\nThink about how to approach this. What should you do next? Keep it brief (2-3 sentences).", goal.Description)

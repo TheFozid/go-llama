@@ -219,6 +219,79 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
         }
     }
 
+    // PHASE 0: Strategic Check
+    // Check if we have a mission. If not, idle.
+    // If we have a mission but no matrix, derive it.
+    // If we have a matrix, pick a focus.
+    
+    // 1. Check for Mission
+    var currentMission string
+    if desc, ok := state.CurrentMissionMap["description"].(string); ok {
+        currentMission = desc
+    }
+
+    if currentMission != "" {
+        log.Printf("[Strategic] Active Mission: %s", currentMission)
+
+        // 2. Check Capability Matrix
+        if len(state.CapabilityMatrix) == 0 {
+            log.Printf("[Strategic] No capability matrix found. Deriving from mission...")
+            capabilities, err := e.deriveCapabilities(ctx, currentMission)
+            if err != nil {
+                log.Printf("[Strategic] Failed to derive capabilities: %v", err)
+            } else {
+                state.CapabilityMatrix = capabilities
+                // Save immediately so we don't re-derive on crash
+                if err := e.stateManager.SaveState(ctx, state); err != nil {
+                    log.Printf("[Strategic] Failed to save derived capabilities: %v", err)
+                }
+            }
+        } else {
+            // 3. Select Strategic Focus
+            // We only select a new focus if we don't have an active goal related to it, 
+            // or if we want to ensure we are always working on the lowest capability.
+            
+            // Simple Heuristic: If active goals < 3, generate a goal for the lowest capability
+            if len(state.ActiveGoals) < 3 {
+                focus, reasoning, err := e.selectStrategicFocus(ctx, state.CapabilityMatrix, currentMission)
+                if err != nil {
+                    log.Printf("[Strategic] Failed to select focus: %v", err)
+                } else {
+                    // Create a goal for this focus
+                    goalDesc := fmt.Sprintf("Improve capability: %s", focus)
+                    
+                    // Check if we already have this goal
+                    alreadyExists := false
+                    for _, g := range state.ActiveGoals {
+                        if strings.Contains(g.Description, focus) {
+                            alreadyExists = true
+                            break
+                        }
+                    }
+
+                    if !alreadyExists {
+                        newGoal := Goal{
+                            ID:          fmt.Sprintf("goal_%d", time.Now().UnixNano()),
+                            Description: goalDesc,
+                            Source:      "strategy", // New source type
+                            Priority:    10, // Highest priority
+                            Created:     time.Now(),
+                            Progress:    0.0,
+                            Status:      GoalStatusActive,
+                            Actions:     []Action{},
+                            Tier:        "primary",
+                            Metadata: map[string]interface{}{
+                                "capability_focus": focus,
+                            },
+                        }
+                        state.ActiveGoals = append(state.ActiveGoals, newGoal)
+                        log.Printf("[Strategic] Created strategic goal: %s", goalDesc)
+                    }
+                }
+            }
+        }
+    }
+
 	// PHASE 1: Enhanced Reflection with Structured Reasoning
 	reasoning, principles, phaseTokens, reflectionText, err := e.runPhaseReflection(ctx, state)
 	if err != nil {
@@ -454,6 +527,27 @@ if !actionExecuted {
                     log.Printf("[Dialogue] Action completed successfully: %s", truncate(result, 80))
                 }
                 action.Timestamp = time.Now()
+            }
+
+            // Update Capability Matrix if this was a Simulation
+            if action.Tool == ActionToolSimulation && action.Metadata != nil {
+                if capName, ok := action.Metadata["capability_updated"].(string); ok {
+                    if delta, ok := action.Metadata["score_delta"].(float64); ok {
+                        // Find capability and update
+                        for i := range state.CapabilityMatrix {
+                            if state.CapabilityMatrix[i].Name == capName {
+                                oldScore := state.CapabilityMatrix[i].Score
+                                newScore := oldScore + delta
+                                if newScore > 1.0 {
+                                    newScore = 1.0
+                                }
+                                state.CapabilityMatrix[i].Score = newScore
+                                log.Printf("[Strategic] Updated capability '%s': %.2f -> %.2f", capName, oldScore, newScore)
+                                break
+                            }
+                        }
+                    }
+                }
             }
 
             // Update research plan if this was part of a plan

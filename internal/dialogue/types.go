@@ -60,8 +60,10 @@ type Action struct {
 
 // InternalState represents the system's working memory between dialogue cycles
 type InternalState struct {
-    ActiveGoals     []Goal   `json:"active_goals"`
-    CompletedGoals  []Goal   `json:"completed_goals"`
+    ActiveGoals        []Goal                 `json:"active_goals"`
+    CurrentMissionMap  map[string]interface{} `json:"current_mission_map"` // Helper to store mission details
+    CapabilityMatrix   []Capability           `json:"capability_matrix"`
+    CompletedGoals     []Goal                 `json:"completed_goals"`
     KnowledgeGaps   []string `json:"knowledge_gaps"`
     RecentFailures  []string `json:"recent_failures"`
     Patterns        []string `json:"patterns"`
@@ -126,6 +128,31 @@ type ResearchQuestion struct {
     ConfidenceLevel float64  `json:"confidence_level"`   // 0.0-1.0 confidence in answer
 }
 
+// Mission represents the high-level objective given to the AI
+type Mission struct {
+    ID          string    `json:"id"`
+    Description string    `json:"description"`
+    Status      string    `json:"status"` // "active", "completed", "abandoned"
+    CreatedAt   time.Time `json:"created_at"`
+}
+
+// Capability represents a dynamic skill or attribute required for a mission
+type Capability struct {
+    Name  string  `json:"name"`
+    Score float64 `json:"score"` // 0.0 to 1.0
+}
+
+// SimulationAction represents a practice scenario execution
+type SimulationAction struct {
+    Scenario          string  `json:"scenario"`
+    Difficulty        string  `json:"difficulty"`
+    ActionTaken       string  `json:"action_taken"`
+    Score             float64 `json:"score"`
+    Feedback          string  `json:"feedback"`
+    CapabilityUpdated string  `json:"capability_updated"`
+    ScoreDelta        float64 `json:"score_delta"`
+}
+
 // GoalSource constants
 const (
     GoalSourceUserFailure      = "user_failure"
@@ -152,7 +179,8 @@ const (
 
 // ActionTool constants
 const (
-    ActionToolSearch              = "search"
+    ActionToolSearch       = "search"
+    ActionToolSimulate     = "simulate"
     ActionToolWebParseUnified    = "web_parse_unified"
     ActionToolSandbox             = "sandbox"
     ActionToolMemoryConsolidation = "memory_consolidation"

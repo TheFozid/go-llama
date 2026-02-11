@@ -18,8 +18,10 @@ type DialogueState struct {
 	CompletedGoals            datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_goals"`
 	KnowledgeGaps             datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"knowledge_gaps"`
 	RecentFailures            datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"recent_failures"`
-	Patterns                  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
-	LastCycleTime             time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
+    Patterns                  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
+    CurrentMission            datatypes.JSON `gorm:"type:jsonb" json:"current mission"` // Stores active Mission struct
+    CapabilityMatrix          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"capability_matrix"` // Stores []Capability
+    LastCycleTime             time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
 	CycleCount                int            `gorm:"not null;default:0" json:"cycle_count"`
 	MigrationMemoryIDComplete       bool      `gorm:"not null;default:false" json:"migration_memory_id_complete"`       // Track if memory_id migration ran
 	MigrationIsCollectiveComplete   bool      `gorm:"not null;default:false" json:"migration_is_collective_complete"`   // Track if is_collective backfill ran
@@ -130,9 +132,21 @@ func (sm *StateManager) LoadState(ctx context.Context) (*InternalState, error) {
 	if err := json.Unmarshal(dbState.RecentFailures, &state.RecentFailures); err != nil {
 		state.RecentFailures = []string{}
 	}
-	if err := json.Unmarshal(dbState.Patterns, &state.Patterns); err != nil {
-		state.Patterns = []string{}
-	}
+    if err := json.Unmarshal(dbState.Patterns, &state.Patterns); err != nil {
+        state.Patterns = []string{}
+    }
+    
+    // Unmarshal Mission
+    state.CurrentMissionMap = map[string]interface{}{}
+    if dbState.CurrentMission != nil && len(dbState.CurrentMission) > 0 {
+        json.Unmarshal(dbState.CurrentMission, &state.CurrentMissionMap)
+    }
+
+    // Unmarshal Capability Matrix
+    state.CapabilityMatrix = []Capability{}
+    if dbState.CapabilityMatrix != nil && len(dbState.CapabilityMatrix) > 0 {
+        json.Unmarshal(dbState.CapabilityMatrix, &state.CapabilityMatrix)
+    }
 
 	return state, nil
 }
@@ -148,19 +162,27 @@ func (sm *StateManager) SaveState(ctx context.Context, state *InternalState) err
 	completedGoals, _ := json.Marshal(completedGoalsTruncated)
 	knowledgeGaps, _ := json.Marshal(state.KnowledgeGaps)
 	recentFailures, _ := json.Marshal(state.RecentFailures)
-	patterns, _ := json.Marshal(state.Patterns)
+    patterns, _ := json.Marshal(state.Patterns)
+    
+    // Marshal Mission
+    currentMission, _ := json.Marshal(state.CurrentMissionMap)
+    
+    // Marshal Capability Matrix
+    capabilityMatrix, _ := json.Marshal(state.CapabilityMatrix)
 
 	// Update the singleton record
-	updates := map[string]interface{}{
-		"active_goals":    datatypes.JSON(activeGoals),
-		"completed_goals": datatypes.JSON(completedGoals),
-		"knowledge_gaps":  datatypes.JSON(knowledgeGaps),
-		"recent_failures": datatypes.JSON(recentFailures),
-		"patterns":        datatypes.JSON(patterns),
-		"last_cycle_time": state.LastCycleTime,
-		"cycle_count":     state.CycleCount,
-		"updated_at":      time.Now(),
-	}
+    updates := map[string]interface{}{
+        "active_goals":       datatypes.JSON(activeGoals),
+        "completed_goals":    datatypes.JSON(completedGoals),
+        "knowledge_gaps":     datatypes.JSON(knowledgeGaps),
+        "recent_failures":    datatypes.JSON(recentFailures),
+        "patterns":           datatypes.JSON(patterns),
+        "current_mission":    datatypes.JSON(currentMission),
+        "capability_matrix":  datatypes.JSON(capabilityMatrix),
+        "last_cycle_time":   state.LastCycleTime,
+        "cycle_count":        state.CycleCount,
+        "updated_at":         time.Now(),
+    }
 
 	if err := sm.db.WithContext(ctx).Model(&DialogueState{}).Where("id = ?", 1).Updates(updates).Error; err != nil {
 		return fmt.Errorf("failed to save dialogue state: %w", err)

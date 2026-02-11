@@ -314,6 +314,30 @@ func main() {
             }
         }
 
+        // Register Simulation Tool (for Strategic practice)
+        // Requires LLM Queue to function
+        if llmManager != nil {
+            simLLMClient := llm.NewClient(
+                llmManager,
+                llm.PriorityBackground,
+                time.Duration(cfg.GrowerAI.LLMQueue.BackgroundTimeoutSeconds)*time.Second,
+            )
+            
+            simTool := tools.NewSimulationTool(
+                simLLMClient,
+                config.GetChatURL(cfg.GrowerAI.ReasoningModel.URL),
+                cfg.GrowerAI.ReasoningModel.Name,
+            )
+            
+            if err := toolRegistry.Register(simTool); err != nil {
+                log.Printf("[Main] WARNING: Failed to register simulation tool: %v", err)
+            } else {
+                log.Printf("[Main] ✓ Simulation tool registered (priority: background)")
+            }
+        } else {
+            log.Printf("[Main] WARNING: LLM Queue not enabled, Simulation tool not registered")
+        }
+
 		if cfg.GrowerAI.Tools.Sandbox.Enabled {
 			log.Printf("[Main] Sandbox tool enabled but not yet implemented (Phase 3.5)")
 		}
