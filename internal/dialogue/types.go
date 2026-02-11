@@ -60,9 +60,12 @@ type Action struct {
 
 // InternalState represents the system's working memory between dialogue cycles
 type InternalState struct {
-    ActiveGoals     []Goal   `json:"active_goals"`
-    CompletedGoals  []Goal   `json:"completed_goals"`
-    KnowledgeGaps   []string `json:"knowledge_gaps"`
+    // New Mission System
+    ActiveMission     *Mission   `json:"active_mission"`
+    QueuedMissions    []Mission  `json:"queued_missions"`
+    CompletedMissions []Mission  `json:"completed_missions"`
+    
+    // Retained for reflection context
     RecentFailures  []string `json:"recent_failures"`
     Patterns        []string `json:"patterns"`
     LastCycleTime   time.Time `json:"last_cycle_time"`
