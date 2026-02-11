@@ -60,10 +60,8 @@ type Action struct {
 
 // InternalState represents the system's working memory between dialogue cycles
 type InternalState struct {
-    ActiveGoals        []Goal                 `json:"active_goals"`
-    CurrentMissionMap  map[string]interface{} `json:"current_mission_map"` // Helper to store mission details
-    CapabilityMatrix   []Capability           `json:"capability_matrix"`
-    CompletedGoals     []Goal                 `json:"completed_goals"`
+    ActiveGoals     []Goal   `json:"active_goals"`
+    CompletedGoals  []Goal   `json:"completed_goals"`
     KnowledgeGaps   []string `json:"knowledge_gaps"`
     RecentFailures  []string `json:"recent_failures"`
     Patterns        []string `json:"patterns"`
@@ -130,10 +128,14 @@ type ResearchQuestion struct {
 
 // Mission represents the high-level objective given to the AI
 type Mission struct {
-    ID          string    `json:"id"`
-    Description string    `json:"description"`
-    Status      string    `json:"status"` // "active", "completed", "abandoned"
-    CreatedAt   time.Time `json:"created_at"`
+    ID              string       `json:"id"`
+    Description     string       `json:"description"`
+    Source          string       `json:"source"`          // "user" or "ai"
+    Priority        float64      `json:"priority"`        // 0.0 - 1.0
+    CapabilityMatrix []Capability `json:"capability_matrix"`
+    Status          string       `json:"status"`          // "active", "queued", "completed"
+    CreatedAt       time.Time    `json:"created_at"`
+    UpdatedAt       time.Time    `json:"updated_at"`      // For decay calculation
 }
 
 // Capability represents a dynamic skill or attribute required for a mission

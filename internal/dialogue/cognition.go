@@ -897,6 +897,146 @@ func (e *Engine) generateExploratoryGoal(ctx context.Context, userInterests []st
     }
 }
 
+// detectUserMissions scans recent chat memories for user-imperative commands
+func (e *Engine) detectUserMissions(ctx context.Context, state *InternalState) (*Mission, error) {
+    // 1. Search for recent user memories that look like commands
+    // We look for "goal", "mission", "task", "objective" keywords
+    embedding, _ := e.embedder.Embed(ctx, "user command objective goal task mission set target")
+    
+    query := memory.RetrievalQuery{
+        Limit: 5,
+        MinScore: 0.4,
+        IncludePersonal: true,
+        IncludeCollective: false,
+    }
+    
+    results, err := e.storage.Search(ctx, query, embedding)
+    if err != nil || len(results) == 0 {
+        return nil, nil // No error, just nothing found
+    }
+
+    // 2. Analyze top result with LLM to see if it's a Mission Proposal
+    topMemory := results[0].Memory.Content
+    
+    prompt := fmt.Sprintf(`Analyze this user input to see if it sets a goal or objective for the AI.
+
+Input: "%s"
+
+If this is a command or objective, extract the mission.
+If it is just conversation, return nothing.
+
+Output strictly in FLAT S-expression:
+(mission "Description of the mission")
+(status "none")
+
+Output:`, topMemory)
+
+    response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
+    if err != nil {
+        return nil, err
+    }
+
+    content := strings.TrimSpace(response.RawResponse)
+    if !strings.Contains(content, "(mission") {
+        return nil, nil // No mission detected
+    }
+
+    // Parse mission
+    missionText := extractFieldContent(content, "mission")
+    if missionText == "" {
+        return nil, nil
+    }
+
+    log.Printf("[Strategist] Detected User Mission: %s", missionText)
+
+    return &Mission{
+        ID:          fmt.Sprintf("mission_%d", time.Now().UnixNano()),
+        Description: missionText,
+        Source:      "user",
+        Priority:    0.8, // Base user priority
+        Status:      "queued",
+        CreatedAt:   time.Now(),
+        UpdatedAt:   time.Now(),
+    }, nil
+}
+
+// manageMissionQueue handles insertion, priority, decay, and bumping
+func (e *Engine) manageMissionQueue(state *InternalState, newMission *Mission) {
+    if newMission == nil {
+        return
+    }
+
+    // 1. Check for duplicates in Queue or Active
+    // Semantic match logic (simplified for now: exact string match or high embedding similarity)
+    for i := range state.QueuedMissions {
+        if state.QueuedMissions[i].Description == newMission.Description {
+            // Boost priority
+            state.QueuedMissions[i].Priority += 0.05
+            if state.QueuedMissions[i].Priority > 1.0 { state.QueuedMissions[i].Priority = 1.0 }
+            state.QueuedMissions[i].UpdatedAt = time.Now()
+            log.Printf("[Strategist] Boosted existing queued mission priority: %s", newMission.Description)
+            return
+        }
+    }
+    
+    if state.ActiveMission != nil && state.ActiveMission.Description == newMission.Description {
+        // Boost active priority? (Active is immutable, but we can log)
+        log.Printf("[Strategist] User repeated Active Mission, acknowledging focus.")
+        return
+    }
+
+    // 2. Set Priority Ceiling for AI missions
+    if newMission.Source == "ai" && newMission.Priority > 0.79 {
+        newMission.Priority = 0.79
+    }
+
+    // 3. Insert into Queue
+    state.QueuedMissions = append(state.QueuedMissions, *newMission)
+    
+    // 4. Sort by Priority (Desc)
+    sort.Slice(state.QueuedMissions, func(i, j int) bool {
+        return state.QueuedMissions[i].Priority > state.QueuedMissions[j].Priority
+    })
+
+    // 5. Enforce Limit (Drop #6+)
+    if len(state.QueuedMissions) > 5 {
+        dropped := state.QueuedMissions[5]
+        state.QueuedMissions = state.QueuedMissions[:5]
+        log.Printf("[Strategist] Queue full. Dropped mission: %s", dropped.Description)
+    }
+    
+    log.Printf("[Strategist] Added new mission to queue: %s (Priority: %.2f)", newMission.Description, newMission.Priority)
+}
+
+// decayMissions reduces priority of queued missions over time
+func (e *Engine) decayMissions(state *InternalState) {
+    now := time.Now()
+    decayedCount := 0
+    
+    validQueue := []Mission{}
+    
+    for _, m := range state.QueuedMissions {
+        // Check if 24h has passed since last update
+        if now.Sub(m.UpdatedAt) >= 24*time.Hour {
+            m.Priority -= 0.01
+            m.UpdatedAt = now
+            decayedCount++
+        }
+        
+        // Keep if priority > 0.1
+        if m.Priority > 0.1 {
+            validQueue = append(validQueue, m)
+        } else {
+            log.Printf("[Strategist] Mission decayed and dropped: %s", m.Description)
+        }
+    }
+    
+    state.QueuedMissions = validQueue
+    if decayedCount > 0 {
+        log.Printf("[Strategist] Applied decay to %d queued missions.", decayedCount)
+    }
+}
+
 // deriveCapabilities analyzes a mission text and generates the required capability matrix
 func (e *Engine) deriveCapabilities(ctx context.Context, missionText string) ([]Capability, error) {
     prompt := fmt.Sprintf(`Analyze this mission and list the specific capabilities required to achieve it.

@@ -14,13 +14,11 @@ import (
 // DialogueState represents the persistent internal state (singleton)
 type DialogueState struct {
 	ID                        int            `gorm:"primaryKey" json:"id"`
-	ActiveGoals               datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"active_goals"`
-	CompletedGoals            datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_goals"`
-	KnowledgeGaps             datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"knowledge_gaps"`
+    ActiveMission            datatypes.JSON `gorm:"type:jsonb" json:"active_mission"`
+    QueuedMissions           datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"queued_missions"`
+    CompletedMissions        datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_missions"
 	RecentFailures            datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"recent_failures"`
     Patterns                  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
-    CurrentMission            datatypes.JSON `gorm:"type:jsonb" json:"current mission"` // Stores active Mission struct
-    CapabilityMatrix          datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"capability_matrix"` // Stores []Capability
     LastCycleTime             time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
 	CycleCount                int            `gorm:"not null;default:0" json:"cycle_count"`
 	MigrationMemoryIDComplete       bool      `gorm:"not null;default:false" json:"migration_memory_id_complete"`       // Track if memory_id migration ran
@@ -120,9 +118,23 @@ func (sm *StateManager) LoadState(ctx context.Context) (*InternalState, error) {
 		CycleCount:    dbState.CycleCount,
 	}
 
-	if err := json.Unmarshal(dbState.ActiveGoals, &state.ActiveGoals); err != nil {
-		state.ActiveGoals = []Goal{}
-	}
+    // Unmarshal Active Mission
+    if dbState.ActiveMission != nil && len(dbState.ActiveMission) > 0 {
+        var m Mission
+        if err := json.Unmarshal(dbState.ActiveMission, &m); err == nil {
+            state.ActiveMission = &m
+        }
+    }
+
+    // Unmarshal Queued Missions
+    if err := json.Unmarshal(dbState.QueuedMissions, &state.QueuedMissions); err != nil {
+        state.QueuedMissions = []Mission{}
+    }
+
+    // Unmarshal Completed Missions
+    if err := json.Unmarshal(dbState.CompletedMissions, &state.CompletedMissions); err != nil {
+        state.CompletedMissions = []Mission{}
+    }
 	if err := json.Unmarshal(dbState.CompletedGoals, &state.CompletedGoals); err != nil {
 		state.CompletedGoals = []Goal{}
 	}
@@ -158,28 +170,21 @@ func (sm *StateManager) SaveState(ctx context.Context, state *InternalState) err
 	completedGoalsTruncated := truncateGoalsForStorage(state.CompletedGoals)
 	
 	// Marshal truncated versions to JSON
-	activeGoals, _ := json.Marshal(activeGoalsTruncated)
-	completedGoals, _ := json.Marshal(completedGoalsTruncated)
-	knowledgeGaps, _ := json.Marshal(state.KnowledgeGaps)
 	recentFailures, _ := json.Marshal(state.RecentFailures)
     patterns, _ := json.Marshal(state.Patterns)
+    activeMission, _ := json.Marshal(state.ActiveMission)
+    queuedMissions, _ := json.Marshal(state.QueuedMissions)
+    completedMissions, _ := json.Marshal(state.CompletedMissions)
     
-    // Marshal Mission
-    currentMission, _ := json.Marshal(state.CurrentMissionMap)
-    
-    // Marshal Capability Matrix
-    capabilityMatrix, _ := json.Marshal(state.CapabilityMatrix)
 
 	// Update the singleton record
     updates := map[string]interface{}{
-        "active_goals":       datatypes.JSON(activeGoals),
-        "completed_goals":    datatypes.JSON(completedGoals),
-        "knowledge_gaps":     datatypes.JSON(knowledgeGaps),
+        "active_mission":     datatypes.JSON(activeMission),
+        "queued_missions":    datatypes.JSON(queuedMissions),
+        "completed_missions": datatypes.JSON(completedMissions),
         "recent_failures":    datatypes.JSON(recentFailures),
         "patterns":           datatypes.JSON(patterns),
-        "current_mission":    datatypes.JSON(currentMission),
-        "capability_matrix":  datatypes.JSON(capabilityMatrix),
-        "last_cycle_time":   state.LastCycleTime,
+        "last_cycle_time":    state.LastCycleTime,
         "cycle_count":        state.CycleCount,
         "updated_at":         time.Now(),
     }
