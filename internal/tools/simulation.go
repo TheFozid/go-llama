@@ -2,6 +2,7 @@ package tools
 
 import (
     "context"
+	"encoding/json"
     "fmt"
     "log"
     "strconv"
@@ -200,9 +201,13 @@ func (t *SimulationTool) callLLM(ctx context.Context, prompt string) (string, er
         } `json:"choices"`
     }
     var r Resp
-    // You might need to import encoding/json here if not already
-    // Assuming JSON unmarshal works as expected in your project structure
-    // For brevity in this snippet, I am returning the raw body string if parse fails, 
-    // but in production you would unmarshal properly.
-    return string(body), nil
+    if err := json.Unmarshal(body, &r); err != nil {
+        return "", fmt.Errorf("failed to unmarshal LLM response: %w", err)
+    }
+
+    if len(r.Choices) == 0 {
+        return "", fmt.Errorf("no choices returned from LLM")
+    }
+
+    return r.Choices[0].Message.Content, nil
 }
