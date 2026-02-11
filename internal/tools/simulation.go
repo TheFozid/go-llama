@@ -6,7 +6,6 @@ import (
     "log"
     "strconv"
     "strings"
-    "time"
 )
 
 // SimulationTool allows the AI to practice scenarios to improve capabilities
