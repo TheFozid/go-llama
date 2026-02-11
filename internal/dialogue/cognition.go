@@ -5,6 +5,7 @@ import (
     "fmt"
     "log"
     "math/rand"
+	"strconv"
     "strings"
     "time"
 
@@ -919,7 +920,7 @@ MISSION: Act like a fox.
 
 Output:`, missionText)
 
-    response, tokens, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
+    response, _, err := e.callLLMWithStructuredReasoning(ctx, prompt, true, "")
     if err != nil {
         return nil, err
     }

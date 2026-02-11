@@ -259,6 +259,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
                 } else {
                     // Create a goal for this focus
                     goalDesc := fmt.Sprintf("Improve capability: %s", focus)
+                    log.Printf("[Strategic] Focus selected: %s. Reasoning: %s", focus, reasoning)
                     
                     // Check if we already have this goal
                     alreadyExists := false
@@ -530,7 +531,7 @@ if !actionExecuted {
             }
 
             // Update Capability Matrix if this was a Simulation
-            if action.Tool == ActionToolSimulation && action.Metadata != nil {
+            if action.Tool == ActionToolSimulate && action.Metadata != nil {
                 if capName, ok := action.Metadata["capability_updated"].(string); ok {
                     if delta, ok := action.Metadata["score_delta"].(float64); ok {
                         // Find capability and update
