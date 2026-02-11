@@ -2,121 +2,95 @@
 package dialogue
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"time"
+    "context"
+    "encoding/json"
+    "fmt"
+    "time"
 
-	"gorm.io/datatypes"
-	"gorm.io/gorm"
+    "gorm.io/datatypes"
+    "gorm.io/gorm"
 )
 
 // DialogueState represents the persistent internal state (singleton)
 type DialogueState struct {
-	ID                        int            `gorm:"primaryKey" json:"id"`
-    ActiveMission            datatypes.JSON `gorm:"type:jsonb" json:"active_mission"`
-    QueuedMissions           datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"queued_missions"`
-    CompletedMissions        datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_missions"
-	RecentFailures            datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"recent_failures"`
-    Patterns                  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
-    LastCycleTime             time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
-	CycleCount                int            `gorm:"not null;default:0" json:"cycle_count"`
-	MigrationMemoryIDComplete       bool      `gorm:"not null;default:false" json:"migration_memory_id_complete"`       // Track if memory_id migration ran
-	MigrationIsCollectiveComplete   bool      `gorm:"not null;default:false" json:"migration_is_collective_complete"`   // Track if is_collective backfill ran
-	CreatedAt                       time.Time `json:"created_at"`
-	UpdatedAt                       time.Time `json:"updated_at"`
+    ID                 int            `gorm:"primaryKey" json:"id"`
+    ActiveMission      datatypes.JSON `gorm:"type:jsonb" json:"active_mission"`
+    QueuedMissions     datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"queued_missions"`
+    CompletedMissions  datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"completed_missions"`
+    RecentFailures     datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"recent_failures"`
+    Patterns           datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"patterns"`
+    LastCycleTime      time.Time      `gorm:"not null;default:NOW()" json:"last_cycle_time"`
+    CycleCount         int            `gorm:"not null;default:0" json:"cycle_count"`
+    CreatedAt          time.Time      `json:"created_at"`
+    UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 // TableName specifies the table name for GORM
 func (DialogueState) TableName() string {
-	return "growerai_dialogue_state"
+    return "growerai_dialogue_state"
 }
 
 // DialogueMetrics tracks performance of each cycle
 type DialogueMetrics struct {
-	CycleID        int       `gorm:"primaryKey;autoIncrement" json:"cycle_id"`
-	StartTime      time.Time `gorm:"not null" json:"start_time"`
-	EndTime        time.Time `gorm:"not null" json:"end_time"`
-	DurationMs     int       `gorm:"not null" json:"duration_ms"`
-	ThoughtCount   int       `gorm:"not null;default:0" json:"thought_count"`
-	ActionCount    int       `gorm:"not null;default:0" json:"action_count"`
-	TokensUsed     int       `gorm:"not null;default:0" json:"tokens_used"`
-	GoalsCreated   int       `gorm:"not null;default:0" json:"goals_created"`
-	GoalsCompleted int       `gorm:"not null;default:0" json:"goals_completed"`
-	MemoriesStored int       `gorm:"not null;default:0" json:"memories_stored"`
-	StopReason     string    `gorm:"type:varchar(50);not null" json:"stop_reason"`
-	CreatedAt      time.Time `json:"created_at"`
+    CycleID        int       `gorm:"primaryKey;autoIncrement" json:"cycle_id"`
+    StartTime      time.Time `gorm:"not null" json:"start_time"`
+    EndTime        time.Time `gorm:"not null" json:"end_time"`
+    DurationMs     int       `gorm:"not null" json:"duration_ms"`
+    ThoughtCount   int       `gorm:"not null;default:0" json:"thought_count"`
+    ActionCount    int       `gorm:"not null;default:0" json:"action_count"`
+    TokensUsed     int       `gorm:"not null;default:0" json:"tokens_used"`
+    GoalsCreated   int       `gorm:"not null;default:0" json:"goals_created"`
+    GoalsCompleted int       `gorm:"not null;default:0" json:"goals_completed"`
+    MemoriesStored int       `gorm:"not null;default:0" json:"memories_stored"`
+    StopReason     string    `gorm:"type:varchar(50);not null" json:"stop_reason"`
+    CreatedAt      time.Time `json:"created_at"`
 }
 
 // TableName specifies the table name for GORM
 func (DialogueMetrics) TableName() string {
-	return "growerai_dialogue_metrics"
+    return "growerai_dialogue_metrics"
 }
 
 // DialogueThought records individual thoughts during cycles
 type DialogueThought struct {
-	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	CycleID     int       `gorm:"not null;index:idx_cycle_thought" json:"cycle_id"`
-	ThoughtNum  int       `gorm:"not null;index:idx_cycle_thought" json:"thought_num"`
-	Content     string    `gorm:"type:text;not null" json:"content"`
-	TokensUsed  int       `gorm:"not null;default:0" json:"tokens_used"`
-	ActionTaken bool      `gorm:"not null;default:false" json:"action_taken"`
-	Timestamp   time.Time `gorm:"not null;default:NOW()" json:"timestamp"`
+    ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
+    CycleID     int       `gorm:"not null;index:idx_cycle_thought" json:"cycle_id"`
+    ThoughtNum  int       `gorm:"not null;index:idx_cycle_thought" json:"thought_num"`
+    Content     string    `gorm:"type:text;not null" json:"content"`
+    TokensUsed  int       `gorm:"not null;default:0" json:"tokens_used"`
+    ActionTaken bool      `gorm:"not null;default:false" json:"action_taken"`
+    Timestamp   time.Time `gorm:"not null;default:NOW()" json:"timestamp"`
 }
 
 // TableName specifies the table name for GORM
 func (DialogueThought) TableName() string {
-	return "growerai_dialogue_thoughts"
-}
-
-// Truncation constants
-const maxActionResultLength = 500 // Store only first 500 chars in database
-
-// truncateGoalsForStorage creates a storage-safe copy of goals with truncated results
-func truncateGoalsForStorage(goals []Goal) []Goal {
-    truncated := make([]Goal, len(goals))
-    for i, goal := range goals {
-        truncated[i] = goal
-        truncated[i].Actions = make([]Action, len(goal.Actions))
-        
-        for j, action := range goal.Actions {
-            truncated[i].Actions[j] = action
-            
-            // Truncate result field if it's too long
-            if len(action.Result) > maxActionResultLength {
-                truncated[i].Actions[j].Result = action.Result[:maxActionResultLength] + "... [truncated for storage]"
-            }
-            
-            // Preserve metadata to maintain action context (e.g., URLs) across cycles
-        }
-    }
-    return truncated
+    return "growerai_dialogue_thoughts"
 }
 
 // StateManager handles loading and saving internal state
 type StateManager struct {
-	db *gorm.DB
+    db *gorm.DB
 }
 
 // NewStateManager creates a new state manager
 func NewStateManager(db *gorm.DB) *StateManager {
-	return &StateManager{db: db}
+    return &StateManager{db: db}
 }
 
 // LoadState retrieves the current internal state from database
 func (sm *StateManager) LoadState(ctx context.Context) (*InternalState, error) {
-	var dbState DialogueState
-	
-	// Get or create the singleton state record
-	if err := sm.db.WithContext(ctx).FirstOrCreate(&dbState, DialogueState{ID: 1}).Error; err != nil {
-		return nil, fmt.Errorf("failed to load dialogue state: %w", err)
-	}
+    var dbState DialogueState
+    
+    // Get or create the singleton state record
+    if err := sm.db.WithContext(ctx).FirstOrCreate(&dbState, DialogueState{ID: 1}).Error; err != nil {
+        return nil, fmt.Errorf("failed to load dialogue state: %w", err)
+    }
 
-	// Unmarshal JSONB fields into InternalState
-	state := &InternalState{
-		LastCycleTime: dbState.LastCycleTime,
-		CycleCount:    dbState.CycleCount,
-	}
+    // Unmarshal JSONB fields into InternalState
+    state := &InternalState{
+        LastCycleTime: dbState.LastCycleTime,
+        CycleCount:    dbState.CycleCount,
+    }
 
     // Unmarshal Active Mission
     if dbState.ActiveMission != nil && len(dbState.ActiveMission) > 0 {
@@ -135,49 +109,27 @@ func (sm *StateManager) LoadState(ctx context.Context) (*InternalState, error) {
     if err := json.Unmarshal(dbState.CompletedMissions, &state.CompletedMissions); err != nil {
         state.CompletedMissions = []Mission{}
     }
-	if err := json.Unmarshal(dbState.CompletedGoals, &state.CompletedGoals); err != nil {
-		state.CompletedGoals = []Goal{}
-	}
-	if err := json.Unmarshal(dbState.KnowledgeGaps, &state.KnowledgeGaps); err != nil {
-		state.KnowledgeGaps = []string{}
-	}
-	if err := json.Unmarshal(dbState.RecentFailures, &state.RecentFailures); err != nil {
-		state.RecentFailures = []string{}
-	}
+
+    if err := json.Unmarshal(dbState.RecentFailures, &state.RecentFailures); err != nil {
+        state.RecentFailures = []string{}
+    }
+    
     if err := json.Unmarshal(dbState.Patterns, &state.Patterns); err != nil {
         state.Patterns = []string{}
     }
-    
-    // Unmarshal Mission
-    state.CurrentMissionMap = map[string]interface{}{}
-    if dbState.CurrentMission != nil && len(dbState.CurrentMission) > 0 {
-        json.Unmarshal(dbState.CurrentMission, &state.CurrentMissionMap)
-    }
 
-    // Unmarshal Capability Matrix
-    state.CapabilityMatrix = []Capability{}
-    if dbState.CapabilityMatrix != nil && len(dbState.CapabilityMatrix) > 0 {
-        json.Unmarshal(dbState.CapabilityMatrix, &state.CapabilityMatrix)
-    }
-
-	return state, nil
+    return state, nil
 }
 
 // SaveState persists the internal state to database
 func (sm *StateManager) SaveState(ctx context.Context, state *InternalState) error {
-	// Truncate goals before marshaling to prevent huge SQL statements
-	activeGoalsTruncated := truncateGoalsForStorage(state.ActiveGoals)
-	completedGoalsTruncated := truncateGoalsForStorage(state.CompletedGoals)
-	
-	// Marshal truncated versions to JSON
-	recentFailures, _ := json.Marshal(state.RecentFailures)
+    recentFailures, _ := json.Marshal(state.RecentFailures)
     patterns, _ := json.Marshal(state.Patterns)
     activeMission, _ := json.Marshal(state.ActiveMission)
     queuedMissions, _ := json.Marshal(state.QueuedMissions)
     completedMissions, _ := json.Marshal(state.CompletedMissions)
     
-
-	// Update the singleton record
+    // Update the singleton record
     updates := map[string]interface{}{
         "active_mission":     datatypes.JSON(activeMission),
         "queued_missions":    datatypes.JSON(queuedMissions),
@@ -189,70 +141,69 @@ func (sm *StateManager) SaveState(ctx context.Context, state *InternalState) err
         "updated_at":         time.Now(),
     }
 
-	if err := sm.db.WithContext(ctx).Model(&DialogueState{}).Where("id = ?", 1).Updates(updates).Error; err != nil {
-		return fmt.Errorf("failed to save dialogue state: %w", err)
-	}
+    if err := sm.db.WithContext(ctx).Model(&DialogueState{}).Where("id = ?", 1).Updates(updates).Error; err != nil {
+        return fmt.Errorf("failed to save dialogue state: %w", err)
+    }
 
-	return nil
+    return nil
 }
 
 // SaveMetrics stores cycle performance metrics
 func (sm *StateManager) SaveMetrics(ctx context.Context, metrics *CycleMetrics) error {
-	dbMetrics := DialogueMetrics{
-		StartTime:      metrics.StartTime,
-		EndTime:        metrics.EndTime,
-		DurationMs:     int(metrics.Duration.Milliseconds()),
-		ThoughtCount:   metrics.ThoughtCount,
-		ActionCount:    metrics.ActionCount,
-		TokensUsed:     metrics.TokensUsed,
-		GoalsCreated:   metrics.GoalsCreated,
-		GoalsCompleted: metrics.GoalsCompleted,
-		MemoriesStored: metrics.MemoriesStored,
-		StopReason:     metrics.StopReason,
-	}
+    dbMetrics := DialogueMetrics{
+        StartTime:      metrics.StartTime,
+        EndTime:        metrics.EndTime,
+        DurationMs:     int(metrics.Duration.Milliseconds()),
+        ThoughtCount:   metrics.ThoughtCount,
+        ActionCount:    metrics.ActionCount,
+        TokensUsed:     metrics.TokensUsed,
+        GoalsCreated:   metrics.GoalsCreated,
+        GoalsCompleted: metrics.GoalsCompleted,
+        MemoriesStored: metrics.MemoriesStored,
+        StopReason:     metrics.StopReason,
+    }
 
-	if err := sm.db.WithContext(ctx).Create(&dbMetrics).Error; err != nil {
-		return fmt.Errorf("failed to save metrics: %w", err)
-	}
+    if err := sm.db.WithContext(ctx).Create(&dbMetrics).Error; err != nil {
+        return fmt.Errorf("failed to save metrics: %w", err)
+    }
 
-	return nil
+    return nil
 }
 
 // SaveThought stores a thought record
 func (sm *StateManager) SaveThought(ctx context.Context, thought *ThoughtRecord) error {
-	dbThought := DialogueThought{
-		CycleID:     thought.CycleID,
-		ThoughtNum:  thought.ThoughtNum,
-		Content:     thought.Content,
-		TokensUsed:  thought.TokensUsed,
-		ActionTaken: thought.ActionTaken,
-		Timestamp:   thought.Timestamp,
-	}
+    dbThought := DialogueThought{
+        CycleID:     thought.CycleID,
+        ThoughtNum:  thought.ThoughtNum,
+        Content:     thought.Content,
+        TokensUsed:  thought.TokensUsed,
+        ActionTaken: thought.ActionTaken,
+        Timestamp:   thought.Timestamp,
+    }
 
-	if err := sm.db.WithContext(ctx).Create(&dbThought).Error; err != nil {
-		return fmt.Errorf("failed to save thought: %w", err)
-	}
+    if err := sm.db.WithContext(ctx).Create(&dbThought).Error; err != nil {
+        return fmt.Errorf("failed to save thought: %w", err)
+    }
 
-	return nil
+    return nil
 }
 
 // InitializeDefaultState ensures the singleton state record exists
 func InitializeDefaultState(db *gorm.DB) error {
-	// Use FirstOrCreate to ensure singleton exists (will create if missing)
-	defaultState := DialogueState{
-		ID:             1,
-		ActiveGoals:    datatypes.JSON([]byte("[]")),
-		CompletedGoals: datatypes.JSON([]byte("[]")),
-		KnowledgeGaps:  datatypes.JSON([]byte("[]")),
-		RecentFailures: datatypes.JSON([]byte("[]")),
-		Patterns:       datatypes.JSON([]byte("[]")),
-		LastCycleTime:  time.Now(),
-		CycleCount:     0,
-	}
+    // Use FirstOrCreate to ensure singleton exists (will create if missing)
+    defaultState := DialogueState{
+        ID:              1,
+        QueuedMissions:  datatypes.JSON([]byte("[]")),
+        CompletedMissions: datatypes.JSON([]byte("[]")),
+        RecentFailures:  datatypes.JSON([]byte("[]")),
+        Patterns:        datatypes.JSON([]byte("[]")),
+        LastCycleTime:   time.Now(),
+        CycleCount:      0,
+    }
 
-	if err := db.Where(DialogueState{ID: 1}).FirstOrCreate(&defaultState).Error; err != nil {
-		return fmt.Errorf("failed to initialize default dialogue state: %w", err)
-	}
+    if err := db.Where(DialogueState{ID: 1}).FirstOrCreate(&defaultState).Error; err != nil {
+        return fmt.Errorf("failed to initialize default dialogue state: %w", err)
+    }
 
-	return nil
+    return nil
 }
