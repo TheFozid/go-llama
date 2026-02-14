@@ -267,14 +267,10 @@ func (e *Engine) ExecuteToolAction(ctx context.Context, tool string, params map[
         return "", err
     }
 
-    // Safely extract the result string from the ToolResult struct
-    // We assume ToolResult has a field 'Result' or similar.
-    // If the result is nil or empty, return empty string.
     if result == nil {
         return "", nil
     }
 
-    // ToolResult usually has a 'Result' field (string) or 'Data' field.
-    // Based on common patterns in this codebase:
-    return result.Result, nil
+    // ToolResult.Output contains the string result from the tool execution
+    return result.Output, nil
 }
