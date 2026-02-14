@@ -5,7 +5,6 @@ import (
     "encoding/json"
     "fmt"
     "log"
-    "time"
 
     "github.com/google/uuid"
     "github.com/qdrant/go-client/qdrant"
@@ -120,17 +119,8 @@ func (r *GoalRepository) Store(ctx context.Context, g *goal.Goal) error {
     }
 
     // Note: Embedding generation will be handled by the intelligence layer (Phase 3)
-    // For now, we use a zero vector or skip vector storage if not available
-    // This aligns with Phase 1 "no external dependencies on LLMs"
-    var vectors *qdrant.Vectors
-    if len(g.RequiredCapabilities) > 0 {
-        // Placeholder: In Phase 3 we will embed the description here
-        // For now, we skip vector storage or use dummy to satisfy schema
-        // Qdrant allows sparse vectors or skipping if configured, but for simplicity:
-        vectors = qdrant.NewVectors(make([]float32, 384)...)
-    } else {
-        vectors = qdrant.NewVectors(make([]float32, 384)...)
-    }
+    // For now, we use a zero vector to satisfy schema
+    vectors := qdrant.NewVectors(make([]float32, 384)...)
 
     point := &qdrant.PointStruct{
         Id:      qdrant.NewIDUUID(g.ID),
@@ -160,7 +150,7 @@ func (r *GoalRepository) Get(ctx context.Context, id string) (*goal.Goal, error)
         return nil, fmt.Errorf("goal not found: %s", id)
     }
 
-    return r.pointToGoal(points[0])
+    return r.pointToGoalFromRetrieved(points[0])
 }
 
 // GetByState retrieves all goals in a specific state
@@ -183,7 +173,7 @@ func (r *GoalRepository) GetByState(ctx context.Context, state goal.GoalState) (
 
     goals := make([]*goal.Goal, 0, len(scrollResult))
     for _, point := range scrollResult {
-        g, err := r.pointToGoal(point)
+        g, err := r.pointToGoalFromRetrieved(point)
         if err != nil {
             log.Printf("[GoalRepository] Warning: Failed to parse goal: %v", err)
             continue
@@ -237,8 +227,28 @@ func (r *GoalRepository) SearchSimilar(ctx context.Context, embedding []float32,
     return goals, nil
 }
 
-// pointToGoal deserializes a Qdrant point back to a Goal struct
-func (r *GoalRepository) pointToGoal(point *qdrant.RetrievedPoint) (*goal.Goal, error) {
+// pointToGoal deserializes a ScoredPoint (from Query) back to a Goal struct
+func (r *GoalRepository) pointToGoal(point *qdrant.ScoredPoint) (*goal.Goal, error) {
+    if point.Payload == nil {
+        return nil, fmt.Errorf("point has no payload")
+    }
+
+    goalDataVal, ok := point.Payload["goal_data"]
+    if !ok {
+        return nil, fmt.Errorf("point missing goal_data payload")
+    }
+
+    goalJSON := goalDataVal.GetStringValue()
+    var g goal.Goal
+    if err := json.Unmarshal([]byte(goalJSON), &g); err != nil {
+        return nil, fmt.Errorf("failed to unmarshal goal json: %w", err)
+    }
+
+    return &g, nil
+}
+
+// pointToGoalFromRetrieved deserializes a RetrievedPoint (from Get/Scroll) back to a Goal struct
+func (r *GoalRepository) pointToGoalFromRetrieved(point *qdrant.RetrievedPoint) (*goal.Goal, error) {
     if point.Payload == nil {
         return nil, fmt.Errorf("point has no payload")
     }
