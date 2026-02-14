@@ -52,3 +52,55 @@ func (t *TimeScoreCalculator) RecalculateRemainingScore(g *Goal) int {
     // Re-use the calculation logic but for remaining items
     return t.CalculateTimeScore(g.Description, remainingCount, g.TreeDepth)
 }
+
+// LLMEnhancedCalculator wraps the heuristic calculator with LLM estimation capabilities.
+type LLMEnhancedCalculator struct {
+    heuristic *TimeScoreCalculator
+    llm       LLMService
+}
+
+// NewLLMEnhancedCalculator creates a new calculator with LLM fallback.
+func NewLLMEnhancedCalculator(heuristic *TimeScoreCalculator, llm LLMService) *LLMEnhancedCalculator {
+    return &LLMEnhancedCalculator{
+        heuristic: heuristic,
+        llm:       llm,
+    }
+}
+
+// EstimateTimeScore uses LLM to estimate effort if heuristics are insufficient.
+func (l *LLMEnhancedCalculator) EstimateTimeScore(ctx context.Context, g *Goal) (int, error) {
+    // 1. Try heuristic first if we have sub-goal counts
+    if len(g.SubGoals) > 0 {
+        return l.heuristic.CalculateTimeScore(g.Description, len(g.SubGoals), g.TreeDepth), nil
+    }
+
+    // 2. Use LLM for estimation
+    log.Printf("[TimeScore] Using LLM to estimate effort for: %s", g.Description)
+    
+    prompt := fmt.Sprintf(`Estimate the computational effort (Time Score) required to complete the following goal.
+    
+Goal: %s
+Type: %s
+
+Output JSON:
+{
+  "time_score": 50, // Integer representing effort units (10-500 range)
+  "complexity": "MEDIUM", // SIMPLE, MEDIUM, COMPLEX, EXTREME
+  "reasoning": "Brief explanation"
+}`, g.Description, g.Type)
+
+    var response struct {
+        TimeScore  int    `json:"time_score"`
+        Complexity string `json:"complexity"`
+    }
+
+    if err := l.llm.GenerateJSON(ctx, prompt, &response); err != nil {
+        log.Printf("[TimeScore] LLM estimation failed, falling back to base heuristic: %v", err)
+        return l.heuristic.BaseUnit, nil // Return base unit as fallback
+    }
+
+    if response.TimeScore <= 0 {
+        return l.heuristic.BaseUnit, nil
+    }
+    return response.TimeScore, nil
+}
