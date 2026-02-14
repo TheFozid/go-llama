@@ -13,11 +13,11 @@ type DerivationEngine struct {
     llm      LLMService
     searcher MemorySearcher // Interface to break import cycle
     embedder Embedder       // Interface for embedding
-    factory  *GoalFactory
+    factory  *Factory       // Corrected to match existing Factory struct
 }
 
 // NewDerivationEngine creates a new derivation engine.
-func NewDerivationEngine(llm LLMService, searcher MemorySearcher, embedder Embedder, factory *GoalFactory) *DerivationEngine {
+func NewDerivationEngine(llm LLMService, searcher MemorySearcher, embedder Embedder, factory *Factory) *DerivationEngine {
     return &DerivationEngine{
         llm:      llm,
         searcher: searcher,
