@@ -1,14 +1,15 @@
 package api
 
 import (
-	"github.com/gin-gonic/gin"
-	"go-llama/internal/config"
-	"go-llama/internal/auth"
-	"go-llama/internal/db"
-	"go-llama/internal/user"
-	"github.com/redis/go-redis/v9"
-	"net/http"
-	"path"
+    "github.com/gin-gonic/gin"
+    "go-llama/internal/config"
+    "go-llama/internal/auth"
+    "go-llama/internal/db"
+    "go-llama/internal/dialogue"
+    "go-llama/internal/user"
+    "github.com/redis/go-redis/v9"
+    "net/http"
+    "path"
 )
 
 func usersExist() bool {
@@ -20,7 +21,7 @@ func usersExist() bool {
 	return count > 0
 }
 
-func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}, criticalLLMClient interface{}) *gin.Engine {
+func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}, criticalLLMClient interface{}, engine *dialogue.Engine) *gin.Engine {
 	r := gin.Default()
 	subpath := cfg.Server.Subpath // e.g. "/go-llama" or any custom path, always starts with '/'
 
@@ -105,9 +106,18 @@ func SetupRouter(cfg *config.Config, rdb *redis.Client, llmManager interface{}, 
 		// --- Online users count ---
 		group.GET("/users/online", OnlineUserCountHandler(rdb))
 
-		// --- New delete and edit ---
-		group.PUT("/chats/:id", auth.AuthMiddleware(cfg, rdb, false), EditChatTitleHandler())
-		group.DELETE("/chats/:id", auth.AuthMiddleware(cfg, rdb, false), DeleteChatHandler())
-	}
-	return r
+        // --- New delete and edit ---
+        group.PUT("/chats/:id", auth.AuthMiddleware(cfg, rdb, false), EditChatTitleHandler())
+        group.DELETE("/chats/:id", auth.AuthMiddleware(cfg, rdb, false), DeleteChatHandler())
+
+        // --- Milestone 5: Goal API ---
+        goalGroup := r.Group(subpath + "/api/goals")
+        {
+            goalGroup.GET("", auth.AuthMiddleware(cfg, rdb, false), GoalStatusHandler(engine))
+            goalGroup.GET("/:id", auth.AuthMiddleware(cfg, rdb, false), GoalDetailHandler(engine))
+            goalGroup.POST("/:id/stop", auth.AuthMiddleware(cfg, rdb, false), GoalStopHandler(engine))
+            goalGroup.POST("/:id/prioritize", auth.AuthMiddleware(cfg, rdb, false), GoalPrioritizeHandler(engine))
+        }
+    }
+    return r
 }

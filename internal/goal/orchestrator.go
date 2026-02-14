@@ -27,6 +27,10 @@ type Orchestrator struct {
     Monitor      *ProgressMonitor
     Archive      *ArchiveManager
 
+    // Intelligence (Milestone 3)
+    DerivationEngine *DerivationEngine
+    TreeBuilder      *TreeBuilder
+
     // Bridges
     Executor ActionExecutor // Implemented by Dialogue Engine
 }
@@ -42,19 +46,75 @@ func NewOrchestrator(
     reviewer *ReviewProcessor,
     calc *Calculator,
     monitor *ProgressMonitor,
+    derivationEngine *DerivationEngine,
+    treeBuilder *TreeBuilder,
 ) *Orchestrator {
     return &Orchestrator{
-        Repo:         repo,
-        SkillRepo:    skillRepo,
-        Factory:      factory,
-        StateManager: stateManager,
-        Validator:    validator,
-        Selector:     selector,
-        Reviewer:     reviewer,
-        Calculator:   calc,
-        Monitor:      monitor,
-        Archive:      NewArchiveManager(repo),
+        Repo:             repo,
+        SkillRepo:        skillRepo,
+        Factory:          factory,
+        StateManager:     stateManager,
+        Validator:        validator,
+        Selector:         selector,
+        Reviewer:         reviewer,
+        Calculator:       calc,
+        Monitor:          monitor,
+        Archive:          NewArchiveManager(repo),
+        DerivationEngine: derivationEngine,
+        TreeBuilder:      treeBuilder,
     }
+}
+
+// --- User Interaction API Methods (Milestone 5) ---
+
+// GetActiveGoal returns the currently active goal, if any.
+func (o *Orchestrator) GetActiveGoal(ctx context.Context) (*Goal, error) {
+    goals, err := o.Repo.GetByState(ctx, StateActive)
+    if err != nil {
+        return nil, err
+    }
+    if len(goals) == 0 {
+        return nil, nil
+    }
+    return goals[0], nil
+}
+
+// GetQueuedGoals returns all goals in QUEUED state.
+func (o *Orchestrator) GetQueuedGoals(ctx context.Context) ([]*Goal, error) {
+    return o.Repo.GetByState(ctx, StateQueued)
+}
+
+// GetGoalDetails returns a specific goal by ID.
+func (o *Orchestrator) GetGoalDetails(ctx context.Context, id string) (*Goal, error) {
+    return o.Repo.Get(ctx, id)
+}
+
+// StopGoal archives a goal specified by the user.
+func (o *Orchestrator) StopGoal(ctx context.Context, id string) error {
+    g, err := o.Repo.Get(ctx, id)
+    if err != nil {
+        return err
+    }
+    
+    o.StateManager.Transition(g, StateArchived)
+    g.ArchiveReason = ArchiveUserCancelled
+    
+    return o.Repo.Store(ctx, g)
+}
+
+// PrioritizeGoal boosts the priority of a goal.
+func (o *Orchestrator) PrioritizeGoal(ctx context.Context, id string, boost int) error {
+    g, err := o.Repo.Get(ctx, id)
+    if err != nil {
+        return err
+    }
+    
+    g.CurrentPriority += boost
+    if g.CurrentPriority > 100 {
+        g.CurrentPriority = 100
+    }
+    
+    return o.Repo.Store(ctx, g)
 }
 
 // SetExecutor connects the orchestrator to the Dialogue Engine's tool execution

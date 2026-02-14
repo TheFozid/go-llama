@@ -35,8 +35,9 @@ func main() {
 
 	rdb := redisdb.NewClient(cfg)
 
-	// Declare llmManager outside the block so it's accessible later
-	var llmManager *llm.Manager
+    // Declare llmManager outside the block so it's accessible later
+    var llmManager *llm.Manager
+    var appEngine *dialogue.Engine // Milestone 5: Expose engine to router
 
 	// Check if GrowerAI is enabled globally
 	if cfg.GrowerAI.Enabled {
@@ -384,20 +385,21 @@ func main() {
 					cfg.GrowerAI.Dialogue.JitterWindowMinutes,
 				)
 
-				go worker.Start()
+                go worker.Start()
+                appEngine = engine // Capture engine for router
 
-				log.Printf("[Main] ✓ GrowerAI dialogue worker started (interval: %d±%d minutes)",
-					cfg.GrowerAI.Dialogue.BaseIntervalMinutes,
-					cfg.GrowerAI.Dialogue.JitterWindowMinutes)
-			}
-		} else {
-			log.Printf("[Main] GrowerAI dialogue disabled in config")
-		}
+                log.Printf("[Main] ✓ GrowerAI dialogue worker started (interval: %d±%d minutes)",
+                    cfg.GrowerAI.Dialogue.BaseIntervalMinutes,
+                    cfg.GrowerAI.Dialogue.JitterWindowMinutes)
+            }
+        } else {
+            log.Printf("[Main] GrowerAI dialogue disabled in config")
+        }
 
-		log.Printf("[Main] ✓ GrowerAI initialization complete")
-	} else {
-		log.Printf("[Main] GrowerAI disabled in config - skipping initialization")
-	}
+        log.Printf("[Main] ✓ GrowerAI initialization complete")
+    } else {
+        log.Printf("[Main] GrowerAI disabled in config - skipping initialization")
+    }
 
     // Create LLM client for User Chat (CRITICAL PRIORITY)
     var criticalLLMClient interface{}
@@ -410,7 +412,9 @@ func main() {
         log.Printf("[Main] ✓ User Chat using LLM queue (priority: CRITICAL)")
     }
 
-    r := api.SetupRouter(cfg, rdb, llmManager, criticalLLMClient)
+    // Initialize Router (Milestone 5: Pass appEngine)
+    r := api.SetupRouter(cfg, rdb, llmManager, criticalLLMClient, appEngine)
+    
     addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
     fmt.Printf("Starting server on %s%s\n", addr, cfg.Server.Subpath)
     if err := r.Run(addr); err != nil {

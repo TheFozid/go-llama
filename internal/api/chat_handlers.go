@@ -925,8 +925,119 @@ func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+    if len(s) <= maxLen {
+        return s
+    }
+    return s[:maxLen] + "..."
+}
+
+// --- Milestone 5: Goal Interaction Handlers ---
+
+// GoalStatusHandler handles "What are your current goals?"
+func GoalStatusHandler(engine *dialogue.Engine) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        orch := engine.GetOrchestrator()
+        if orch == nil {
+            c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Goal system not initialized"})
+            return
+        }
+
+        active, err := orch.GetActiveGoal(c.Request.Context())
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch active goal"})
+            return
+        }
+
+        queued, err := orch.GetQueuedGoals(c.Request.Context())
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch queued goals"})
+            return
+        }
+
+        c.JSON(http.StatusOK, gin.H{
+            "active_goal": active,
+            "queued_count": len(queued),
+            "queued_goals": queued,
+        })
+    }
+}
+
+// GoalDetailHandler handles "Tell me more about [goal]"
+func GoalDetailHandler(engine *dialogue.Engine) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        goalID := c.Param("id")
+        if goalID == "" {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Goal ID required"})
+            return
+        }
+
+        orch := engine.GetOrchestrator()
+        if orch == nil {
+            c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Goal system not initialized"})
+            return
+        }
+
+        g, err := orch.GetGoalDetails(c.Request.Context(), goalID)
+        if err != nil {
+            c.JSON(http.StatusNotFound, gin.H{"error": "Goal not found"})
+            return
+        }
+
+        c.JSON(http.StatusOK, g)
+    }
+}
+
+// GoalStopHandler handles "Stop pursuing [goal]"
+func GoalStopHandler(engine *dialogue.Engine) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        goalID := c.Param("id")
+        if goalID == "" {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Goal ID required"})
+            return
+        }
+
+        orch := engine.GetOrchestrator()
+        if orch == nil {
+            c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Goal system not initialized"})
+            return
+        }
+
+        if err := orch.StopGoal(c.Request.Context(), goalID); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to stop goal"})
+            return
+        }
+
+        c.JSON(http.StatusOK, gin.H{"status": "archived", "id": goalID})
+    }
+}
+
+// GoalPrioritizeHandler handles "Prioritise [goal]"
+func GoalPrioritizeHandler(engine *dialogue.Engine) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        goalID := c.Param("id")
+        if goalID == "" {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Goal ID required"})
+            return
+        }
+
+        var req struct {
+            Boost int `json:"boost"`
+        }
+        if err := c.ShouldBindJSON(&req); err != nil {
+            req.Boost = 20 // Default boost
+        }
+
+        orch := engine.GetOrchestrator()
+        if orch == nil {
+            c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Goal system not initialized"})
+            return
+        }
+
+        if err := orch.PrioritizeGoal(c.Request.Context(), goalID, req.Boost); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prioritize goal"})
+            return
+        }
+
+        c.JSON(http.StatusOK, gin.H{"status": "prioritized", "id": goalID, "boost": req.Boost})
+    }
 }

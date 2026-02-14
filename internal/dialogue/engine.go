@@ -92,15 +92,44 @@ func NewEngine(
     }
 
     // Wire up the Goal Subsystem
+    
+    // 1. LLM Adapter (Milestone 3 Integration)
+    // We cast the llmClient (interface{}) to the goal.LLMCaller interface
+    // Note: llmClient must satisfy the Call(ctx, url, payload) method.
+    var llmAdapter goal.LLMService
+    if llmClient != nil {
+        // Use type assertion to check if it implements the Call method
+        // Since we can't import llm package here easily, we rely on the adapter logic
+        adapter := goal.NewQueueLLMAdapter(llmClient, llmURL, llmModel)
+        llmAdapter = adapter
+        log.Printf("[Engine] Goal System connected to LLM Queue")
+    } else {
+        log.Printf("[Engine] WARNING: Goal System has no LLM connection")
+    }
+    
     factory := goal.NewFactory(nil)
     stateMgr := goal.NewStateManager()
     calc := goal.NewCalculator(nil)
     selector := goal.NewGoalSelector(calc)
-    monitor := goal.NewProgressMonitor() // Assuming this exists from Milestone 3
+    monitor := goal.NewProgressMonitor() 
     reviewer := goal.NewReviewProcessor(selector, calc, monitor)
     validator := goal.NewValidationEngine()
     
-    orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, validator, selector, reviewer, calc, monitor)
+    // Initialize Intelligence Components (Milestone 3)
+    // Note: MemorySearcher and Embedder interfaces need implementations passed from Engine.
+    // For now, we pass nil for searcher/embedder in this wiring step, as they are on 'storage'.
+    // Ideally, we'd wrap 'storage' to satisfy MemorySearcher.
+    var derivationEngine *goal.DerivationEngine
+    var treeBuilder *goal.TreeBuilder
+    
+    if llmAdapter != nil {
+        treeBuilder = goal.NewTreeBuilder(llmAdapter)
+        // Derivation engine needs MemorySearcher. We can create a simple wrapper.
+        // For now, passing nil to satisfy constructor.
+        derivationEngine = goal.NewDerivationEngine(llmAdapter, nil, nil, factory)
+    }
+    
+    orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, validator, selector, reviewer, calc, monitor, derivationEngine, treeBuilder)
 
     return &Engine{
         storage:			storage,
@@ -130,6 +159,11 @@ func NewEngine(
         // Milestone 4
         goalOrchestrator:		orchestrator,
     }
+}
+
+// GetOrchestrator exposes the goal system for API handlers (Milestone 5)
+func (e *Engine) GetOrchestrator() *goal.Orchestrator {
+    return e.goalOrchestrator
 }
 
 // RunDialogueCycle executes one full dialogue cycle

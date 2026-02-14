@@ -16,6 +16,106 @@ type LLMService interface {
     GenerateText(ctx context.Context, prompt string) (string, error)
 }
 
+// LLMCaller defines the interface for the LLM Queue Client (subset of llm.Client)
+type LLMCaller interface {
+    Call(ctx context.Context, url string, payload map[string]interface{}) ([]byte, error)
+}
+
+// QueueLLMAdapter connects the Goal System to the LLM Queue.
+type QueueLLMAdapter struct {
+    Client   LLMCaller
+    LLMURL   string
+    LLMModel string
+}
+
+// NewQueueLLMAdapter creates a new adapter.
+func NewQueueLLMAdapter(client LLMCaller, llmURL, llmModel string) *QueueLLMAdapter {
+    return &QueueLLMAdapter{
+        Client:   client,
+        LLMURL:   llmURL,
+        LLMModel: llmModel,
+    }
+}
+
+// GenerateJSON implements LLMService.
+func (q *QueueLLMAdapter) GenerateJSON(ctx context.Context, prompt string, target interface{}) error {
+    if q.Client == nil {
+        return fmt.Errorf("LLM client not configured")
+    }
+
+    // Construct OpenAI-compatible payload
+    payload := map[string]interface{}{
+        "model": q.LLMModel,
+        "messages": []map[string]string{
+            {"role": "system", "content": "You are a strategic AI assistant. Respond only with valid JSON."},
+            {"role": "user", "content": prompt},
+        },
+        "temperature": 0.7,
+    }
+
+    respBytes, err := q.Client.Call(ctx, q.LLMURL, payload)
+    if err != nil {
+        return fmt.Errorf("LLM call failed: %w", err)
+    }
+
+    // Parse OpenAI response structure
+    var llmResp struct {
+        Choices []struct {
+            Message struct {
+                Content string `json:"content"`
+            } `json:"message"`
+        } `json:"choices"`
+    }
+
+    if err := json.Unmarshal(respBytes, &llmResp); err != nil {
+        return fmt.Errorf("failed to parse LLM response: %w", err)
+    }
+
+    if len(llmResp.Choices) == 0 {
+        return fmt.Errorf("no choices returned from LLM")
+    }
+
+    content := llmResp.Choices[0].Message.Content
+    return parseStructuredResponse(content, target)
+}
+
+// GenerateText implements LLMService.
+func (q *QueueLLMAdapter) GenerateText(ctx context.Context, prompt string) (string, error) {
+    if q.Client == nil {
+        return "", fmt.Errorf("LLM client not configured")
+    }
+
+    payload := map[string]interface{}{
+        "model": q.LLMModel,
+        "messages": []map[string]string{
+            {"role": "user", "content": prompt},
+        },
+    }
+
+    respBytes, err := q.Client.Call(ctx, q.LLMURL, payload)
+    if err != nil {
+        return "", err
+    }
+
+    var llmResp struct {
+        Choices []struct {
+            Message struct {
+                Content string `json:"content"`
+            } `json:"message"`
+        } `json:"choices"`
+    }
+
+    if err := json.Unmarshal(respBytes, &llmResp); err != nil {
+        return "", err
+    }
+
+    if len(llmResp.Choices) == 0 {
+        return "", fmt.Errorf("no choices returned")
+    }
+
+    return llmResp.Choices[0].Message.Content, nil
+}
+
 // DefaultLLMAdapter is a placeholder implementation if none is provided.
 // In production, this will be an adapter connecting to dialogue.LLMClient.
 type DefaultLLMAdapter struct {
