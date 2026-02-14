@@ -2,8 +2,10 @@ package goal
 
 import (
     "context"
+    "fmt"
     "log"
     "sync"
+    "time"
 )
 
 // ActionExecutor is the interface bridging the Goal system to the Tool system in the Dialogue Engine
@@ -30,6 +32,9 @@ type Orchestrator struct {
     // Intelligence (Milestone 3)
     DerivationEngine *DerivationEngine
     TreeBuilder      *TreeBuilder
+
+    // Milestone 5: Edge Cases
+    EdgeCaseHandler  *EdgeCaseHandler
 
     // Bridges
     Executor ActionExecutor // Implemented by Dialogue Engine
@@ -62,6 +67,7 @@ func NewOrchestrator(
         Archive:          NewArchiveManager(repo),
         DerivationEngine: derivationEngine,
         TreeBuilder:      treeBuilder,
+        EdgeCaseHandler:  NewEdgeCaseHandler(repo),
     }
 }
 
@@ -303,12 +309,21 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal) error {
         return nil
     }
 
+    // Milestone 5: Strategy Loop Prevention
+    if o.EdgeCaseHandler != nil {
+        if o.EdgeCaseHandler.HandleStrategyLoop(ctx, g, activeSG.Description) {
+            log.Printf("[Orchestrator] Skipping sub-goal due to strategy loop: %s", activeSG.Description)
+            activeSG.Status = SubGoalSkipped
+            activeSG.FailureReason = "Strategy loop detected"
+            o.Repo.Store(ctx, g)
+            return nil
+        }
+    }
+
     // Execute via Tool Bridge
     if o.Executor != nil {
         activeSG.Status = SubGoalActive
         log.Printf("[Orchestrator] Executing SubGoal: %s", activeSG.Description)
-        
-        // Simplified: Mapping description to tool. In reality, LLM decides tool.
         // Here we just use a generic tool call for demonstration.
         // Tool is determined by subgoal metadata or LLM.
         toolName := "search" // Default fallback
@@ -323,6 +338,16 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal) error {
         if err != nil {
             activeSG.Status = SubGoalFailed
             activeSG.FailureReason = err.Error()
+            
+            // Milestone 5: Handle Sub-Goal Failure
+            if o.EdgeCaseHandler != nil {
+                outcome := o.EdgeCaseHandler.HandleSubGoalFailure(ctx, activeSG, g)
+                if outcome == "CRITICAL_FAILURE" {
+                    log.Printf("[Orchestrator] Critical sub-goal failure detected. Forcing review.")
+                    // Force state transition to REVIEWING to let ReviewProcessor decide fate
+                    o.StateManager.Transition(g, StateReviewing)
+                }
+            }
         } else {
             activeSG.Status = SubGoalCompleted
             activeSG.Outcome = result
