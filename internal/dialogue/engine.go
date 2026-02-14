@@ -94,15 +94,18 @@ func NewEngine(
     // Wire up the Goal Subsystem
     
     // 1. LLM Adapter (Milestone 3 Integration)
-    // We cast the llmClient (interface{}) to the goal.LLMCaller interface
-    // Note: llmClient must satisfy the Call(ctx, url, payload) method.
+    // We assert that llmClient implements the LLMCaller interface required by the adapter.
     var llmAdapter goal.LLMService
     if llmClient != nil {
-        // Use type assertion to check if it implements the Call method
-        // Since we can't import llm package here easily, we rely on the adapter logic
-        adapter := goal.NewQueueLLMAdapter(llmClient, llmURL, llmModel)
-        llmAdapter = adapter
-        log.Printf("[Engine] Goal System connected to LLM Queue")
+        // Type assertion: convert interface{} to goal.LLMCaller
+        caller, ok := llmClient.(goal.LLMCaller)
+        if !ok {
+            log.Printf("[Engine] WARNING: llmClient does not implement goal.LLMCaller. Goal System cannot use LLM.")
+        } else {
+            adapter := goal.NewQueueLLMAdapter(caller, llmURL, llmModel)
+            llmAdapter = adapter
+            log.Printf("[Engine] Goal System connected to LLM Queue")
+        }
     } else {
         log.Printf("[Engine] WARNING: Goal System has no LLM connection")
     }
