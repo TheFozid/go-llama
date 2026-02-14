@@ -1,5 +1,11 @@
 package goal
 
+import (
+    "context"
+    "fmt"
+    "log"
+)
+
 // TimeScoreCalculator estimates the effort units (time score) for a goal.
 // Phase 2 Implementation: Uses heuristic calculations.
 type TimeScoreCalculator struct {
