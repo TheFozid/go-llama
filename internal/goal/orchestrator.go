@@ -2,10 +2,8 @@ package goal
 
 import (
     "context"
-    "fmt"
     "log"
     "sync"
-    "time"
 )
 
 // ActionExecutor is the interface bridging the Goal system to the Tool system in the Dialogue Engine
