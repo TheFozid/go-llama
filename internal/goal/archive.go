@@ -1,16 +1,12 @@
 package goal
 
-import (
-    "go-llama/internal/memory"
-)
-
 // ArchiveManager handles archiving and revival logic
 type ArchiveManager struct {
-    Repo *memory.GoalRepository
+    Repo GoalRepository
 }
 
 // NewArchiveManager creates a new archive manager
-func NewArchiveManager(repo *memory.GoalRepository) *ArchiveManager {
+func NewArchiveManager(repo GoalRepository) *ArchiveManager {
     return &ArchiveManager{Repo: repo}
 }
 

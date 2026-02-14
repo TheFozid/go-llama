@@ -5,8 +5,6 @@ import (
     "log"
     "sync"
     "time"
-
-    "go-llama/internal/memory"
 )
 
 // ActionExecutor is the interface bridging the Goal system to the Tool system in the Dialogue Engine
@@ -19,8 +17,8 @@ type Orchestrator struct {
     mu sync.Mutex
 
     // Components
-    Repo         *memory.GoalRepository
-    SkillRepo    *memory.SkillRepository
+    Repo         GoalRepository
+    SkillRepo    SkillRepository
     Factory      *Factory
     StateManager *StateManager
     Validator    *ValidationEngine
@@ -36,8 +34,8 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new goal orchestrator
 func NewOrchestrator(
-    repo *memory.GoalRepository,
-    skillRepo *memory.SkillRepository,
+    repo GoalRepository,
+    skillRepo SkillRepository,
     factory *Factory,
     stateManager *StateManager,
     validator *ValidationEngine,
