@@ -6,24 +6,22 @@ import (
     "fmt"
     "log"
     "strings"
-    "time"
-
-    "go-llama/internal/memory"
 )
 
 // DerivationEngine analyzes context to propose new goals.
 type DerivationEngine struct {
-    llm     LLMService
-    storage *memory.Storage
-    factory *GoalFactory
+    llm      LLMService
+    searcher MemorySearcher // Changed from concrete *memory.Storage
+    embedder Embedder       // Changed from concrete *memory.Embedder
+    factory  *GoalFactory
 }
 
-// NewDerivationEngine creates a new derivation engine.
-func NewDerivationEngine(llm LLMService, storage *memory.Storage, factory *GoalFactory) *DerivationEngine {
+func NewDerivationEngine(llm LLMService, searcher MemorySearcher, embedder Embedder, factory *GoalFactory) *DerivationEngine {
     return &DerivationEngine{
-        llm:     llm,
-        storage: storage,
-        factory: factory,
+        llm:      llm,
+        searcher: searcher,
+        embedder: embedder,
+        factory:  factory,
     }
 }
 
@@ -91,36 +89,29 @@ func NewDerivationEngine(llm LLMService, storage *memory.Storage, embedder *memo
 func (d *DerivationEngine) AnalyzeMemories(ctx context.Context, limit int) (*DerivationResult, error) {
     log.Printf("[Derivation] Analyzing recent memories for goal derivation...")
 
-    // 1. Embed a generic query to fetch relevant context
+    // 1. Define search context
     queryText := "recent reflections learning insights strategies knowledge gaps"
-    embedding, err := d.embedder.Embed(ctx, queryText)
-    if err != nil {
-        return nil, fmt.Errorf("failed to embed derivation query: %w", err)
-    }
 
-    // 2. Search for relevant memories
-    query := memory.RetrievalQuery{
-        Limit:             limit,
-        MinScore:          0.5, // Reasonable threshold
-        IncludeCollective: true,
-        IncludePersonal:   false, // Focus on system-level insights for AI goals
-        ConceptTags:       []string{"reflection", "learning", "strategy", "insight"},
-    }
-
-    results, err := d.storage.Search(ctx, query, embedding)
+    // 2. Use the interface to search
+    contents, err := d.searcher.SearchRelevant(ctx, queryText, limit)
     if err != nil {
         return nil, fmt.Errorf("memory search failed: %w", err)
     }
 
-    if len(results) == 0 {
+    if len(contents) == 0 {
         log.Printf("[Derivation] No relevant memories found.")
         return &DerivationResult{}, nil
     }
 
     // 3. Construct Prompt
     var contextBuilder strings.Builder
-    for _, res := range results {
-        contextBuilder.WriteString(fmt.Sprintf("- [%s] %s\n", res.Memory.CreatedAt.Format("2006-01-02"), res.Memory.Content))
+    for _, content := range contents {
+        // Clean content for prompt
+        cleanContent := strings.ReplaceAll(content, "\n", " ")
+        if len(cleanContent) > 300 {
+            cleanContent = cleanContent[:300] + "..."
+        }
+        contextBuilder.WriteString(fmt.Sprintf("- %s\n", cleanContent))
     }
 
     prompt := fmt.Sprintf(`Analyze the following recent system reflections and memories. Identify potential new goals for the system to pursue.
