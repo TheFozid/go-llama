@@ -141,14 +141,17 @@ skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills", adapter)
     orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, selector, reviewer, calc, monitor, derivationEngine, treeBuilder, adapter)
     
     // Post-Initialization Wiring
-// Set available tools from registry
-if toolRegistry != nil {
-    // IMPORTANT: We must pass actual tool names for Viability Validation to work.
-    // Since ContextualRegistry API is not confirmed, we list known default tools 
-    // to prevent validation from archiving everything as MISSING_TOOLS.
-    knownTools := []string{"search", "browser", "execute_bash", "memory_recall", "simulate"}
-    orchestrator.SetAvailableTools(knownTools) 
-}
+    // Set available tools from registry dynamically
+    if toolRegistry != nil {
+        // Access the underlying Registry via GetRegistry() to retrieve the tool list
+        toolList := toolRegistry.GetRegistry().List()
+        availableTools := make([]string, 0, len(toolList))
+        for name := range toolList {
+            availableTools = append(availableTools, name)
+        }
+        orchestrator.SetAvailableTools(availableTools)
+        log.Printf("[Engine] Loaded %d tools for Goal Validation: %v", len(availableTools), availableTools)
+    }
     
     // Set embedder for Orchestrator (used in semantic operations if needed directly)
     orchestrator.SetEmbedder(adapter)

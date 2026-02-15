@@ -320,8 +320,16 @@ func (o *Orchestrator) applyPriorityMaintenance(ctx context.Context, queued []*G
 // Refactored to accept queued goals for review logic
 func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal, queued []*Goal) error {
     // 1. Check Review Triggers (Time or Stagnation)
-    // Simplification: Check if stagnation detected
-    o.Monitor.CalculateProgressPercentage(g)
+    // Calculate progress and update stagnation tracking
+    previousProgress := g.ProgressPercentage
+    currentProgress := o.Monitor.CalculateProgressPercentage(g)
+    
+    // Update stagnation counter based on progress changes
+    if currentProgress > previousProgress {
+        o.Monitor.ResetStagnation(g)
+    } else {
+        o.Monitor.IncrementStagnation(g)
+    }
     
     needsReview := o.Monitor.DetectStagnation(g)
     
