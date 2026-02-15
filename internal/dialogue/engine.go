@@ -298,25 +298,24 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
     // MILESTONE 3/4 INTEGRATION: Persist reflection to Memory (Qdrant)
     // This ensures the Goal Derivation Engine can find this reflection via semantic search.
     if reflectionText != "" {
-        vector, err := e.embedder.Embed(ctx, reflectionText)
-        if err != nil {
-            log.Printf("[Engine] Warning: Failed to embed reflection for memory: %v", err)
+        metadata := map[string]interface{}{
+            "type":        "reflection",
+            "cycle_id":    state.CycleCount, // FIXED: Use state.CycleCount
+            "source":      "autonomous_cycle",
+        }
+        
+        // Construct the Memory object expected by the Storage interface
+        mem := &memory.Memory{
+            Content:  reflectionText,
+            Metadata: metadata,
+        }
+        
+        // We assume Storage.Store handles embedding internally or accepts the object as is.
+        // This replaces the incorrect "Store(ctx, string, vector, map)" call.
+        if err := e.storage.Store(ctx, mem); err != nil {
+            log.Printf("[Engine] Warning: Failed to store reflection in memory: %v", err)
         } else {
-            // Using the storage interface to persist the thought.
-            // We associate it with the cycle ID for traceability.
-            metadata := map[string]interface{}{
-                "type":        "reflection",
-                "cycle_id":    cycleID,
-                "source":      "autonomous_cycle",
-            }
-            
-            // We use the Store method available on the Storage struct.
-            // Note: We pass the text and vector. Storage implementation handles the rest.
-            if err := e.storage.Store(ctx, reflectionText, vector, metadata); err != nil {
-                 log.Printf("[Engine] Warning: Failed to store reflection in memory: %v", err)
-            } else {
-                 log.Printf("[Engine] Persisted reflection to memory for Derivation Engine.")
-            }
+            log.Printf("[Engine] Persisted reflection to memory for Derivation Engine.")
         }
     }
     
