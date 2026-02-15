@@ -125,7 +125,7 @@ func (r *GoalRepository) Store(ctx context.Context, g *goal.Goal) error {
     }
 
     // Generate embedding for the goal description
-    embedding, err := repo.embedder.Embed(ctx, g.Description)
+    embedding, err := r.embedder.Embed(ctx, g.Description)
     if err != nil {
         return fmt.Errorf("failed to embed goal description: %w", err)
     }
