@@ -37,6 +37,12 @@ Instructions:
 2. If a step is complex, break it into 2-3 detailed tasks (Tertiary Goals).
 3. Assign a hierarchical ID to each (1, 1.1, 1.1.1).
 4. Estimate effort for each: SIMPLE, MEDIUM, COMPLEX.
+5. **Crucial**: Determine the best Action Type for each step:
+   - RESEARCH: Needs web search or information retrieval.
+   - PRACTICE: Requires simulation or self-training.
+   - EXECUTE_TOOL: Needs a specific tool execution (specify tool name).
+   - REFLECT: Needs internal analysis.
+   - CREATE: Needs generating content or code.
 
 Output JSON format:
 {
@@ -46,6 +52,8 @@ Output JSON format:
       "title": "...",
       "description": "...",
       "effort": "MEDIUM",
+      "action_type": "RESEARCH",
+      "tool_name": "search",
       "dependencies": [],
       "sub_steps": [
         {
@@ -53,6 +61,8 @@ Output JSON format:
           "title": "...",
           "description": "...",
           "effort": "SIMPLE",
+          "action_type": "EXECUTE_TOOL",
+          "tool_name": "browser",
           "dependencies": ["1"]
         }
       ]
@@ -66,12 +76,16 @@ Output JSON format:
             Title       string `json:"title"`
             Description string `json:"description"`
             Effort      string `json:"effort"`
+            ActionType  string `json:"action_type"`
+            ToolName    string `json:"tool_name"`
             Dependencies []string `json:"dependencies"`
             SubSteps    []struct {
                 ID          string `json:"id"`
                 Title       string `json:"title"`
                 Description string `json:"description"`
                 Effort      string `json:"effort"`
+                ActionType  string `json:"action_type"`
+                ToolName    string `json:"tool_name"`
                 Dependencies []string `json:"dependencies"`
             } `json:"sub_steps"`
         } `json:"plan"`
@@ -91,6 +105,8 @@ Output JSON format:
             Status:          SubGoalPending,
             Dependencies:    step.Dependencies,
             EstimatedEffort: step.Effort,
+            ActionType:      ActionType(step.ActionType),
+            ToolName:        step.ToolName,
         }
         subGoals = append(subGoals, sg)
 
@@ -102,6 +118,8 @@ Output JSON format:
                 Status:          SubGoalPending,
                 Dependencies:    sub.Dependencies,
                 EstimatedEffort: sub.Effort,
+                ActionType:      ActionType(sub.ActionType),
+                ToolName:        sub.ToolName,
             }
             subGoals = append(subGoals, ssg)
         }

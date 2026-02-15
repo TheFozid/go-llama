@@ -148,6 +148,10 @@ type SubGoal struct {
     LLMCallsEstimate  int           `json:"llm_calls_estimate"`
     ToolCallsEstimate int           `json:"tool_calls_estimate"`
     TimeScoreEstimate int           `json:"time_score_estimate"`
+    
+    // Intelligence-driven execution fields
+    ActionType        ActionType    `json:"action_type"` // RESEARCH, PRACTICE, EXECUTE_TOOL, etc.
+    ToolName          string        `json:"tool_name"`   // Specific tool to use, e.g., "search", "browser"
 }
 
 // Skill represents an acquired capability
@@ -170,6 +174,60 @@ type Skill struct {
 type MetricDataPoint struct {
     Timestamp time.Time         `json:"timestamp"`
     Values    map[string]interface{} `json:"values"`
+}
+
+// ActionType defines the category of action required for a sub-goal
+type ActionType string
+
+const (
+    ActionResearch    ActionType = "RESEARCH"
+    ActionPractice    ActionType = "PRACTICE"
+    ActionLearn       ActionType = "LEARN"
+    ActionCreate      ActionType = "CREATE"
+    ActionReflect     ActionType = "REFLECT"
+    ActionPlan        ActionType = "PLAN"
+    ActionMeasure     ActionType = "MEASURE"
+    ActionExecuteTool ActionType = "EXECUTE_TOOL"
+)
+
+// ActionResult captures the outcome of a sub-goal execution
+type ActionResult struct {
+    SubGoalID   string    `json:"sub_goal_id"`
+    Success     bool      `json:"success"`
+    Output      string    `json:"output"`
+    Error       string    `json:"error,omitempty"`
+    Duration    time.Duration `json:"duration"`
+    SkillsUsed  []string  `json:"skills_used"`
+    ToolUsed    string    `json:"tool_used"`
+    Timestamp   time.Time `json:"timestamp"`
+}
+
+// Simulation represents a practice environment scenario (MDD 14.2)
+type Simulation struct {
+    ID                 string                 `json:"id"`
+    ScenarioDescription string                `json:"scenario_description"`
+    Objective          string                 `json:"objective"`
+    SuccessCriteria    string                 `json:"success_criteria"`
+    Participants       []SimulationParticipant `json:"participants"`
+    ConversationLog    []string               `json:"conversation_log"`
+    ObserverNotes      []string               `json:"observer_notes"`
+    OutcomeAssessment  *SimulationOutcome     `json:"outcome_assessment,omitempty"`
+}
+
+// SimulationParticipant defines a role in a simulation
+type SimulationParticipant struct {
+    PersonalityID string   `json:"personality_id"`
+    Role          string   `json:"role"`
+    SystemPrompt  string   `json:"system_prompt"`
+    Traits        []string `json:"traits"`
+}
+
+// SimulationOutcome captures the result of a practice run
+type SimulationOutcome struct {
+    Success      bool    `json:"success"`
+    Score        float64 `json:"score"`
+    Feedback     string  `json:"feedback"`
+    Learnings    []string `json:"learnings"`
 }
 
 // PlanRecord stores history of plan changes
