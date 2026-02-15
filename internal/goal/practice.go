@@ -1,5 +1,10 @@
 package goal
 
+import (
+	"fmt"
+	"context"
+)
+
 // PracticeEnvironment manages self-directed simulations
 type PracticeEnvironment struct {
     // Future: LLM Client for generating personalities

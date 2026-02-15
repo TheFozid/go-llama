@@ -5,6 +5,7 @@ package goal
 import (
     "strings"
     "math"
+	"log"
 	"context"
 )
 
