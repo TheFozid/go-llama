@@ -121,8 +121,24 @@ skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills", adapter)
     selector := goal.NewGoalSelector(calc)
     monitor := goal.NewProgressMonitor() 
     reviewer := goal.NewReviewProcessor(selector, calc, monitor)
-// Validator is now created inside Orchestrator using the passed embedder
-orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, selector, reviewer, calc, monitor, derivationEngine, treeBuilder, adapter)
+    // validator := goal.NewValidationEngine() // REMOVED: Created inside Orchestrator
+
+    // Initialize Intelligence Components (Milestone 3)
+    // We use the package-level memorySearcherAdapter struct defined at the bottom of this file.
+    searcherAdapter := &memorySearcherAdapter{st: storage, emb: embedder}
+    
+    var derivationEngine *goal.DerivationEngine
+    var treeBuilder *goal.TreeBuilder
+    
+    // Connect Intelligence components if LLM is available
+    if llmAdapter != nil {
+        treeBuilder = goal.NewTreeBuilder(llmAdapter)
+        // Connect Derivation Engine with LLM, Searcher, and Embedder
+        derivationEngine = goal.NewDerivationEngine(llmAdapter, searcherAdapter, adapter)
+    }
+    
+    // Orchestrator initialization (injecting embedder for validation)
+    orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, selector, reviewer, calc, monitor, derivationEngine, treeBuilder, adapter)
     
     // Post-Initialization Wiring
 // Set available tools from registry
