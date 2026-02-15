@@ -227,7 +227,7 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context) error {
             }
             o.StateManager.Transition(g, StateArchived)
             g.ArchiveReason = reason
-            o.Logger.LogGoalDecision("VALIDATION_FAILED", reason, []string{g.ID})
+            o.Logger.LogGoalDecision("VALIDATION_FAILED", string(reason), []string{g.ID})
         }
         o.Repo.Store(ctx, g)
     }
