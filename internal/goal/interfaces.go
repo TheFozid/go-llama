@@ -20,6 +20,8 @@ type GoalRepository interface {
     Store(ctx context.Context, g *Goal) error
     GetByState(ctx context.Context, state GoalState) ([]*Goal, error)
     Get(ctx context.Context, id string) (*Goal, error)
+    // Added for ValidationEngine optimization
+    SearchSimilar(ctx context.Context, embedding []float32, limit int) ([]*Goal, error)
 }
 
 // SkillRepository defines the interface for skill persistence operations.

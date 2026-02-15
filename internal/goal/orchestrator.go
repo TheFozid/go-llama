@@ -81,8 +81,8 @@ func NewOrchestrator(
         logger.LogStateTransition(goalID, from, to, "Lifecycle Event")
     })
 
-    // Initialize ValidationEngine with Embedder to enable semantic duplicate detection
-    validator := NewValidationEngine(embedder)
+    // Initialize ValidationEngine with Embedder and Repo to enable semantic duplicate detection
+    validator := NewValidationEngine(embedder, repo)
 
     return &Orchestrator{
         Repo:             repo,
