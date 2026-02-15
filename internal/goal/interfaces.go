@@ -28,9 +28,3 @@ type SkillRepository interface {
     Store(ctx context.Context, s *Skill) error
     GetAll(ctx context.Context) ([]*Skill, error)
 }
-
-// LLMService defines the interface for LLM interactions (used by Intelligence components).
-type LLMService interface {
-    GenerateResponse(ctx context.Context, prompt string) (string, error)
-    GenerateStructuredResponse(ctx context.Context, prompt string, schema interface{}) (interface{}, error)
-}
