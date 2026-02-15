@@ -31,8 +31,9 @@ type Orchestrator struct {
     DerivationEngine *DerivationEngine
     TreeBuilder      *TreeBuilder
 
-    // Milestone 5: Edge Cases
+    // Milestone 5: Edge Cases & Logging
     EdgeCaseHandler  *EdgeCaseHandler
+    Logger           *GoalSystemLogger
 
     // Bridges
     Executor ActionExecutor // Implemented by Dialogue Engine
@@ -52,6 +53,15 @@ func NewOrchestrator(
     derivationEngine *DerivationEngine,
     treeBuilder *TreeBuilder,
 ) *Orchestrator {
+    // Initialize Logger (Step 23)
+    logger := NewGoalSystemLogger()
+
+    // Register Logger as a listener for State Transitions
+    // This automatically logs any transition triggered by StateManager
+    stateManager.AddListener(func(goalID string, from, to GoalState, ts time.Time) {
+        logger.LogStateTransition(goalID, from, to, "Lifecycle Event")
+    })
+
     return &Orchestrator{
         Repo:             repo,
         SkillRepo:        skillRepo,
@@ -66,6 +76,7 @@ func NewOrchestrator(
         DerivationEngine: derivationEngine,
         TreeBuilder:      treeBuilder,
         EdgeCaseHandler:  NewEdgeCaseHandler(repo),
+        Logger:           logger,
     }
 }
 
@@ -131,18 +142,17 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
     o.mu.Lock()
     defer o.mu.Unlock()
 
-    log.Println("[Orchestrator] Starting Goal Cycle")
+    // Log Cycle Start
+    o.Logger.LogGoalDecision("CYCLE_START", "Initiating maintenance and execution", nil)
 
     // 1. Process Proposals (Derivation would feed this in Phase 3+)
-    // For now, we assume goals are created externally or via DerivationEngine hooked in main
-    // We scan for PROPOSED goals and validate them.
     if err := o.processValidationQueue(ctx); err != nil {
-        log.Printf("[Orchestrator] ERROR in validation phase: %v", err)
+        o.Logger.LogError("ValidationPhase", err, nil)
     }
 
     // 2. Priority Maintenance (Decay)
     if err := o.applyPriorityMaintenance(ctx); err != nil {
-        log.Printf("[Orchestrator] ERROR in maintenance phase: %v", err)
+        o.Logger.LogError("MaintenancePhase", err, nil)
     }
 
     // 3. Goal Selection
@@ -163,13 +173,13 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
         if len(queuedGoals) > 0 {
             selected := o.Selector.SelectNextGoal(queuedGoals)
             if selected != nil {
-                if err := o.StateManager.Transition(selected, StateActive); err == nil {
-                    if err := o.Repo.Store(ctx, selected); err != nil {
-                        log.Printf("[Orchestrator] ERROR activating goal: %v", err)
-                    } else {
-                        activeGoal = selected
-                        log.Printf("[Orchestrator] Activated goal: %s", selected.Description)
-                    }
+                    if err := o.StateManager.Transition(selected, StateActive); err == nil {
+                        if err := o.Repo.Store(ctx, selected); err != nil {
+                            o.Logger.LogError("ActivateGoalStore", err, map[string]interface{}{"goal_id": selected.ID})
+                        } else {
+                            activeGoal = selected
+                            o.Logger.LogGoalDecision("GOAL_ACTIVATED", "Selected from queue", []string{selected.ID})
+                        }
                 }
             }
         }
@@ -178,13 +188,13 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
     // 4. Active Goal Execution
     if activeGoal != nil {
         if err := o.executeActiveGoal(ctx, activeGoal); err != nil {
-            log.Printf("[Orchestrator] ERROR executing goal %s: %v", activeGoal.ID, err)
+            o.Logger.LogError("ExecuteActiveGoal", err, map[string]interface{}{"goal_id": activeGoal.ID})
         }
     }
 
     // 5. Skill Maintenance
     if err := o.maintainSkills(ctx); err != nil {
-        log.Printf("[Orchestrator] ERROR in skill maintenance: %v", err)
+        o.Logger.LogError("SkillMaintenance", err, nil)
     }
 
     return nil
@@ -207,7 +217,7 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context) error {
         
         if res.IsValid {
             o.StateManager.Transition(g, StateQueued)
-            log.Printf("[Orchestrator] Validated goal -> QUEUED: %s", g.Description)
+            // Note: State transition is logged automatically by the listener set in NewOrchestrator
         } else {
             // Handle Archive logic
             reason := ArchiveValidationFailed
@@ -216,7 +226,7 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context) error {
             }
             o.StateManager.Transition(g, StateArchived)
             g.ArchiveReason = reason
-            log.Printf("[Orchestrator] Archived goal (%s): %s", reason, g.Description)
+            o.Logger.LogGoalDecision("VALIDATION_FAILED", reason, []string{g.ID})
         }
         o.Repo.Store(ctx, g)
     }
@@ -230,12 +240,19 @@ func (o *Orchestrator) applyPriorityMaintenance(ctx context.Context) error {
         return err
     }
     for _, g := range queued {
+        oldP := g.CurrentPriority
         // Applying 1 cycle decay for this tick
         o.Calculator.ApplyDecay(g, 1)
+        
+        // Log priority change if it occurred
+        if oldP != g.CurrentPriority {
+             o.Logger.LogPriorityChange(g.ID, oldP, g.CurrentPriority, "Cycle Decay")
+        }
+
         if g.CurrentPriority < 10 {
             o.StateManager.Transition(g, StateArchived)
             g.ArchiveReason = ArchivePriorityDecay
-            log.Printf("[Orchestrator] Archived goal due to decay: %s", g.Description)
+            // State transition logged by listener
         }
         o.Repo.Store(ctx, g)
     }
@@ -250,14 +267,13 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal) error {
     needsReview := o.Monitor.DetectStagnation(g)
     
     if needsReview {
-        log.Printf("[Orchestrator] Goal entered REVIEWING: %s", g.Description)
         o.StateManager.Transition(g, StateReviewing)
         o.Repo.Store(ctx, g)
         
         queued, _ := o.Repo.GetByState(ctx, StateQueued)
         outcome := o.Reviewer.ExecuteReview(g, queued)
         
-        log.Printf("[Orchestrator] Review Outcome: %s (Reason: %s)", outcome.Decision, outcome.Reason)
+        o.Logger.LogReviewOutcome(g.ID, outcome.Decision, outcome.Reason)
         
         switch outcome.Decision {
         case "COMPLETE":
@@ -329,19 +345,22 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal) error {
             // Heuristic logic to pick tool could go here
         }
 
+        start := time.Now()
         result, err := o.Executor.ExecuteToolAction(ctx, toolName, map[string]interface{}{
             "query": activeSG.Description,
         })
+        duration := time.Since(start)
 
         if err != nil {
             activeSG.Status = SubGoalFailed
             activeSG.FailureReason = err.Error()
+            o.Logger.LogSubGoalExecution(activeSG.ID, "FAILED: "+err.Error(), duration)
             
             // Milestone 5: Handle Sub-Goal Failure
             if o.EdgeCaseHandler != nil {
                 outcome := o.EdgeCaseHandler.HandleSubGoalFailure(ctx, activeSG, g)
                 if outcome == "CRITICAL_FAILURE" {
-                    log.Printf("[Orchestrator] Critical sub-goal failure detected. Forcing review.")
+                    o.Logger.LogGoalDecision("CRITICAL_FAILURE", "SubGoal failure critical, forcing review", []string{g.ID, activeSG.ID})
                     // Force state transition to REVIEWING to let ReviewProcessor decide fate
                     o.StateManager.Transition(g, StateReviewing)
                 }
@@ -349,6 +368,7 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal) error {
         } else {
             activeSG.Status = SubGoalCompleted
             activeSG.Outcome = result
+            o.Logger.LogSubGoalExecution(activeSG.ID, "SUCCESS", duration)
         }
         
         // Save progress
