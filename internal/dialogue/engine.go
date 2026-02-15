@@ -300,22 +300,32 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
     if reflectionText != "" {
         metadata := map[string]interface{}{
             "type":        "reflection",
-            "cycle_id":    state.CycleCount, // FIXED: Use state.CycleCount
+            "cycle_id":    state.CycleCount,
             "source":      "autonomous_cycle",
         }
         
-        // Construct the Memory object expected by the Storage interface
-        mem := &memory.Memory{
-            Content:  reflectionText,
-            Metadata: metadata,
-        }
-        
-        // We assume Storage.Store handles embedding internally or accepts the object as is.
-        // This replaces the incorrect "Store(ctx, string, vector, map)" call.
-        if err := e.storage.Store(ctx, mem); err != nil {
-            log.Printf("[Engine] Warning: Failed to store reflection in memory: %v", err)
+        // 1. Generate Embedding (Required by Storage.Store validation)
+        embedding, embErr := e.embedder.Embed(ctx, reflectionText)
+        if embErr != nil {
+             log.Printf("[Engine] ERROR: Failed to embed reflection, skipping storage: %v", embErr)
         } else {
-            log.Printf("[Engine] Persisted reflection to memory for Derivation Engine.")
+            // 2. Construct the Memory object with Embedding
+            mem := &memory.Memory{
+                Content:  reflectionText,
+                Metadata: metadata,
+                Embedding: embedding,
+                // Set required defaults for autonomous reflection
+                Tier: memory.TierRecent,
+                IsCollective: true, 
+                CreatedAt: time.Now(),
+                LastAccessedAt: time.Now(),
+            }
+            
+            if err := e.storage.Store(ctx, mem); err != nil {
+                log.Printf("[Engine] Warning: Failed to store reflection in memory: %v", err)
+            } else {
+                log.Printf("[Engine] Persisted reflection to memory for Derivation Engine.")
+            }
         }
     }
     

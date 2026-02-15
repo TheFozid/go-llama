@@ -263,3 +263,15 @@ func (r *GoalRepository) pointToGoalFromRetrieved(point *qdrant.RetrievedPoint) 
 
     return &g, nil
 }
+
+func boolPtr(b bool) *bool {
+    return &b
+}
+
+func uint32Ptr(u uint32) *uint32 {
+    return &u
+}
+
+func uint64Ptr(u uint64) *uint64 {
+    return &u
+}

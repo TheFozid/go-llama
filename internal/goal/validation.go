@@ -18,15 +18,16 @@ type ValidationResult struct {
 // ValidationEngine checks proposed goals for viability and relationships.
 type ValidationEngine struct {
     DuplicateSimilarityThreshold float64
-    embedder                     Embedder // Added for semantic logic
+    embedder                     Embedder
+    repo                         GoalRepository // Added
 }
 
-// NewValidationEngine creates a new validation engine.
-// CHANGE: Accept Embedder interface.
-func NewValidationEngine(embedder Embedder) *ValidationEngine {
+// Update constructor
+func NewValidationEngine(embedder Embedder, repo GoalRepository) *ValidationEngine {
     return &ValidationEngine{
-        DuplicateSimilarityThreshold: 0.90, // High similarity threshold
-        embedder:                     embedder,
+        DuplicateSimilarityThreshold: 0.90,
+        embedder: embedder,
+        repo: repo,
     }
 }
 
@@ -72,35 +73,74 @@ func (v *ValidationEngine) validateViability(g *Goal, availableTools []string) V
 }
 
 // validateDuplicate checks if a similar goal already exists using semantic similarity.
-// CHANGE: Replaced exact match with cosine similarity of embeddings.
+// OPTIMIZATION: Use GoalRepository.SearchSimilar for O(1) search instead of O(N) embedding.
 func (v *ValidationEngine) validateDuplicate(g *Goal, existingGoals []*Goal) ValidationResult {
-    if v.embedder == nil {
-        // Fallback to exact match if embedder missing (graceful degradation)
+    if v.repo == nil {
+        // Fallback to simple string match if repo not available
         return v.validateDuplicateExact(g, existingGoals)
     }
 
-    // Generate embedding for the proposed goal
-    ctx := context.Background() // Should pass context ideally, but fits current signature
+    ctx := context.Background()
+    
+    // 1. Generate embedding for the proposed goal
+    // Ideally, we embed once and reuse. Since repo.SearchSimilar handles the search,
+    // we need an embedder. 
+    // NOTE: GoalRepository has an embedder internally. We should rely on that, 
+    // but SearchSimilar requires the vector input.
+    // For now, we instantiate a temporary embedder or assume the repo has access.
+    // Since we changed the struct to remove `embedder`, we have a dependency issue.
+    // CORRECT LOGIC: The repository should expose SearchByText or we inject an embedder.
+    // Minimal fix: Inject Embedder AND Repo, or use Repo's internal embedder if exposed.
+    // Since Repo.Encoder is private, we must inject Embedder here too.
+    
+    // Reverting struct change: Keep Embedder in ValidationEngine.
+    // However, the main optimization is to use SearchSimilar.
+    
+    // Assuming we revert the struct to have embedder:
+    if v.embedder == nil { return v.validateDuplicateExact(g, existingGoals) }
+
     proposedVec, err := v.embedder.Embed(ctx, g.Description)
     if err != nil {
-        return ValidationResult{IsValid: true, Reason: "Embedding failed, skipping duplicate check"}
+        return ValidationResult{IsValid: true, Reason: "Embedding failed"}
     }
 
-    for _, eg := range existingGoals {
-        // In a real scenario, we would store the vector in the goal or search via Qdrant.
-        // Since existingGoals are passed in memory, we generate embeddings on the fly for comparison.
-        existingVec, err := v.embedder.Embed(ctx, eg.Description)
-        if err != nil {
-            continue
-        }
+    // Use Repository Search (Optimized)
+    matches, err := v.repo.SearchSimilar(ctx, proposedVec, 1)
+    if err != nil {
+        log.Printf("[Validation] SearchSimilar failed: %v. Falling back to local check.", err)
+        return v.validateDuplicateLocal(ctx, g, existingGoals, proposedVec)
+    }
 
-        similarity := cosineSimilarity(proposedVec, existingVec)
-        if similarity >= v.DuplicateSimilarityThreshold {
-            return ValidationResult{
+    if len(matches) > 0 {
+        // Qdrant returns similarity score. 
+        // Note: Qdrant score is distance/cosine. 
+        // We need to retrieve the score from the search result.
+        // SearchSimilar currently returns []*Goal. It should return scores too.
+        // Since SearchSimilar hides scores, we assume a match implies high similarity.
+        // We perform a manual check on the found match to be sure.
+        
+        match := matches[0]
+        // Verify similarity (Required because SearchSimilar might just return 'nearby')
+        matchVec, _ := v.embedder.Embed(ctx, match.Description)
+        if cosineSimilarity(proposedVec, matchVec) >= v.DuplicateSimilarityThreshold {
+             return ValidationResult{
                 IsValid: false,
-                Reason:  "DUPLICATE: Semantic match with " + eg.ID,
+                Reason:  "DUPLICATE: Semantic match with " + match.ID,
                 Action:  "MERGE",
             }
+        }
+    }
+    
+    return ValidationResult{IsValid: true}
+}
+
+// Helper for fallback
+func (v *ValidationEngine) validateDuplicateLocal(ctx context.Context, g *Goal, existingGoals []*Goal, proposedVec []float32) ValidationResult {
+     for _, eg := range existingGoals {
+        existingVec, err := v.embedder.Embed(ctx, eg.Description)
+        if err != nil { continue }
+        if cosineSimilarity(proposedVec, existingVec) >= v.DuplicateSimilarityThreshold {
+            return ValidationResult{IsValid: false, Reason: "DUPLICATE: Semantic match with " + eg.ID, Action: "MERGE"}
         }
     }
     return ValidationResult{IsValid: true}
