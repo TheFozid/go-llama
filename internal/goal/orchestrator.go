@@ -333,6 +333,38 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                 }
                 o.Repo.Store(ctx, g)
 
+            case "PARENT_DEMOTION":
+                // MDD 9.2: Proposed goal absorbs existing goal.
+                // Logic: The proposed goal is valid (IsValid=true), but an existing goal should be demoted.
+                // 1. Create the new goal (it's valid).
+                g.State = StateQueued
+                o.Repo.Store(ctx, g)
+                
+                // 2. Find the existing goal mentioned in the reason and demote it.
+                // Reason format: "PARENT_DEMOTION: Existing goal <ID> should become sub-goal"
+                parts := strings.Split(res.Reason, " ")
+                if len(parts) > 0 {
+                    existingID := parts[len(parts)-1]
+                    existingGoal, err := o.Repo.Get(ctx, existingID)
+                    if err == nil {
+                        // Demote existing goal to a sub-goal of the new goal
+                        newSub := SubGoal{
+                            ID:          fmt.Sprintf("%d", len(g.SubGoals)+1),
+                            Title:       existingGoal.Title,
+                            Description: existingGoal.Description,
+                            Status:      SubGoalPending,
+                        }
+                        g.SubGoals = append(g.SubGoals, newSub)
+                        
+                        // Archive the old goal (now absorbed)
+                        o.StateManager.Transition(existingGoal, StateArchived)
+                        existingGoal.ArchiveReason = ArchiveDuplicate // Absorbed
+                        o.Repo.Store(ctx, existingGoal)
+                        o.Repo.Store(ctx, g) // Update new parent
+                        o.Logger.LogGoalDecision("PARENT_DEMOTION", "Demoted "+existingID+" to sub-goal of "+g.ID, nil)
+                    }
+                }
+
             default: // "ARCHIVE" or other failures
                 reason := ArchiveValidationFailed
                 if strings.Contains(res.Reason, "MISSING_TOOLS") {
@@ -444,12 +476,15 @@ case "DEMOTE":
          return nil
     }
 
-    // Find next pending subgoal
+    // Find next pending subgoal whose dependencies are met
     var activeSG *SubGoal
     for i := range g.SubGoals {
         if g.SubGoals[i].Status == SubGoalPending {
-            activeSG = &g.SubGoals[i]
-            break
+            // Check dependencies
+            if o.areDependenciesMet(g, g.SubGoals[i].Dependencies) {
+                activeSG = &g.SubGoals[i]
+                break
+            }
         }
     }
 
@@ -524,6 +559,28 @@ if o.Executor != nil {
     }
 
     return nil
+}
+
+// areDependenciesMet checks if all prerequisite sub-goals are completed.
+func (o *Orchestrator) areDependenciesMet(g *Goal, dependencies []string) bool {
+    if len(dependencies) == 0 {
+        return true
+    }
+    
+    // Create a map of completed sub-goal IDs for fast lookup
+    completedMap := make(map[string]bool)
+    for _, sg := range g.SubGoals {
+        if sg.Status == SubGoalCompleted {
+            completedMap[sg.ID] = true
+        }
+    }
+    
+    for _, depID := range dependencies {
+        if !completedMap[depID] {
+            return false
+        }
+    }
+    return true
 }
 
 func (o *Orchestrator) maintainSkills(ctx context.Context) error {

@@ -161,11 +161,24 @@ func (v *ValidationEngine) validateDuplicateExact(g *Goal, existingGoals []*Goal
 func (v *ValidationEngine) validateSubGoalRelationship(g *Goal, existingGoals []*Goal) ValidationResult {
     desc := strings.ToLower(g.Description)
     for _, eg := range existingGoals {
-        if strings.Contains(strings.ToLower(eg.Description), desc) && len(eg.Description) > len(desc) {
+        existingDesc := strings.ToLower(eg.Description)
+        
+        // Check 1: Is the proposed goal a SUBSET of an existing goal? (Proposed is smaller)
+        if strings.Contains(existingDesc, desc) && len(existingDesc) > len(desc) {
             return ValidationResult{
                 IsValid: false,
                 Reason:  "SUB_GOAL: Is subset of existing goal " + eg.ID,
                 Action:  "SUBSUME",
+            }
+        }
+
+        // Check 2: Is the proposed goal a SUPERSET of an existing goal? (Proposed is larger)
+        // MDD 9.1 Parent Demotion: Existing goal should become sub-goal of proposed.
+        if strings.Contains(desc, existingDesc) && len(desc) > len(existingDesc) {
+            return ValidationResult{
+                IsValid: true, // The new goal is valid, but we need to trigger a side effect
+                Reason:  "PARENT_DEMOTION: Existing goal " + eg.ID + " should become sub-goal",
+                Action:  "PARENT_DEMOTION",
             }
         }
     }
