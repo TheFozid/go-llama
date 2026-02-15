@@ -285,7 +285,7 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
     thoughtCount++
     totalTokens += phaseTokens
     
-    // Save thought record
+    // Save thought record to state file
     e.stateManager.SaveThought(ctx, &ThoughtRecord{
         CycleID:	state.CycleCount,
         ThoughtNum:	thoughtCount,
@@ -295,9 +295,30 @@ func (e *Engine) runDialoguePhases(ctx context.Context, state *InternalState, me
         Timestamp:	time.Now(),
     })
 
-    // TODO: Connect Reflection output to Goal Derivation Engine (Milestone 3 Integration)
-    // For now, we assume DerivationEngine is called separately or the Orchestrator has it.
-    // In this integration, we are relying on the Orchestrator to drive the state.
+    // MILESTONE 3/4 INTEGRATION: Persist reflection to Memory (Qdrant)
+    // This ensures the Goal Derivation Engine can find this reflection via semantic search.
+    if reflectionText != "" {
+        vector, err := e.embedder.Embed(ctx, reflectionText)
+        if err != nil {
+            log.Printf("[Engine] Warning: Failed to embed reflection for memory: %v", err)
+        } else {
+            // Using the storage interface to persist the thought.
+            // We associate it with the cycle ID for traceability.
+            metadata := map[string]interface{}{
+                "type":        "reflection",
+                "cycle_id":    cycleID,
+                "source":      "autonomous_cycle",
+            }
+            
+            // We use the Store method available on the Storage struct.
+            // Note: We pass the text and vector. Storage implementation handles the rest.
+            if err := e.storage.Store(ctx, reflectionText, vector, metadata); err != nil {
+                 log.Printf("[Engine] Warning: Failed to store reflection in memory: %v", err)
+            } else {
+                 log.Printf("[Engine] Persisted reflection to memory for Derivation Engine.")
+            }
+        }
+    }
     
     _ = reasoning // Avoid unused variable error for now
     _ = principles

@@ -169,6 +169,26 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
     // Log Cycle Start
     o.Logger.LogGoalDecision("CYCLE_START", "Initiating maintenance and execution", nil)
 
+    // 0. Derivation Phase: Generate new proposals from recent memories
+    // Optimization: Run derivation periodically (e.g., every 5 cycles) to save resources
+    if o.DerivationEngine != nil && o.cycleCounter % 5 == 0 {
+        o.Logger.LogGoalDecision("DERIVATION_START", "Analyzing memories for new proposals", nil)
+        proposals, err := o.DerivationEngine.AnalyzeMemories(ctx, 5)
+        if err != nil {
+            o.Logger.LogError("Derivation", err, nil)
+        } else {
+            for _, pg := range proposals.Goals {
+                // Ensure valid state before storing
+                pg.State = StateProposed
+                if err := o.Repo.Store(ctx, pg); err != nil {
+                    o.Logger.LogError("StoreProposal", err, map[string]interface{}{"goal_id": pg.ID})
+                } else {
+                    o.Logger.LogGoalDecision("PROPOSAL_DERIVED", "Created new goal from memory", []string{pg.ID})
+                }
+            }
+        }
+    }
+
     // PERFORMANCE: Fetch all states once to minimize DB hits
     proposedGoals, err := o.Repo.GetByState(ctx, StateProposed)
     if err != nil {
@@ -274,10 +294,42 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                 o.Repo.Store(ctx, g)
 
             case "SUBSUME":
-                // MDD 9.2: Add as sub-goal. For now, we queue it and log suggestion.
-                // The TreeBuilder can absorb it during the execution phase.
-                o.Logger.LogGoalDecision("SUBSUME_SUGGESTION", res.Reason, nil)
-                o.StateManager.Transition(g, StateQueued)
+                // MDD 9.2: Add as sub-goal to existing parent.
+                // Parse Parent ID from Reason string ("SUB_GOAL: Is subset of existing goal <ID>")
+                parts := strings.Split(res.Reason, " ")
+                if len(parts) > 0 {
+                    parentID := parts[len(parts)-1]
+                    
+                    parentGoal, err := o.Repo.Get(ctx, parentID)
+                    if err != nil {
+                        o.Logger.LogError("SubsumeParentFetch", err, map[string]interface{}{"parent_id": parentID})
+                        // Fallback: If parent fetch fails, archive the proposal to avoid orphan goals
+                        o.StateManager.Transition(g, StateArchived)
+                        g.ArchiveReason = ArchiveValidationFailed
+                    } else {
+                        // Create new SubGoal struct
+                        newSubGoal := SubGoal{
+                            ID:          fmt.Sprintf("%d.%d", len(parentGoal.SubGoals)+1, 0),
+                            Title:       g.Title,
+                            Description: g.Description,
+                            Status:      SubGoalPending,
+                            // Inherit parent context
+                        }
+                        
+                        parentGoal.SubGoals = append(parentGoal.SubGoals, newSubGoal)
+                        
+                        // Save updated parent
+                        if err := o.Repo.Store(ctx, parentGoal); err != nil {
+                            o.Logger.LogError("SubsumeStore", err, nil)
+                        } else {
+                            o.Logger.LogGoalDecision("SUBSUME_SUCCESS", "Added as sub-goal to "+parentID, []string{g.ID})
+                        }
+                        
+                        // Archive the proposal so it doesn't clutter the queue
+                        o.StateManager.Transition(g, StateArchived)
+                        g.ArchiveReason = ArchiveDuplicate
+                    }
+                }
                 o.Repo.Store(ctx, g)
 
             default: // "ARCHIVE" or other failures
