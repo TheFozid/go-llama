@@ -2,7 +2,6 @@ package goal
 
 import (
     "time"
-	"context"
 )
 
 // GoalState defines the lifecycle state of a goal
