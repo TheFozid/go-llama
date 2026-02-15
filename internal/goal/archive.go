@@ -1,5 +1,9 @@
 package goal
 
+import (
+	"context"
+)
+
 // ArchiveManager handles the archival and revival of goals.
 type ArchiveManager struct {
     repo GoalRepository
