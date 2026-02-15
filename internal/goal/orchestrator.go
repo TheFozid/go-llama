@@ -63,22 +63,24 @@ func NewOrchestrator(
     skillRepo SkillRepository,
     factory *Factory,
     stateManager *StateManager,
-    validator *ValidationEngine,
     selector *GoalSelector,
     reviewer *ReviewProcessor,
     calc *Calculator,
     monitor *ProgressMonitor,
     derivationEngine *DerivationEngine,
     treeBuilder *TreeBuilder,
+    embedder Embedder, // ADDED: Embedder interface
 ) *Orchestrator {
     // Initialize Logger (Step 23)
     logger := NewGoalSystemLogger()
 
     // Register Logger as a listener for State Transitions
-    // This automatically logs any transition triggered by StateManager
     stateManager.AddListener(func(goalID string, from, to GoalState, ts time.Time) {
         logger.LogStateTransition(goalID, from, to, "Lifecycle Event")
     })
+
+    // Initialize ValidationEngine with Embedder to enable semantic duplicate detection
+    validator := NewValidationEngine(embedder)
 
     return &Orchestrator{
         Repo:             repo,
@@ -244,28 +246,50 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
 
 // Refactored to accept pre-fetched lists and tools to optimize DB access
 func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*Goal, existing []*Goal, availableTools []string) error {
-    // Use passed-in availableTools instead of empty slice
-
     for _, g := range proposed {
-        // 'existing' is now passed in, no DB call here
-        
         res := o.Validator.Validate(g, availableTools, existing)
         
         if res.IsValid {
             if err := o.StateManager.Transition(g, StateQueued); err == nil {
-                // Add to local list so we don't need to re-fetch immediately
                 existing = append(existing, g)
             }
+            o.Repo.Store(ctx, g)
         } else {
-            reason := ArchiveValidationFailed
-            if res.Action == "ARCHIVE" {
-                reason = ArchiveImpossible
+            // Handle specific validation actions
+            switch res.Action {
+            case "MERGE":
+                // Strengthen the existing goal
+                for _, eg := range existing {
+                    if strings.Contains(res.Reason, eg.ID) {
+                        o.Calculator.ApplyStrengthening(eg)
+                        o.Repo.Store(ctx, eg)
+                        o.Logger.LogGoalDecision("MERGE", "Strengthened existing goal: "+eg.ID, nil)
+                        break
+                    }
+                }
+                // Archive the new proposal as duplicate
+                o.StateManager.Transition(g, StateArchived)
+                g.ArchiveReason = ArchiveDuplicate
+                o.Repo.Store(ctx, g)
+
+            case "SUBSUME":
+                // MDD 9.2: Add as sub-goal. For now, we queue it and log suggestion.
+                // The TreeBuilder can absorb it during the execution phase.
+                o.Logger.LogGoalDecision("SUBSUME_SUGGESTION", res.Reason, nil)
+                o.StateManager.Transition(g, StateQueued)
+                o.Repo.Store(ctx, g)
+
+            default: // "ARCHIVE" or other failures
+                reason := ArchiveValidationFailed
+                if strings.Contains(res.Reason, "MISSING_TOOLS") {
+                    reason = ArchiveMissingTools
+                }
+                o.StateManager.Transition(g, StateArchived)
+                g.ArchiveReason = reason
+                o.Logger.LogGoalDecision("VALIDATION_FAILED", string(reason), []string{g.ID})
+                o.Repo.Store(ctx, g)
             }
-            o.StateManager.Transition(g, StateArchived)
-            g.ArchiveReason = reason
-            o.Logger.LogGoalDecision("VALIDATION_FAILED", string(reason), []string{g.ID})
         }
-        o.Repo.Store(ctx, g)
     }
     return nil
 }
@@ -387,15 +411,25 @@ case "DEMOTE":
     }
 
     // Execute via Tool Bridge
-    if o.Executor != nil {
-        activeSG.Status = SubGoalActive
-        log.Printf("[Orchestrator] Executing SubGoal: %s", activeSG.Description)
-        // Here we just use a generic tool call for demonstration.
-        // Tool is determined by subgoal metadata or LLM.
-        toolName := "search" // Default fallback
-        if activeSG.ToolCallsEstimate > 0 {
-            // Heuristic logic to pick tool could go here
+if o.Executor != nil {
+    activeSG.Status = SubGoalActive
+    log.Printf("[Orchestrator] Executing SubGoal: %s", activeSG.Description)
+
+    // Determine Tool: Use specific tool from SubGoal metadata, or infer from ActionType
+    toolName := "search" // Default fallback
+    if activeSG.ToolName != "" {
+        toolName = activeSG.ToolName
+    } else {
+        // Fallback heuristics based on ActionType
+        switch activeSG.ActionType {
+        case ActionExecuteTool:
+            toolName = "search" // Generic execution
+        case ActionResearch:
+            toolName = "search"
+        case ActionPractice:
+            toolName = "simulation" 
         }
+    }
 
         start := time.Now()
         result, err := o.Executor.ExecuteToolAction(ctx, toolName, map[string]interface{}{

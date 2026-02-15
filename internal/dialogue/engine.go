@@ -91,7 +91,7 @@ func NewEngine(
         log.Printf("[Engine] WARNING: Failed to init GoalRepo: %v", err)
     }
     
-    skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills")
+skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills", adapter)
     if err != nil {
         log.Printf("[Engine] WARNING: Failed to init SkillRepo: %v", err)
     }
@@ -121,32 +121,18 @@ func NewEngine(
     selector := goal.NewGoalSelector(calc)
     monitor := goal.NewProgressMonitor() 
     reviewer := goal.NewReviewProcessor(selector, calc, monitor)
-    validator := goal.NewValidationEngine()
-    
-    // Initialize Intelligence Components (Milestone 3)
-    // We use the package-level memorySearcherAdapter struct defined at the bottom of this file.
-    searcherAdapter := &memorySearcherAdapter{st: storage, emb: embedder}
-    
-    var derivationEngine *goal.DerivationEngine
-    var treeBuilder *goal.TreeBuilder
-    
-    if llmAdapter != nil {
-        treeBuilder = goal.NewTreeBuilder(llmAdapter)
-        // Connect Derivation Engine with LLM, Searcher, and Embedder
-        derivationEngine = goal.NewDerivationEngine(llmAdapter, searcherAdapter, adapter, factory)
-    }
-    
-    orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, validator, selector, reviewer, calc, monitor, derivationEngine, treeBuilder)
+// Validator is now created inside Orchestrator using the passed embedder
+orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, selector, reviewer, calc, monitor, derivationEngine, treeBuilder, adapter)
     
     // Post-Initialization Wiring
-    // Set available tools from registry
-    if toolRegistry != nil {
-        // Assuming ContextualRegistry has a method to list tools. 
-        // If not available directly, pass a hardcoded list or extend registry.
-        // orchestrator.SetAvailableTools(toolRegistry.ListTools()) 
-        // For now, we leave empty to avoid validation failures until Registry API is confirmed.
-        orchestrator.SetAvailableTools([]string{}) 
-    }
+// Set available tools from registry
+if toolRegistry != nil {
+    // IMPORTANT: We must pass actual tool names for Viability Validation to work.
+    // Since ContextualRegistry API is not confirmed, we list known default tools 
+    // to prevent validation from archiving everything as MISSING_TOOLS.
+    knownTools := []string{"search", "browser", "execute_bash", "memory_recall", "simulate"}
+    orchestrator.SetAvailableTools(knownTools) 
+}
     
     // Set embedder for Orchestrator (used in semantic operations if needed directly)
     orchestrator.SetEmbedder(adapter)

@@ -15,13 +15,14 @@ import (
 type SkillRepository struct {
     Client         *qdrant.Client
     CollectionName string
+    embedder       goal.Embedder // ADDED
 }
 
-// NewSkillRepository creates a new skill repository
-func NewSkillRepository(client *qdrant.Client, collectionName string) (*SkillRepository, error) {
+func NewSkillRepository(client *qdrant.Client, collectionName string, embedder goal.Embedder) (*SkillRepository, error) {
     repo := &SkillRepository{
         Client:         client,
         CollectionName: collectionName,
+        embedder:       embedder, // ADDED
     }
 
     if err := repo.ensureCollection(context.Background()); err != nil {
@@ -72,7 +73,19 @@ func (r *SkillRepository) Store(ctx context.Context, s *goal.Skill) error {
         "last_used_at":  qdrant.NewValueInt(s.LastUsedAt.Unix()),
     }
 
-    vectors := qdrant.NewVectors(make([]float32, 384)...)
+var vectors qdrant.Vectors
+if r.embedder != nil {
+    // Generate embedding for Skill to enable semantic search
+    embedding, err := r.embedder.Embed(ctx, s.Name + " " + s.Description)
+    if err == nil && len(embedding) == 384 {
+        vectors = qdrant.NewVectors(embedding...)
+    } else {
+        // Fallback to zero vector if embedding fails
+        vectors = qdrant.NewVectors(make([]float32, 384)...)
+    }
+} else {
+    vectors = qdrant.NewVectors(make([]float32, 384)...)
+}
 
     point := &qdrant.PointStruct{
         Id:      qdrant.NewIDUUID(s.ID),
