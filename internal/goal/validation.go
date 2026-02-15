@@ -5,6 +5,7 @@ package goal
 import (
     "strings"
     "math"
+	"context"
 )
 
 // ValidationResult represents the outcome of a validation check.
