@@ -134,7 +134,7 @@ skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills", adapter)
     if llmAdapter != nil {
         treeBuilder = goal.NewTreeBuilder(llmAdapter)
         // Connect Derivation Engine with LLM, Searcher, and Embedder
-        derivationEngine = goal.NewDerivationEngine(llmAdapter, searcherAdapter, adapter)
+        derivationEngine = goal.NewDerivationEngine(llmAdapter, searcherAdapter, adapter, factory)
     }
     
     // Orchestrator initialization (injecting embedder for validation)
