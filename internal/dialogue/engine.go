@@ -367,7 +367,9 @@ func (s *memorySearcherAdapter) SearchRelevant(ctx context.Context, query string
     // 3. Extract just the content strings from the results
     contents := make([]string, len(results))
     for i, r := range results {
-        contents[i] = r.Content
+        if r.Memory != nil {
+            contents[i] = r.Memory.Content
+        }
     }
     return contents, nil
 }
