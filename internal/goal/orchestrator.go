@@ -185,11 +185,17 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
     if len(activeGoals) > 0 {
         activeGoal = activeGoals[0] // Assuming single active goal
     } else {
-        // We already have queuedGoals, select from memory
-        // Re-fetch queuedGoals to account for any validations/decays just applied? 
-        // Ideally, mutations in steps 1 & 2 updated the slice, but to be safe:
-        if len(queuedGoals) > 0 {
-            selected := o.Selector.SelectNextGoal(queuedGoals)
+        // Filter queuedGoals to ensure we only select from valid QUEUED states
+        // (Maintenance may have archived some goals in-memory)
+        validQueued := make([]*Goal, 0)
+        for _, g := range queuedGoals {
+            if g.State == StateQueued {
+                validQueued = append(validQueued, g)
+            }
+        }
+
+        if len(validQueued) > 0 {
+            selected := o.Selector.SelectNextGoal(validQueued)
             if selected != nil {
                 if err := o.StateManager.Transition(selected, StateActive); err == nil {
                     if err := o.Repo.Store(ctx, selected); err != nil {
@@ -205,8 +211,8 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
 
     // 4. Active Goal Execution
     if activeGoal != nil {
-        // Pass queuedGoals for review comparisons
-        if err := o.executeActiveGoal(ctx, activeGoal, queuedGoals); err != nil {
+        // Pass valid queued goals for review comparisons
+        if err := o.executeActiveGoal(ctx, activeGoal, validQueued); err != nil {
             o.Logger.LogError("ExecuteActiveGoal", err, map[string]interface{}{"goal_id": activeGoal.ID})
         }
     }
