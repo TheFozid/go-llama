@@ -40,7 +40,21 @@ type Orchestrator struct {
     cycleCounter     int
 
     // Bridges
-    Executor ActionExecutor // Implemented by Dialogue Engine
+    Executor       ActionExecutor // Implemented by Dialogue Engine
+    availableTools []string       // List of tools from Dialogue Engine
+    embedder       Embedder       // Embedder for semantic operations
+}
+
+// SetAvailableTools updates the list of tools available for goal validation
+func (o *Orchestrator) SetAvailableTools(tools []string) {
+    o.mu.Lock()
+    defer o.mu.Unlock()
+    o.availableTools = tools
+}
+
+// SetEmbedder connects the semantic embedding service
+func (o *Orchestrator) SetEmbedder(embedder Embedder) {
+    o.embedder = embedder
 }
 
 // NewOrchestrator creates a new goal orchestrator
@@ -169,8 +183,8 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
     }
 
     // 1. Process Proposals
-    // Pass queuedGoals to avoid re-fetching inside validation checks
-    if err := o.processValidationQueue(ctx, proposedGoals, queuedGoals); err != nil {
+    // Pass queuedGoals and availableTools to avoid re-fetching inside validation checks
+    if err := o.processValidationQueue(ctx, proposedGoals, queuedGoals, o.availableTools); err != nil {
         o.Logger.LogError("ValidationPhase", err, nil)
     }
 
@@ -228,9 +242,9 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
     return nil
 }
 
-// Refactored to accept pre-fetched lists to optimize DB access
-func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*Goal, existing []*Goal) error {
-    availableTools := []string{} 
+// Refactored to accept pre-fetched lists and tools to optimize DB access
+func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*Goal, existing []*Goal, availableTools []string) error {
+    // Use passed-in availableTools instead of empty slice
 
     for _, g := range proposed {
         // 'existing' is now passed in, no DB call here
@@ -316,14 +330,31 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal, queued []
         return nil
     }
 
-    // 2. Execute Next Sub-Goal
-    // Note: TreeBuilder logic should populate SubGoals. 
-    // We assume SubGoals exist or we fail gracefully.
+    // 2. Plan Execution (Ensure Tree exists)
     if len(g.SubGoals) == 0 {
-        // No plan yet - in full version, TreeBuilder is invoked here.
-        // For integration, we mark as complete or just log.
-        log.Printf("[Orchestrator] No subgoals for active goal. Skipping execution.")
-        return nil
+        // No plan yet - invoke TreeBuilder (Intelligence Layer)
+        if o.TreeBuilder != nil {
+            log.Printf("[Orchestrator] No subgoals found. Invoking TreeBuilder for %s", g.ID)
+            if err := o.TreeBuilder.DecomposeGoal(ctx, g); err != nil {
+                log.Printf("[Orchestrator] ERROR: TreeBuilder failed: %v", err)
+                // If we can't plan, we can't proceed. Force review.
+                o.StateManager.Transition(g, StateReviewing)
+                return o.Repo.Store(ctx, g)
+            }
+            // Save the new plan
+            if err := o.Repo.Store(ctx, g); err != nil {
+                return err
+            }
+        } else {
+            log.Printf("[Orchestrator] WARNING: No TreeBuilder configured. Cannot decompose goal.")
+            return nil
+        }
+    }
+    
+    // Re-check if tree was built
+    if len(g.SubGoals) == 0 {
+         log.Printf("[Orchestrator] No subgoals available post-planning. Skipping.")
+         return nil
     }
 
     // Find next pending subgoal

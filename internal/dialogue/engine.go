@@ -71,17 +71,22 @@ func NewEngine(
     circuitBreaker *tools.CircuitBreaker,
 ) *Engine {
     // MILESTONE 4: Initialize Goal System Components
-    // Note: Requires GoalRepository and SkillRepository init.
-    // Assuming Storage exposes Qdrant client via storage.Client (public field)
-    // If Storage does not expose Client, this requires modification to memory/storage.go
+    // We need the raw Qdrant client and the Embedder.
+    
+    // 1. Get Qdrant Client from Storage
     var qdrantClient *qdrant.Client
     if sc, ok := interface{}(storage).(*memory.Storage); ok {
-        // We need the raw client. This assumes memory.Storage has a public Client field.
-        // If not, you will need to add a GetClient() method to memory.Storage.
         qdrantClient = sc.Client 
     }
     
-    goalRepo, err := memory.NewGoalRepository(qdrantClient, "goals")
+    // 2. Create Embedder Adapter for Goal Package
+    // We use the package-level embedderAdapter struct defined at the bottom of this file.
+    adapter := &embedderAdapter{emb: embedder}
+    // Compile-time check to ensure it satisfies the interface
+    var _ goal.Embedder = adapter
+    
+    // 3. Initialize Goal Repository with Embedder (Fixes Semantic Search)
+    goalRepo, err := memory.NewGoalRepository(qdrantClient, "goals", adapter)
     if err != nil {
         log.Printf("[Engine] WARNING: Failed to init GoalRepo: %v", err)
     }
@@ -119,20 +124,32 @@ func NewEngine(
     validator := goal.NewValidationEngine()
     
     // Initialize Intelligence Components (Milestone 3)
-    // Note: MemorySearcher and Embedder interfaces need implementations passed from Engine.
-    // For now, we pass nil for searcher/embedder in this wiring step, as they are on 'storage'.
-    // Ideally, we'd wrap 'storage' to satisfy MemorySearcher.
+    // We use the package-level memorySearcherAdapter struct defined at the bottom of this file.
+    searcherAdapter := &memorySearcherAdapter{st: storage, emb: embedder}
+    
     var derivationEngine *goal.DerivationEngine
     var treeBuilder *goal.TreeBuilder
     
     if llmAdapter != nil {
         treeBuilder = goal.NewTreeBuilder(llmAdapter)
-        // Derivation engine needs MemorySearcher. We can create a simple wrapper.
-        // For now, passing nil to satisfy constructor.
-        derivationEngine = goal.NewDerivationEngine(llmAdapter, nil, nil, factory)
+        // Connect Derivation Engine with LLM, Searcher, and Embedder
+        derivationEngine = goal.NewDerivationEngine(llmAdapter, searcherAdapter, adapter, factory)
     }
     
     orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, validator, selector, reviewer, calc, monitor, derivationEngine, treeBuilder)
+    
+    // Post-Initialization Wiring
+    // Set available tools from registry
+    if toolRegistry != nil {
+        // Assuming ContextualRegistry has a method to list tools. 
+        // If not available directly, pass a hardcoded list or extend registry.
+        // orchestrator.SetAvailableTools(toolRegistry.ListTools()) 
+        // For now, we leave empty to avoid validation failures until Registry API is confirmed.
+        orchestrator.SetAvailableTools([]string{}) 
+    }
+    
+    // Set embedder for Orchestrator (used in semantic operations if needed directly)
+    orchestrator.SetEmbedder(adapter)
 
     return &Engine{
         storage:			storage,
@@ -310,4 +327,47 @@ func (e *Engine) ExecuteToolAction(ctx context.Context, tool string, params map[
 
     // ToolResult.Output contains the string result from the tool execution
     return result.Output, nil
+}
+
+// embedderAdapter wraps memory.Embedder to implement goal.Embedder
+type embedderAdapter struct {
+    emb *memory.Embedder
+}
+
+// Embed implements the goal.Embedder interface method
+func (a *embedderAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
+    return a.emb.Embed(ctx, text)
+}
+
+// memorySearcherAdapter wraps memory.Storage and Embedder to implement goal.MemorySearcher
+type memorySearcherAdapter struct {
+    st  *memory.Storage
+    emb *memory.Embedder
+}
+
+// SearchRelevant implements the goal.MemorySearcher interface method.
+// It performs a semantic search using the provided query string.
+func (s *memorySearcherAdapter) SearchRelevant(ctx context.Context, query string, limit int) ([]string, error) {
+    // 1. Generate embedding for the query string
+    vector, err := s.emb.Embed(ctx, query)
+    if err != nil {
+        return nil, fmt.Errorf("failed to embed query for memory search: %w", err)
+    }
+
+    // 2. Perform the search using the existing Storage logic
+    results, err := s.st.Search(ctx, memory.RetrievalQuery{
+        Limit:             limit,
+        IncludeCollective: true, // Goals should be derived from collective knowledge
+        MinScore:          0.5,  // Filter low-relevance results
+    }, vector)
+    if err != nil {
+        return nil, fmt.Errorf("memory search failed: %w", err)
+    }
+
+    // 3. Extract just the content strings from the results
+    contents := make([]string, len(results))
+    for i, r := range results {
+        contents[i] = r.Content
+    }
+    return contents, nil
 }

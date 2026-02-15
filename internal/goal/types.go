@@ -194,6 +194,18 @@ type PriorityConfig struct {
     ProgressBonusFactor float64 `json:"progress_bonus_factor"`
 }
 
+// Embedder defines the interface for vectorizing text
+// Used by GoalRepository for semantic search and duplicate detection
+type Embedder interface {
+    Embed(ctx context.Context, text string) ([]float32, error)
+}
+
+// MemorySearcher defines the interface for searching memories
+// Used by DerivationEngine to find relevant context for goal proposals
+type MemorySearcher interface {
+    SearchRelevant(ctx context.Context, query string, limit int) ([]string, error)
+}
+
 // DefaultPriorityConfig returns the default priority configuration
 func DefaultPriorityConfig() *PriorityConfig {
     return &PriorityConfig{

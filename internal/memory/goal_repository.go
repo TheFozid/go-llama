@@ -15,13 +15,19 @@ import (
 type GoalRepository struct {
     Client         *qdrant.Client
     CollectionName string
+    embedder       goal.Embedder // Added for semantic vectorization
 }
 
 // NewGoalRepository creates a new goal repository
-func NewGoalRepository(client *qdrant.Client, collectionName string) (*GoalRepository, error) {
+func NewGoalRepository(client *qdrant.Client, collectionName string, embedder goal.Embedder) (*GoalRepository, error) {
+    if embedder == nil {
+        return nil, fmt.Errorf("embedder cannot be nil for GoalRepository")
+    }
+    
     repo := &GoalRepository{
         Client:         client,
         CollectionName: collectionName,
+        embedder:       embedder,
     }
 
     // Ensure collection exists
@@ -118,9 +124,18 @@ func (r *GoalRepository) Store(ctx context.Context, g *goal.Goal) error {
         payload["archive_reason"] = qdrant.NewValueString(string(g.ArchiveReason))
     }
 
-    // Note: Embedding generation will be handled by the intelligence layer (Phase 3)
-    // For now, we use a zero vector to satisfy schema
-    vectors := qdrant.NewVectors(make([]float32, 384)...)
+    // Generate embedding for the goal description
+    embedding, err := repo.embedder.Embed(ctx, g.Description)
+    if err != nil {
+        return fmt.Errorf("failed to embed goal description: %w", err)
+    }
+    
+    // Validate embedding size (must match Qdrant collection config)
+    if len(embedding) != 384 {
+        return fmt.Errorf("invalid embedding dimension: expected 384, got %d", len(embedding))
+    }
+    
+    vectors := qdrant.NewVectors(embedding...)
 
     point := &qdrant.PointStruct{
         Id:      qdrant.NewIDUUID(g.ID),
