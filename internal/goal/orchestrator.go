@@ -180,20 +180,20 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
         o.Logger.LogError("MaintenancePhase", err, nil)
     }
 
+    // Filter queuedGoals immediately after maintenance to ensure we have a clean list
+    // for both Selection and Execution phases.
+    validQueued := make([]*Goal, 0)
+    for _, g := range queuedGoals {
+        if g.State == StateQueued {
+            validQueued = append(validQueued, g)
+        }
+    }
+
     // 3. Goal Selection
     var activeGoal *Goal
     if len(activeGoals) > 0 {
         activeGoal = activeGoals[0] // Assuming single active goal
     } else {
-        // Filter queuedGoals to ensure we only select from valid QUEUED states
-        // (Maintenance may have archived some goals in-memory)
-        validQueued := make([]*Goal, 0)
-        for _, g := range queuedGoals {
-            if g.State == StateQueued {
-                validQueued = append(validQueued, g)
-            }
-        }
-
         if len(validQueued) > 0 {
             selected := o.Selector.SelectNextGoal(validQueued)
             if selected != nil {
