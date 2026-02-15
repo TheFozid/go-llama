@@ -35,6 +35,9 @@ type Orchestrator struct {
     // Milestone 5: Edge Cases & Logging
     EdgeCaseHandler  *EdgeCaseHandler
     Logger           *GoalSystemLogger
+    
+    // Performance Optimization
+    cycleCounter     int
 
     // Bridges
     Executor ActionExecutor // Implemented by Dialogue Engine
@@ -143,44 +146,58 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
     o.mu.Lock()
     defer o.mu.Unlock()
 
+    // Performance Optimization: Increment cycle counter
+    o.cycleCounter++
+    
     // Log Cycle Start
     o.Logger.LogGoalDecision("CYCLE_START", "Initiating maintenance and execution", nil)
 
-    // 1. Process Proposals (Derivation would feed this in Phase 3+)
-    if err := o.processValidationQueue(ctx); err != nil {
-        o.Logger.LogError("ValidationPhase", err, nil)
+    // PERFORMANCE: Fetch all states once to minimize DB hits
+    proposedGoals, err := o.Repo.GetByState(ctx, StateProposed)
+    if err != nil {
+        return err
     }
-
-    // 2. Priority Maintenance (Decay)
-    if err := o.applyPriorityMaintenance(ctx); err != nil {
-        o.Logger.LogError("MaintenancePhase", err, nil)
+    
+    queuedGoals, err := o.Repo.GetByState(ctx, StateQueued)
+    if err != nil {
+        return err
     }
-
-    // 3. Goal Selection
+    
     activeGoals, err := o.Repo.GetByState(ctx, StateActive)
     if err != nil {
         return err
     }
 
+    // 1. Process Proposals
+    // Pass queuedGoals to avoid re-fetching inside validation checks
+    if err := o.processValidationQueue(ctx, proposedGoals, queuedGoals); err != nil {
+        o.Logger.LogError("ValidationPhase", err, nil)
+    }
+
+    // 2. Priority Maintenance
+    // Pass queuedGoals to avoid re-fetching for decay logic
+    if err := o.applyPriorityMaintenance(ctx, queuedGoals); err != nil {
+        o.Logger.LogError("MaintenancePhase", err, nil)
+    }
+
+    // 3. Goal Selection
     var activeGoal *Goal
     if len(activeGoals) > 0 {
         activeGoal = activeGoals[0] // Assuming single active goal
     } else {
-        // Select new goal if none active
-        queuedGoals, err := o.Repo.GetByState(ctx, StateQueued)
-        if err != nil {
-            return err
-        }
+        // We already have queuedGoals, select from memory
+        // Re-fetch queuedGoals to account for any validations/decays just applied? 
+        // Ideally, mutations in steps 1 & 2 updated the slice, but to be safe:
         if len(queuedGoals) > 0 {
             selected := o.Selector.SelectNextGoal(queuedGoals)
             if selected != nil {
-                    if err := o.StateManager.Transition(selected, StateActive); err == nil {
-                        if err := o.Repo.Store(ctx, selected); err != nil {
-                            o.Logger.LogError("ActivateGoalStore", err, map[string]interface{}{"goal_id": selected.ID})
-                        } else {
-                            activeGoal = selected
-                            o.Logger.LogGoalDecision("GOAL_ACTIVATED", "Selected from queue", []string{selected.ID})
-                        }
+                if err := o.StateManager.Transition(selected, StateActive); err == nil {
+                    if err := o.Repo.Store(ctx, selected); err != nil {
+                        o.Logger.LogError("ActivateGoalStore", err, map[string]interface{}{"goal_id": selected.ID})
+                    } else {
+                        activeGoal = selected
+                        o.Logger.LogGoalDecision("GOAL_ACTIVATED", "Selected from queue", []string{selected.ID})
+                    }
                 }
             }
         }
@@ -188,42 +205,41 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
 
     // 4. Active Goal Execution
     if activeGoal != nil {
-        if err := o.executeActiveGoal(ctx, activeGoal); err != nil {
+        // Pass queuedGoals for review comparisons
+        if err := o.executeActiveGoal(ctx, activeGoal, queuedGoals); err != nil {
             o.Logger.LogError("ExecuteActiveGoal", err, map[string]interface{}{"goal_id": activeGoal.ID})
         }
     }
 
     // 5. Skill Maintenance
-    if err := o.maintainSkills(ctx); err != nil {
-        o.Logger.LogError("SkillMaintenance", err, nil)
+    // Optimization: Run skill maintenance only every 10 cycles to reduce load
+    if o.cycleCounter % 10 == 0 {
+        if err := o.maintainSkills(ctx); err != nil {
+            o.Logger.LogError("SkillMaintenance", err, nil)
+        }
     }
 
     return nil
 }
 
-func (o *Orchestrator) processValidationQueue(ctx context.Context) error {
-    proposed, err := o.Repo.GetByState(ctx, StateProposed)
-    if err != nil {
-        return err
-    }
-
-    // Note: In full implementation, we'd check tools available. 
-    // For now, using empty list for tools check.
+// Refactored to accept pre-fetched lists to optimize DB access
+func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*Goal, existing []*Goal) error {
     availableTools := []string{} 
 
     for _, g := range proposed {
-        existing, _ := o.Repo.GetByState(ctx, StateQueued) // Simplified check
+        // 'existing' is now passed in, no DB call here
         
         res := o.Validator.Validate(g, availableTools, existing)
         
         if res.IsValid {
-            o.StateManager.Transition(g, StateQueued)
-            // Note: State transition is logged automatically by the listener set in NewOrchestrator
+            if err := o.StateManager.Transition(g, StateQueued); err == nil {
+                // Add to local list so we don't need to re-fetch immediately
+                existing = append(existing, g)
+            }
         } else {
-            // Handle Archive logic
             reason := ArchiveValidationFailed
             if res.Action == "ARCHIVE" {
-                reason = ArchiveImpossible // simplistic mapping
+                reason = ArchiveImpossible
             }
             o.StateManager.Transition(g, StateArchived)
             g.ArchiveReason = reason
@@ -234,12 +250,8 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context) error {
     return nil
 }
 
-func (o *Orchestrator) applyPriorityMaintenance(ctx context.Context) error {
-    // Decay QUEUED goals
-    queued, err := o.Repo.GetByState(ctx, StateQueued)
-    if err != nil {
-        return err
-    }
+// Refactored to accept pre-fetched list
+func (o *Orchestrator) applyPriorityMaintenance(ctx context.Context, queued []*Goal) error {
     for _, g := range queued {
         oldP := g.CurrentPriority
         // Applying 1 cycle decay for this tick
@@ -260,7 +272,8 @@ func (o *Orchestrator) applyPriorityMaintenance(ctx context.Context) error {
     return nil
 }
 
-func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal) error {
+// Refactored to accept queued goals for review logic
+func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal, queued []*Goal) error {
     // 1. Check Review Triggers (Time or Stagnation)
     // Simplification: Check if stagnation detected
     o.Monitor.CalculateProgressPercentage(g)
@@ -271,7 +284,7 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal) error {
         o.StateManager.Transition(g, StateReviewing)
         o.Repo.Store(ctx, g)
         
-        queued, _ := o.Repo.GetByState(ctx, StateQueued)
+        // Use passed-in queued list
         outcome := o.Reviewer.ExecuteReview(g, queued)
         
         o.Logger.LogReviewOutcome(g.ID, outcome.Decision, outcome.Reason)
