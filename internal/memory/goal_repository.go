@@ -199,24 +199,6 @@ func (r *GoalRepository) GetByState(ctx context.Context, state goal.GoalState) (
     return goals, nil
 }
 
-// UpdateState updates only the state of a goal (optimized)
-func (r *GoalRepository) UpdateState(ctx context.Context, id string, newState goal.GoalState) error {
-    _, err := r.Client.SetPayload(ctx, &qdrant.SetPayloadPoints{
-        CollectionName: r.CollectionName,
-        Payload: map[string]*qdrant.Value{
-            "state": qdrant.NewValueString(string(newState)),
-        },
-        PointsSelector: &qdrant.PointsSelector{
-            PointsSelectorOneOf: &qdrant.PointsSelector_Points{
-                Points: &qdrant.PointsIdsList{
-                    Ids: []*qdrant.PointId{qdrant.NewIDUUID(id)},
-                },
-            },
-        },
-    })
-    return err
-}
-
 // SearchSimilar performs semantic search for duplicate detection (Phase 2 prep)
 // Note: Requires embeddings which are generated in Phase 3
 func (r *GoalRepository) SearchSimilar(ctx context.Context, embedding []float32, limit int) ([]*goal.Goal, error) {

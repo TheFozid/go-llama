@@ -312,9 +312,10 @@ func (o *Orchestrator) executeActiveGoal(ctx context.Context, g *Goal, queued []
         switch outcome.Decision {
         case "COMPLETE":
             o.StateManager.Transition(g, StateCompleted)
-        case "DEMOTE":
-            o.StateManager.Transition(g, StatePaused) // Pause current
-            o.Repo.Store(ctx, g)
+case "DEMOTE":
+    // MDD Table 13: Demoted goals return to QUEUED state.
+    o.StateManager.Transition(g, StateQueued) 
+    o.Repo.Store(ctx, g)
             // Activate next is handled in next cycle selection
         case "REPLAN":
             o.StateManager.Transition(g, StateActive)
