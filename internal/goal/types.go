@@ -149,9 +149,10 @@ type SubGoal struct {
     ToolCallsEstimate int           `json:"tool_calls_estimate"`
     TimeScoreEstimate int           `json:"time_score_estimate"`
     
-    // Intelligence-driven execution fields
+// Intelligence-driven execution fields
     ActionType        ActionType    `json:"action_type"` // RESEARCH, PRACTICE, EXECUTE_TOOL, etc.
     ToolName          string        `json:"tool_name"`   // Specific tool to use, e.g., "search", "browser"
+    Params            map[string]interface{} `json:"params"` // Specific parameters for the tool (e.g., URL, code)
 }
 
 // Skill represents an acquired capability

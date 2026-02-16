@@ -38,6 +38,9 @@ type Orchestrator struct {
     EdgeCaseHandler  *EdgeCaseHandler
     Logger           *GoalSystemLogger
     
+    // Milestone 4: Principles Integration
+    Principles       PrinciplesModifier
+    
     // Performance Optimization
     cycleCounter     int
 
@@ -366,6 +369,15 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                 reason := ArchiveValidationFailed
                 if strings.Contains(res.Reason, "MISSING_TOOLS") {
                     reason = ArchiveMissingTools
+                    
+                    // Roadmap Step 19: Check if a similar archived goal can be revived
+                    if o.Archive != nil {
+                        if revived := o.Archive.CheckAndRevive(ctx, g.Description, o.availableTools); revived != nil {
+                            o.Logger.LogGoalDecision("GOAL_REVIVED", "Revived archived goal due to new tools", []string{revived.ID})
+                            // Don't archive the new proposal if we revived an old one; merge or ignore proposal
+                            continue 
+                        }
+                    }
                 }
                 o.StateManager.Transition(g, StateArchived)
                 g.ArchiveReason = reason
@@ -434,8 +446,12 @@ case "DEMOTE":
             // Activate next is handled in next cycle selection
         case "REPLAN":
             o.StateManager.Transition(g, StateActive)
-            // Clear sub-goals for replan (TreeBuilder would be called here in full logic)
+            // Clear sub-goals for replan
             g.SubGoals = []SubGoal{}
+            // Analyze failure for principle modification (Step 20)
+            if o.Principles != nil {
+                go o.Principles.ProposeFromGoal(g.ID, "failure_pattern: "+outcome.Reason)
+            }
         case "CONTINUE":
             o.StateManager.Transition(g, StateActive)
         case "ARCHIVE":
@@ -526,9 +542,18 @@ if o.Executor != nil {
     }
 
         start := time.Now()
-        result, err := o.Executor.ExecuteToolAction(ctx, toolName, map[string]interface{}{
-            "query": activeSG.Description,
-        })
+        
+        // Prepare parameters: Use specific params from SubGoal, or fallback to generic query
+        params := activeSG.Params
+        if params == nil {
+            params = make(map[string]interface{})
+        }
+        // Ensure 'query' is populated if not explicitly set in Params
+        if _, ok := params["query"]; !ok {
+            params["query"] = activeSG.Description
+        }
+
+        result, err := o.Executor.ExecuteToolAction(ctx, toolName, params)
         duration := time.Since(start)
 
         if err != nil {
