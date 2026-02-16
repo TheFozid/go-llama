@@ -205,6 +205,11 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
         return err
     }
     
+    // DEBUG: Log if we found proposed goals to validate
+    if len(proposedGoals) > 0 {
+        log.Printf("[Orchestrator] Found %d PROPOSED goals for validation.", len(proposedGoals))
+    }
+    
     queuedGoals, err := o.Repo.GetByState(ctx, StateQueued)
     if err != nil {
         return err
