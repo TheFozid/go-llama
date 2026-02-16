@@ -11,9 +11,10 @@ import (
 
 // ValidationResult represents the outcome of a validation check.
 type ValidationResult struct {
-    IsValid bool
-    Reason  string
-    Action  string // "QUEUE", "ARCHIVE", "MERGE", "SUBSUME"
+    IsValid       bool
+    Reason        string
+    Action        string // "QUEUE", "ARCHIVE", "MERGE", "SUBSUME", "PARENT_DEMOTION"
+    TargetGoalID  string // ID of the related goal (e.g., duplicate or parent)
 }
 
 // ValidationEngine checks proposed goals for viability and relationships.
@@ -125,9 +126,10 @@ func (v *ValidationEngine) validateDuplicate(g *Goal, existingGoals []*Goal) Val
         matchVec, _ := v.embedder.Embed(ctx, match.Description)
         if cosineSimilarity(proposedVec, matchVec) >= v.DuplicateSimilarityThreshold {
              return ValidationResult{
-                IsValid: false,
-                Reason:  "DUPLICATE: Semantic match with " + match.ID,
-                Action:  "MERGE",
+                IsValid:      false,
+                Reason:       "Semantic duplicate detected",
+                Action:       "MERGE",
+                TargetGoalID: match.ID,
             }
         }
     }
@@ -166,19 +168,20 @@ func (v *ValidationEngine) validateSubGoalRelationship(g *Goal, existingGoals []
         // Check 1: Is the proposed goal a SUBSET of an existing goal? (Proposed is smaller)
         if strings.Contains(existingDesc, desc) && len(existingDesc) > len(desc) {
             return ValidationResult{
-                IsValid: false,
-                Reason:  "SUB_GOAL: Is subset of existing goal " + eg.ID,
-                Action:  "SUBSUME",
+                IsValid:      false,
+                Reason:       "Proposed goal is a subset of existing goal",
+                Action:       "SUBSUME",
+                TargetGoalID: eg.ID,
             }
         }
 
         // Check 2: Is the proposed goal a SUPERSET of an existing goal? (Proposed is larger)
-        // MDD 9.1 Parent Demotion: Existing goal should become sub-goal of proposed.
         if strings.Contains(desc, existingDesc) && len(desc) > len(existingDesc) {
             return ValidationResult{
-                IsValid: true, // The new goal is valid, but we need to trigger a side effect
-                Reason:  "PARENT_DEMOTION: Existing goal " + eg.ID + " should become sub-goal",
-                Action:  "PARENT_DEMOTION",
+                IsValid:      true, 
+                Reason:       "Existing goal should become sub-goal of proposed goal",
+                Action:       "PARENT_DEMOTION",
+                TargetGoalID: eg.ID,
             }
         }
     }
