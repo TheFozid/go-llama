@@ -96,23 +96,31 @@ skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills", adapter)
         log.Printf("[Engine] WARNING: Failed to init SkillRepo: %v", err)
     }
 
-    // Wire up the Goal Subsystem
+    // Wire up the Goal Subsystem with Dual LLM Support
     
-    // 1. LLM Adapter (Milestone 3 Integration)
-    // We assert that llmClient implements the LLMCaller interface required by the adapter.
-    var llmAdapter goal.LLMService
+    var mainLLMAdapter goal.LLMService
+    var smallLLMAdapter goal.LLMService
+
     if llmClient != nil {
-        // Type assertion: convert interface{} to goal.LLMCaller
         caller, ok := llmClient.(goal.LLMCaller)
         if !ok {
-            log.Printf("[Engine] WARNING: llmClient does not implement goal.LLMCaller. Goal System cannot use LLM.")
+            log.Printf("[Engine] WARNING: llmClient does not implement goal.LLMCaller.")
         } else {
-            adapter := goal.NewQueueLLMAdapter(caller, llmURL, llmModel)
-            llmAdapter = adapter
-            log.Printf("[Engine] Goal System connected to LLM Queue")
+            // Main Adapter for Complex Tasks (Derivation, Tree Building)
+            mainLLMAdapter = goal.NewQueueLLMAdapter(caller, llmURL, llmModel)
+            log.Printf("[Engine] Goal System (Main) connected to model: %s", llmModel)
+            
+            // Small Adapter for Fast Tasks (Time Score, Practice Personas)
+            // We reuse the same queue client but point to the small model config
+            if simpleLLMModel != "" {
+                 smallLLMAdapter = goal.NewQueueLLMAdapter(caller, simpleLLMURL, simpleLLMModel)
+                 log.Printf("[Engine] Goal System (Small) connected to model: %s", simpleLLMModel)
+            } else {
+                 // Fallback to main if small is not configured
+                 smallLLMAdapter = mainLLMAdapter
+                 log.Printf("[Engine] Goal System (Small) falling back to Main model")
+            }
         }
-    } else {
-        log.Printf("[Engine] WARNING: Goal System has no LLM connection")
     }
     
     factory := goal.NewFactory(nil)
@@ -123,22 +131,40 @@ skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills", adapter)
     reviewer := goal.NewReviewProcessor(selector, calc, monitor)
     // validator := goal.NewValidationEngine() // REMOVED: Created inside Orchestrator
 
-    // Initialize Intelligence Components (Milestone 3)
-    // We use the package-level memorySearcherAdapter struct defined at the bottom of this file.
+    // Initialize Intelligence Components
     searcherAdapter := &memorySearcherAdapter{st: storage, emb: embedder}
     
     var derivationEngine *goal.DerivationEngine
     var treeBuilder *goal.TreeBuilder
+    var timeScoreCalculator *goal.LLMEnhancedCalculator
     
-    // Connect Intelligence components if LLM is available
-    if llmAdapter != nil {
-        treeBuilder = goal.NewTreeBuilder(llmAdapter)
-        // Connect Derivation Engine with LLM, Searcher, and Embedder
-        derivationEngine = goal.NewDerivationEngine(llmAdapter, searcherAdapter, adapter, factory)
+    if mainLLMAdapter != nil {
+        // High-Level Intelligence: Use Main LLM
+        treeBuilder = goal.NewTreeBuilder(mainLLMAdapter)
+        derivationEngine = goal.NewDerivationEngine(mainLLMAdapter, searcherAdapter, adapter, factory)
+        
+        // Fast Estimation: Use Small LLM
+        heuristicCalc := goal.NewTimeScoreCalculator()
+        timeScoreCalculator = goal.NewLLMEnhancedCalculator(heuristicCalc, smallLLMAdapter)
     }
     
-    // Orchestrator initialization (injecting embedder for validation)
-    orchestrator := goal.NewOrchestrator(goalRepo, skillRepo, factory, stateMgr, selector, reviewer, calc, monitor, derivationEngine, treeBuilder, adapter)
+    // Orchestrator initialization
+    // We pass 'timeScoreCalculator' (Small LLM) and 'smallLLMAdapter' (for Practice)
+    orchestrator := goal.NewOrchestrator(
+        goalRepo, 
+        skillRepo, 
+        factory, 
+        stateMgr, 
+        selector, 
+        reviewer, 
+        calc, 
+        monitor, 
+        derivationEngine, 
+        treeBuilder, 
+        adapter, 
+        timeScoreCalculator, 
+        smallLLMAdapter,
+    )
     
     // Post-Initialization Wiring
     // Set available tools from registry dynamically

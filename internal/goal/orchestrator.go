@@ -29,6 +29,8 @@ type Orchestrator struct {
     Calculator   *Calculator
     Monitor      *ProgressMonitor
     Archive      *ArchiveManager
+    TimeScorer   *LLMEnhancedCalculator // ADDED: For Small LLM Time Estimation
+    SmallLLM     LLMService             // ADDED: For Practice Simulations
 
     // Intelligence (Milestone 3)
     DerivationEngine *DerivationEngine
@@ -74,7 +76,9 @@ func NewOrchestrator(
     monitor *ProgressMonitor,
     derivationEngine *DerivationEngine,
     treeBuilder *TreeBuilder,
-    embedder Embedder, // ADDED: Embedder interface
+    embedder Embedder,
+    timeScorer *LLMEnhancedCalculator, // ADDED
+    smallLLM LLMService,               // ADDED
 ) *Orchestrator {
     // Initialize Logger (Step 23)
     logger := NewGoalSystemLogger()
@@ -102,6 +106,8 @@ func NewOrchestrator(
         TreeBuilder:      treeBuilder,
         EdgeCaseHandler:  NewEdgeCaseHandler(repo),
         Logger:           logger,
+        TimeScorer:       timeScorer, // ADDED
+        SmallLLM:         smallLLM,   // ADDED
     }
 }
 
@@ -275,6 +281,18 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
         res := o.Validator.Validate(g, availableTools, existing)
         
         if res.IsValid {
+            // OPTIMIZATION: Estimate TimeScore using Small LLM (1B param)
+            if o.TimeScorer != nil && g.TimeScore == 0 {
+                score, err := o.TimeScorer.EstimateTimeScore(ctx, g)
+                if err != nil {
+                    o.Logger.LogError("TimeScoreEstimation", err, map[string]interface{}{"goal_id": g.ID})
+                    // Fallback to heuristic if LLM fails
+                    g.TimeScore = 10 
+                } else {
+                    g.TimeScore = score
+                }
+            }
+
             if err := o.StateManager.Transition(g, StateQueued); err == nil {
                 existing = append(existing, g)
             }
@@ -520,35 +538,58 @@ case "DEMOTE":
         }
     }
 
-    // Execute via Tool Bridge
-if o.Executor != nil {
+    // === EXECUTION PHASE ===
     activeSG.Status = SubGoalActive
     log.Printf("[Orchestrator] Executing SubGoal: %s", activeSG.Description)
+    start := time.Now()
 
-    // Determine Tool: Use specific tool from SubGoal metadata, or infer from ActionType
-    toolName := "search" // Default fallback
-    if activeSG.ToolName != "" {
-        toolName = activeSG.ToolName
-    } else {
-        // Fallback heuristics based on ActionType
-        switch activeSG.ActionType {
-        case ActionExecuteTool:
-            toolName = "search" // Generic execution
-        case ActionResearch:
-            toolName = "search"
-        case ActionPractice:
-            toolName = "simulation" 
+    // Handle ActionPractice separately using SmallLLM
+    if activeSG.ActionType == ActionPractice {
+        if o.SmallLLM != nil {
+            log.Printf("[Orchestrator] Running Practice Simulation via Small LLM")
+            simEnv := NewPracticeEnvironment()
+            
+            // Run simulation (objective is the sub-goal description)
+            result, err := simEnv.RunSimulation(ctx, o.SmallLLM, "Autonomous Practice", activeSG.Description)
+            duration := time.Since(start)
+
+            if err != nil {
+                activeSG.Status = SubGoalFailed
+                activeSG.FailureReason = err.Error()
+                o.Logger.LogSubGoalExecution(activeSG.ID, "FAILED: "+err.Error(), duration)
+            } else {
+                activeSG.Status = SubGoalCompleted
+                activeSG.Outcome = result
+                o.Logger.LogSubGoalExecution(activeSG.ID, "SUCCESS", duration)
+            }
+        } else {
+            log.Printf("[Orchestrator] WARNING: SmallLLM not configured for Practice action.")
+            activeSG.Status = SubGoalFailed
+            activeSG.FailureReason = "SmallLLM not available"
+            o.Logger.LogSubGoalExecution(activeSG.ID, "FAILED: SmallLLM not available", time.Since(start))
         }
-    }
-
-        start := time.Now()
+    } else if o.Executor != nil {
+        // Default: Execute via Tool Bridge
         
-        // Prepare parameters: Use specific params from SubGoal, or fallback to generic query
+        // Determine Tool
+        toolName := "search" // Default fallback
+        if activeSG.ToolName != "" {
+            toolName = activeSG.ToolName
+        } else {
+            // Fallback heuristics based on ActionType
+            switch activeSG.ActionType {
+            case ActionExecuteTool:
+                toolName = "search" // Generic execution
+            case ActionResearch:
+                toolName = "search"
+            }
+        }
+
+        // Prepare parameters
         params := activeSG.Params
         if params == nil {
             params = make(map[string]interface{})
         }
-        // Ensure 'query' is populated if not explicitly set in Params
         if _, ok := params["query"]; !ok {
             params["query"] = activeSG.Description
         }
@@ -561,12 +602,11 @@ if o.Executor != nil {
             activeSG.FailureReason = err.Error()
             o.Logger.LogSubGoalExecution(activeSG.ID, "FAILED: "+err.Error(), duration)
             
-            // Milestone 5: Handle Sub-Goal Failure
+            // Handle Sub-Goal Failure
             if o.EdgeCaseHandler != nil {
                 outcome := o.EdgeCaseHandler.HandleSubGoalFailure(ctx, activeSG, g)
                 if outcome == "CRITICAL_FAILURE" {
                     o.Logger.LogGoalDecision("CRITICAL_FAILURE", "SubGoal failure critical, forcing review", []string{g.ID, activeSG.ID})
-                    // Force state transition to REVIEWING to let ReviewProcessor decide fate
                     o.StateManager.Transition(g, StateReviewing)
                 }
             }
@@ -575,10 +615,15 @@ if o.Executor != nil {
             activeSG.Outcome = result
             o.Logger.LogSubGoalExecution(activeSG.ID, "SUCCESS", duration)
         }
-        
-        // Save progress
-        o.Repo.Store(ctx, g)
+    } else {
+        // No executor available
+        log.Printf("[Orchestrator] No Executor available for action type %s", activeSG.ActionType)
+        activeSG.Status = SubGoalFailed
+        activeSG.FailureReason = "No execution method available"
     }
+
+    // Save progress (Common for all paths)
+    o.Repo.Store(ctx, g)
 
     return nil
 }
