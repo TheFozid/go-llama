@@ -45,17 +45,13 @@ func (r *ReviewProcessor) ExecuteReview(activeGoal *Goal, queuedGoals []*Goal) R
     // 5. Determine Outcome
     
     // Case: There is a higher priority goal waiting
+    // MDD 7.3: Requires "Significant Margin" for switching.
+    // We reuse ShouldSwitchGoal(active, proposed) which checks margins.
     if bestQueued != nil {
-        queuedScore := r.Calculator.CalculateSelectionScore(bestQueued)
-        
-        // If queued score significantly beats active score (considering progress bonus)
-        // We use the ShouldSwitchGoal logic inverted: should we demote current?
-        // Note: ShouldSwitchGoal checks if Proposed > Active. 
-        // Here we check if BestQueued > ActiveScore.
-        if queuedScore > activeScore {
+        if r.Calculator.ShouldSwitchGoal(activeGoal, bestQueued) {
             return ReviewOutcome{
                 Decision:   "DEMOTE",
-                Reason:     "Higher priority goal found: " + bestQueued.ID,
+                Reason:     "Significantly higher priority goal found: " + bestQueued.ID,
                 NextGoalID: bestQueued.ID,
             }
         }
