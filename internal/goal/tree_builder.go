@@ -90,7 +90,7 @@ Output JSON format:
                 ToolName    string                 `json:"tool_name"`
                 Params      map[string]interface{} `json:"params"`
                 Dependencies []string               `json:"dependencies"`
-            } `json:"sub_steps"
+            } `json:"sub_steps"`
         } `json:"plan"`
     }
 
