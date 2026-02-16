@@ -281,15 +281,16 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
         res := o.Validator.Validate(g, availableTools, existing)
         
         if res.IsValid {
-            // OPTIMIZATION: Estimate TimeScore using Small LLM (1B param)
+            // OPTIMIZATION: Estimate TimeScore using Small LLM
             if o.TimeScorer != nil && g.TimeScore == 0 {
                 score, err := o.TimeScorer.EstimateTimeScore(ctx, g)
                 if err != nil {
                     o.Logger.LogError("TimeScoreEstimation", err, map[string]interface{}{"goal_id": g.ID})
-                    // Fallback to heuristic if LLM fails
-                    g.TimeScore = 10 
+                    g.TimeScore = 10 // Fallback
                 } else {
                     g.TimeScore = score
+                    // Log success to verify Small LLM usage
+                    o.Logger.LogGoalDecision("TIME_SCORE_ESTIMATED", fmt.Sprintf("Assigned score %d", score), []string{g.ID})
                 }
             }
 
