@@ -40,9 +40,10 @@ Instructions:
 5. **Crucial**: Determine the best Action Type for each step:
    - RESEARCH: Needs web search or information retrieval.
    - PRACTICE: Requires simulation or self-training.
-   - EXECUTE_TOOL: Needs a specific tool execution (specify tool name).
+   - EXECUTE_TOOL: Needs a specific tool execution (specify tool name and parameters).
    - REFLECT: Needs internal analysis.
    - CREATE: Needs generating content or code.
+6. **Parameters**: If action is EXECUTE_TOOL, provide a "params" object with the specific arguments needed (e.g., {"url": "http://example.com"}).
 
 Output JSON format:
 {
@@ -72,22 +73,24 @@ Output JSON format:
 
     var response struct {
         Plan []struct {
-            ID          string `json:"id"`
-            Title       string `json:"title"`
-            Description string `json:"description"`
-            Effort      string `json:"effort"`
-            ActionType  string `json:"action_type"`
-            ToolName    string `json:"tool_name"`
-            Dependencies []string `json:"dependencies"`
+            ID          string                 `json:"id"`
+            Title       string                 `json:"title"`
+            Description string                 `json:"description"`
+            Effort      string                 `json:"effort"`
+            ActionType  string                 `json:"action_type"`
+            ToolName    string                 `json:"tool_name"`
+            Params      map[string]interface{} `json:"params"`
+            Dependencies []string               `json:"dependencies"`
             SubSteps    []struct {
-                ID          string `json:"id"`
-                Title       string `json:"title"`
-                Description string `json:"description"`
-                Effort      string `json:"effort"`
-                ActionType  string `json:"action_type"`
-                ToolName    string `json:"tool_name"`
-                Dependencies []string `json:"dependencies"`
-            } `json:"sub_steps"`
+                ID          string                 `json:"id"`
+                Title       string                 `json:"title"`
+                Description string                 `json:"description"`
+                Effort      string                 `json:"effort"`
+                ActionType  string                 `json:"action_type"`
+                ToolName    string                 `json:"tool_name"`
+                Params      map[string]interface{} `json:"params"`
+                Dependencies []string               `json:"dependencies"`
+            } `json:"sub_steps"
         } `json:"plan"`
     }
 
@@ -107,6 +110,7 @@ Output JSON format:
             EstimatedEffort: step.Effort,
             ActionType:      ActionType(step.ActionType),
             ToolName:        step.ToolName,
+            Params:          step.Params,
         }
         subGoals = append(subGoals, sg)
 
@@ -120,6 +124,7 @@ Output JSON format:
                 EstimatedEffort: sub.Effort,
                 ActionType:      ActionType(sub.ActionType),
                 ToolName:        sub.ToolName,
+                Params:          sub.Params,
             }
             subGoals = append(subGoals, ssg)
         }

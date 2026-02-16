@@ -30,3 +30,9 @@ type SkillRepository interface {
     Store(ctx context.Context, s *Skill) error
     GetAll(ctx context.Context) ([]*Skill, error)
 }
+
+// PrinciplesModifier defines the interface for interacting with the principles system.
+// Roadmap Step 20.
+type PrinciplesModifier interface {
+    ProposeFromGoal(goalID string, pattern string) error
+}
