@@ -40,7 +40,8 @@ func (r *ReviewProcessor) ExecuteReview(activeGoal *Goal, queuedGoals []*Goal) R
     }
 
     // 4. Compare against Queue
-    activeScore, bestQueued := r.Selector.CompareForReview(activeGoal, queuedGoals)
+    // We discard the activeScore returned here because ShouldSwitchGoal recalculates it internally.
+    _, bestQueued := r.Selector.CompareForReview(activeGoal, queuedGoals)
 
     // 5. Determine Outcome
     
