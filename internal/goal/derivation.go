@@ -67,7 +67,7 @@ func (d *DerivationEngine) AnalyzeMemories(ctx context.Context, limit int) (*Der
 Rules:
 1. Goals should be autonomous improvements (e.g., "Improve French teaching skills", "Optimize web research").
 2. Ignore transient issues or one-off user requests.
-3. Output a JSON array of objects with fields: "description" (string), "rationale" (string), "type" (ACHIEVABLE|ONGOING|CAPABILITY_BUILDING).
+3. Output a JSON object containing a "goals" array. Each object in the array must have fields: "description" (string), "rationale" (string), "type" (ACHIEVABLE|ONGOING|CAPABILITY_BUILDING).
 
 Context:
 %s
