@@ -5,6 +5,8 @@ import (
     "context"
     "fmt"
     "log"
+    "regexp"
+    "strconv"
     "strings"
 )
 
@@ -26,96 +28,69 @@ func (t *TreeBuilder) DecomposeGoal(ctx context.Context, g *Goal, availableTools
     }
 
     log.Printf("[TreeBuilder] Decomposing goal: %s", g.Description)
-    
-    // Create a string of available tools for the prompt
+
+    // 1. Format tool list dynamically (No hardcoded descriptions)
     toolList := "None"
     if len(availableTools) > 0 {
         toolList = strings.Join(availableTools, ", ")
     }
 
+    // 2. S-Expression Prompt
     prompt := fmt.Sprintf(`You are a strategic planner AI. Decompose the following goal into a hierarchy of actionable sub-goals.
 
 Goal: %s
 Type: %s
 
-AVAILABLE TOOLS:
-You can ONLY use the following tools: [%s].
-- "search": Searches the web. Parameters: {"query": "search term"}.
-- "web_parse_unified": Parses a webpage. Parameters: {"url": "http://..."}.
-Do NOT use tools like "browser" or "web_search". Use ONLY "search" or "web_parse_unified".
+CONSTRAINTS:
+1. Available Tools: [%s].
+   - You MUST select 'tool_name' EXACTLY from this list. 
+   - Do NOT invent tool names.
+2. Action Types: RESEARCH, PRACTICE, EXECUTE_TOOL, REFLECT, CREATE.
+   - RESEARCH must use tool: search.
+   - EXECUTE_TOOL must use a tool from the list.
 
-Instructions:
-1. Break the goal into 3-5 high-level steps (Secondary Goals).
-2. If a step is complex, break it into 2-3 detailed tasks (Tertiary Goals).
-3. Assign a hierarchical ID to each (1, 1.1, 1.1.1).
-4. Estimate effort for each: SIMPLE, MEDIUM, COMPLEX.
-5. **Crucial**: Determine the best Action Type for each step:
-   - RESEARCH: Needs web search or information retrieval.
-   - PRACTICE: Requires simulation or self-training.
-   - EXECUTE_TOOL: Needs a specific tool execution (specify tool name and parameters).
-   - REFLECT: Needs internal analysis.
-   - CREATE: Needs generating content or code.
-6. **Parameters**: If action is EXECUTE_TOOL, provide a "params" object.
-   - For "search": Provide the "query".
-   - For "web_parse_unified": If the URL is unknown (depends on search), set "url" to "EXTRACT_FROM_PREVIOUS_STEP".
-   - Do NOT invent fake URLs.
+OUTPUT FORMAT:
+Output a valid S-expression (Lisp-style list).
+Structure:
+(plan
+  (step 
+    (id "1")
+    (title "...")
+    (description "...")
+    (effort "MEDIUM")
+    (action_type "RESEARCH")
+    (tool_name "search")
+    (params (query "..."))
+    (dependencies ())
+    (sub_steps
+      (step (id "1.1") (title "...") ... (tool_name "web_parse_unified") ...)
+    )
+  )
+)
 
-Output JSON format:
-{
-  "plan": [
-    {
-      "id": "1",
-      "title": "...",
-      "description": "...",
-      "effort": "MEDIUM",
-      "action_type": "RESEARCH",
-      "tool_name": "search",
-      "dependencies": [],
-      "sub_steps": [
-        {
-          "id": "1.1",
-          "title": "...",
-          "description": "...",
-          "effort": "SIMPLE",
-          "action_type": "EXECUTE_TOOL",
-          "tool_name": "browser",
-          "dependencies": ["1"]
-        }
-      ]
-    }
-  ]
-}`, g.Description, g.Type, toolList)
+Rules:
+- Use double quotes for strings.
+- 'params' is a list of key-value pairs, e.g., (params (url "http://...") (query "...")).
+- If a URL depends on a previous step, use "EXTRACT_FROM_PREVIOUS_STEP".
+- Every step MUST have a valid 'tool_name' if it interacts with data.
 
-    var response struct {
-        Plan []struct {
-            ID          string                 `json:"id"`
-            Title       string                 `json:"title"`
-            Description string                 `json:"description"`
-            Effort      string                 `json:"effort"`
-            ActionType  string                 `json:"action_type"`
-            ToolName    string                 `json:"tool_name"`
-            Params      map[string]interface{} `json:"params"`
-            Dependencies []string               `json:"dependencies"`
-            SubSteps    []struct {
-                ID          string                 `json:"id"`
-                Title       string                 `json:"title"`
-                Description string                 `json:"description"`
-                Effort      string                 `json:"effort"`
-                ActionType  string                 `json:"action_type"`
-                ToolName    string                 `json:"tool_name"`
-                Params      map[string]interface{} `json:"params"`
-                Dependencies []string               `json:"dependencies"`
-            } `json:"sub_steps"`
-        } `json:"plan"`
-    }
+Output ONLY the S-expression.
+`, g.Description, g.Type, toolList)
 
-    if err := t.llm.GenerateJSON(ctx, prompt, &response); err != nil {
+    responseText, err := t.llm.GenerateText(ctx, prompt)
+    if err != nil {
         return fmt.Errorf("failed to decompose goal: %w", err)
     }
 
-    // Flatten hierarchy into SubGoal list
+    // 3. Parse S-Expression
+    planSteps, err := parseSExprPlan(responseText)
+    if err != nil {
+        return fmt.Errorf("failed to parse plan S-expr: %w", err)
+    }
+
+    // 4. Flatten hierarchy into SubGoal list (Same logic as before)
     var subGoals []SubGoal
-    for _, step := range response.Plan {
+    for _, step := range planSteps {
         sg := SubGoal{
             ID:              step.ID,
             Title:           step.Title,
@@ -147,8 +122,70 @@ Output JSON format:
 
     g.SubGoals = subGoals
     g.TreeDepth = calculateDepth(subGoals)
-    
+
     log.Printf("[TreeBuilder] Created tree with %d sub-goals for goal %s", len(subGoals), g.ID)
+    return nil
+}
+
+// ReplanSubTree uses S-expr for consistency.
+func (t *TreeBuilder) ReplanSubTree(ctx context.Context, g *Goal, failedSubGoalID string, failureReason string, availableTools []string) error {
+    log.Printf("[TreeBuilder] Replanning branch starting at %s due to: %s", failedSubGoalID, failureReason)
+
+    toolList := strings.Join(availableTools, ", ")
+
+    prompt := fmt.Sprintf(`You are a strategic planner AI. A plan failed and needs adjustment.
+
+Original Goal: %s
+Failed Step: %s
+Failure Reason: %s
+
+Available Tools: [%s].
+You MUST select 'tool_name' from this list.
+
+Propose 2-3 alternative sub-goals. Output ONLY an S-expression list of steps.
+(new_plan
+  (step 
+    (id "%s_alt1")
+    (title "...")
+    (tool_name "search")
+    ...
+  )
+)
+`, g.Description, failedSubGoalID, failureReason, toolList, failedSubGoalID)
+
+    responseText, err := t.llm.GenerateText(ctx, prompt)
+    if err != nil {
+        return fmt.Errorf("failed to replan sub-tree: %w", err)
+    }
+
+    planSteps, err := parseSExprPlan(responseText)
+    if err != nil {
+        return fmt.Errorf("failed to parse replan S-expr: %w", err)
+    }
+
+    for _, np := range planSteps {
+        newSG := SubGoal{
+            ID:              np.ID,
+            Title:           np.Title,
+            Description:     np.Description,
+            Status:          SubGoalPending,
+            EstimatedEffort: np.Effort,
+            ActionType:      ActionType(np.ActionType),
+            ToolName:        np.ToolName,
+            Dependencies:    []string{failedSubGoalID},
+        }
+        g.SubGoals = append(g.SubGoals, newSG)
+    }
+
+    // Mark original failed sub-goal as FAILED
+    for i, sg := range g.SubGoals {
+        if sg.ID == failedSubGoalID {
+            g.SubGoals[i].Status = SubGoalFailed
+            g.SubGoals[i].FailureReason = failureReason
+        }
+    }
+
+    log.Printf("[TreeBuilder] Added %d alternative steps for failed branch %s", len(planSteps), failedSubGoalID)
     return nil
 }
 
@@ -163,85 +200,185 @@ func calculateDepth(sgs []SubGoal) int {
     return maxDepth
 }
 
-// ReplanSubTree regenerates a specific branch of the goal tree after failure.
-// MDD 5.1 and Roadmap Step 13.
-func (t *TreeBuilder) ReplanSubTree(ctx context.Context, g *Goal, failedSubGoalID string, failureReason string, availableTools []string) error {
-    log.Printf("[TreeBuilder] Replanning branch starting at %s due to: %s", failedSubGoalID, failureReason)
+// --- S-Expression Parser Helpers ---
 
-    // 1. Format available tools for the prompt
-    toolList := "None"
-    if len(availableTools) > 0 {
-        toolList = strings.Join(availableTools, ", ")
+type parsedStep struct {
+    ID, Title, Description, Effort, ActionType, ToolName string
+    Params                                               map[string]interface{}
+    Dependencies                                         []string
+    SubSteps                                             []parsedStep
+}
+
+// parseSExprPlan is a lightweight parser for the specific S-expr format.
+func parseSExprPlan(input string) ([]parsedStep, error) {
+    // Clean input: remove newlines/tabs for simpler regex, keep spaces for structure
+    input = strings.ReplaceAll(input, "\n", " ")
+    input = strings.ReplaceAll(input, "\t", " ")
+    
+    // Find the root (plan ...) or (new_plan ...)
+    rootNode := findNode(input, "plan")
+    if rootNode == "" {
+        rootNode = findNode(input, "new_plan")
+    }
+    if rootNode == "" {
+        return nil, fmt.Errorf("no (plan) or (new_plan) root found")
     }
 
-    // 2. Construct Prompt
-    prompt := fmt.Sprintf(`You are a strategic planner AI. A plan failed and needs adjustment.
+    return parseSteps(rootNode)
+}
 
-Original Goal: %s
-Failed Step: %s
-Failure Reason: %s
+func parseSteps(input string) ([]parsedStep, error) {
+    steps := []parsedStep{}
+    
+    // Find all (step ...) occurrences at the current depth
+    stepRegex := regexp.MustCompile(`\(step\s+`)
+    indices := stepRegex.FindAllStringIndex(input, -1)
 
-AVAILABLE TOOLS:
-You can ONLY use the following tools: [%s].
-Do NOT use tools like "browser". Use ONLY "search" or "web_parse_unified".
-
-Instructions:
-1. Analyze the failure.
-2. Propose 2-3 alternative sub-goals to bypass the failure.
-3. Output JSON format with the new sub-goals.
-
-Output JSON format:
-{
-  "new_plan": [
-    {
-      "id": "%s_alt1",
-      "title": "...",
-      "description": "...",
-      "effort": "MEDIUM",
-      "action_type": "RESEARCH"
-    }
-  ]
-}`, g.Description, failedSubGoalID, failureReason, toolList, failedSubGoalID)
-
-    var response struct {
-        NewPlan []struct {
-            ID          string `json:"id"`
-            Title       string `json:"title"`
-            Description string `json:"description"`
-            Effort      string `json:"effort"`
-            ActionType  string `json:"action_type"`
-            ToolName    string `json:"tool_name"`
-        } `json:"new_plan"`
-    }
-
-    if err := t.llm.GenerateJSON(ctx, prompt, &response); err != nil {
-        return fmt.Errorf("failed to replan sub-tree: %w", err)
-    }
-
-    // 2. Remove the failed branch (optional, or just mark failed) and append new branches.
-    // Here we append the new alternatives to the main list, marking them as alternatives.
-    for _, np := range response.NewPlan {
-        newSG := SubGoal{
-            ID:              np.ID,
-            Title:           np.Title,
-            Description:     np.Description,
-            Status:          SubGoalPending,
-            EstimatedEffort: np.Effort,
-            ActionType:      ActionType(np.ActionType),
-            ToolName:        np.ToolName,
-            Dependencies:    []string{failedSubGoalID}, // Dependency on the failed step implies "try after failure"
+    for _, idx := range indices {
+        start := idx[0]
+        // Find the matching closing paren for this step
+        end := findMatchingParen(input, start)
+        if end == -1 || end <= start {
+            continue
         }
-        g.SubGoals = append(g.SubGoals, newSG)
+        
+        stepContent := input[start : end+1]
+        step, err := parseSingleStep(stepContent)
+        if err != nil {
+            // Log error but try to continue
+            log.Printf("[TreeBuilder] Warn: failed to parse step: %v", err)
+            continue
+        }
+        steps = append(steps, step)
     }
 
-    // Mark original failed sub-goal as FAILED if not already
-    for i, sg := range g.SubGoals {
-        if sg.ID == failedSubGoalID {
-            g.SubGoals[i].Status = SubGoalFailed
-            g.SubGoals[i].FailureReason = failureReason
+    return steps, nil
+}
+
+func parseSingleStep(input string) (parsedStep, error) {
+    s := parsedStep{
+        Params: make(map[string]interface{}),
+    }
+
+    // Helper to extract field
+    extract := func(fieldName string) string {
+        node := findNode(input, fieldName)
+        if node == "" {
+            return ""
+        }
+        // Remove (fieldName and outer parens
+        // e.g., (title "My Title") -> "My Title"
+        content := strings.TrimSpace(node)
+        content = strings.TrimPrefix(content, "("+fieldName)
+        content = strings.TrimSuffix(content, ")")
+        content = strings.TrimSpace(content)
+        
+        // Strip quotes if present
+        content = strings.Trim(content, "\"")
+        return content
+    }
+
+    s.ID = extract("id")
+    s.Title = extract("title")
+    s.Description = extract("description")
+    s.Effort = extract("effort")
+    s.ActionType = extract("action_type")
+    s.ToolName = extract("tool_name")
+
+    // Parse Dependencies (list of strings)
+    depsNode := findNode(input, "dependencies")
+    if depsNode != "" {
+        // Extract content inside (dependencies ...)
+        depsContent := strings.TrimSpace(depsNode)
+        depsContent = strings.TrimPrefix(depsContent, "(dependencies")
+        depsContent = strings.TrimSuffix(depsContent, ")")
+        depsContent = strings.TrimSpace(depsContent)
+        
+        // Split by space or just extract quoted strings
+        if strings.Contains(depsContent, "\"") {
+            re := regexp.MustCompile(`"([^"]*)"`)
+            matches := re.FindAllStringSubmatch(depsContent, -1)
+            for _, m := range matches {
+                if len(m) > 1 {
+                    s.Dependencies = append(s.Dependencies, m[1])
+                }
+            }
         }
     }
 
-    log.Printf("[TreeBuilder] Added %d alternative steps for failed branch %s", len(response.NewPlan), failedSubGoalID)
-    return nil
+    // Parse Params
+    paramsNode := findNode(input, "params")
+    if paramsNode != "" {
+        // Naive param parsing: (key "value")
+        paramsContent := strings.TrimSpace(paramsNode)
+        paramsContent = strings.TrimPrefix(paramsContent, "(params")
+        paramsContent = strings.TrimSuffix(paramsContent, ")")
+        
+        // Find key-value pairs
+        re := regexp.MustCompile(`\((\w+)\s+"([^"]*)"\)`)
+        matches := re.FindAllStringSubmatch(paramsContent, -1)
+        for _, m := range matches {
+            if len(m) > 2 {
+                // Convert specific params if needed
+                if m[1] == "limit" {
+                    if i, err := strconv.Atoi(m[2]); err == nil {
+                        s.Params[m[1]] = i
+                    }
+                } else {
+                    s.Params[m[1]] = m[2]
+                }
+            }
+        }
+    }
+
+    // Parse SubSteps recursively
+    subStepsNode := findNode(input, "sub_steps")
+    if subStepsNode != "" {
+        subs, err := parseSteps(subStepsNode)
+        if err == nil {
+            s.SubSteps = subs
+        }
+    }
+
+    return s, nil
+}
+
+// findNode extracts the content of a specific named list, e.g., (title "...")
+func findNode(input, name string) string {
+    target := "(" + name
+    start := strings.Index(input, target)
+    if start == -1 {
+        return ""
+    }
+    
+    // We need the content including the name for recursive parsing, 
+    // but we rely on string index. 
+    // A simple heuristic: find the start, then match parens.
+    // However, string.Index might find a nested one first if we aren't careful.
+    // For this specific prompt output, simple search is usually sufficient.
+    
+    end := findMatchingParen(input, start)
+    if end == -1 {
+        return ""
+    }
+    return input[start : end+1]
+}
+
+// findMatchingParen finds the index of the closing ')' for the '(' at startIndex.
+func findMatchingParen(input string, startIndex int) int {
+    if startIndex >= len(input) || input[startIndex] != '(' {
+        return -1
+    }
+    balance := 1
+    for i := startIndex + 1; i < len(input); i++ {
+        if input[i] == '(' {
+            balance++
+        } else if input[i] == ')' {
+            balance--
+        }
+        if balance == 0 {
+            return i
+        }
+    }
+    return -1
 }
