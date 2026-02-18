@@ -19,18 +19,30 @@ func NewTreeBuilder(llm LLMService) *TreeBuilder {
 }
 
 // DecomposeGoal generates a sub-goal tree for the given goal.
-func (t *TreeBuilder) DecomposeGoal(ctx context.Context, g *Goal) error {
+func (t *TreeBuilder) DecomposeGoal(ctx context.Context, g *Goal, availableTools []string) error {
     if len(g.SubGoals) > 0 {
         log.Printf("[TreeBuilder] Goal %s already has sub-goals, skipping.", g.ID)
         return nil
     }
 
     log.Printf("[TreeBuilder] Decomposing goal: %s", g.Description)
+    
+    // Create a string of available tools for the prompt
+    toolList := "None"
+    if len(availableTools) > 0 {
+        toolList = strings.Join(availableTools, ", ")
+    }
 
     prompt := fmt.Sprintf(`You are a strategic planner AI. Decompose the following goal into a hierarchy of actionable sub-goals.
 
 Goal: %s
 Type: %s
+
+AVAILABLE TOOLS:
+You can ONLY use the following tools: [%s].
+- "search": Searches the web. Parameters: {"query": "search term"}.
+- "web_parse_unified": Parses a webpage. Parameters: {"url": "http://..."}.
+Do NOT use tools like "browser" or "web_search". Use ONLY "search" or "web_parse_unified".
 
 Instructions:
 1. Break the goal into 3-5 high-level steps (Secondary Goals).
@@ -43,7 +55,7 @@ Instructions:
    - EXECUTE_TOOL: Needs a specific tool execution (specify tool name and parameters).
    - REFLECT: Needs internal analysis.
    - CREATE: Needs generating content or code.
-6. **Parameters**: If action is EXECUTE_TOOL, provide a "params" object with the specific arguments needed (e.g., {"url": "http://example.com"}).
+6. **Parameters**: If action is EXECUTE_TOOL, provide a "params" object with the specific arguments needed (e.g., {"query": "search term"}).
 
 Output JSON format:
 {
@@ -69,7 +81,7 @@ Output JSON format:
       ]
     }
   ]
-}`, g.Description, g.Type)
+}`, g.Description, g.Type, toolList)
 
     var response struct {
         Plan []struct {

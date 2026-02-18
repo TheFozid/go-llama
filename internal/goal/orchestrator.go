@@ -577,7 +577,8 @@ case "DEMOTE":
         // No plan yet - invoke TreeBuilder (Intelligence Layer)
         if o.TreeBuilder != nil {
             log.Printf("[Orchestrator] No subgoals found. Invoking TreeBuilder for %s", g.ID)
-            if err := o.TreeBuilder.DecomposeGoal(ctx, g); err != nil {
+            // Pass available tools so the LLM knows what it can use
+            if err := o.TreeBuilder.DecomposeGoal(ctx, g, o.availableTools); err != nil {
                 log.Printf("[Orchestrator] ERROR: TreeBuilder failed: %v", err)
                 // If we can't plan, we can't proceed. Force review.
                 o.StateManager.Transition(g, StateReviewing)
