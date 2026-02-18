@@ -165,11 +165,13 @@ func calculateDepth(sgs []SubGoal) int {
 func (t *TreeBuilder) ReplanSubTree(ctx context.Context, g *Goal, failedSubGoalID string, failureReason string, availableTools []string) error {
     log.Printf("[TreeBuilder] Replanning branch starting at %s due to: %s", failedSubGoalID, failureReason)
 
-    // 1. Identify failed branch
-    // We need to mark the specific sub-goal as failed (if not already) and generate alternatives.
-    // For simplicity in this implementation, we will ask the LLM to generate NEW sub-goals 
-    // given the failure context.
+    // 1. Format available tools for the prompt
+    toolList := "None"
+    if len(availableTools) > 0 {
+        toolList = strings.Join(availableTools, ", ")
+    }
 
+    // 2. Construct Prompt
     prompt := fmt.Sprintf(`You are a strategic planner AI. A plan failed and needs adjustment.
 
 Original Goal: %s
@@ -178,11 +180,12 @@ Failure Reason: %s
 
 AVAILABLE TOOLS:
 You can ONLY use the following tools: [%s].
+Do NOT use tools like "browser". Use ONLY "search" or "web_parse_unified".
 
 Instructions:
 1. Analyze the failure.
 2. Propose 2-3 alternative sub-goals to bypass the failure.
-3. Output JSON format with the new sub-goals (similar to decomposition logic).
+3. Output JSON format with the new sub-goals.
 
 Output JSON format:
 {
@@ -195,7 +198,7 @@ Output JSON format:
       "action_type": "RESEARCH"
     }
   ]
-}`, g.Description, failedSubGoalID, failureReason, strings.Join(availableTools, ", "))
+}`, g.Description, failedSubGoalID, failureReason, toolList, failedSubGoalID)
 
     var response struct {
         NewPlan []struct {
