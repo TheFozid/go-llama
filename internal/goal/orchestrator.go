@@ -285,8 +285,19 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
     for _, g := range proposed {
         res := o.Validator.Validate(g, availableTools, existing)
         
+        // Step 1: Move from PROPOSED to VALIDATING
+        if g.State == StateProposed {
+            if err := o.StateManager.Transition(g, StateValidating); err != nil {
+                o.Logger.LogError("StateTransition", err, map[string]interface{}{"goal_id": g.ID})
+                continue // Skip this goal if we can't start validation
+            }
+        }
+
+        // Step 2: Run Validation
+        res := o.Validator.Validate(g, availableTools, existing)
+        
         if res.IsValid {
-            // OPTIMIZATION: Estimate TimeScore using Small LLM
+            // Step 3a: Optimization - Estimate TimeScore
             if o.TimeScorer != nil && g.TimeScore == 0 {
                 score, err := o.TimeScorer.EstimateTimeScore(ctx, g)
                 if err != nil {
@@ -294,12 +305,14 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                     g.TimeScore = 10 // Fallback
                 } else {
                     g.TimeScore = score
-                    // Log success to verify Small LLM usage
                     o.Logger.LogGoalDecision("TIME_SCORE_ESTIMATED", fmt.Sprintf("Assigned score %d", score), []string{g.ID})
                 }
             }
 
-            if err := o.StateManager.Transition(g, StateQueued); err == nil {
+            // Step 3b: Transition VALIDATING -> QUEUED
+            if err := o.StateManager.Transition(g, StateQueued); err != nil {
+                o.Logger.LogError("StateTransition", err, map[string]interface{}{"goal_id": g.ID, "target": "QUEUED"})
+            } else {
                 existing = append(existing, g)
             }
             o.Repo.Store(ctx, g)
