@@ -55,7 +55,10 @@ Instructions:
    - EXECUTE_TOOL: Needs a specific tool execution (specify tool name and parameters).
    - REFLECT: Needs internal analysis.
    - CREATE: Needs generating content or code.
-6. **Parameters**: If action is EXECUTE_TOOL, provide a "params" object with the specific arguments needed (e.g., {"query": "search term"}).
+6. **Parameters**: If action is EXECUTE_TOOL, provide a "params" object.
+   - For "search": Provide the "query".
+   - For "web_parse_unified": If the URL is unknown (depends on search), set "url" to "EXTRACT_FROM_PREVIOUS_STEP".
+   - Do NOT invent fake URLs.
 
 Output JSON format:
 {

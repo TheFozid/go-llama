@@ -656,6 +656,46 @@ case "DEMOTE":
     log.Printf("[Orchestrator] Executing SubGoal: %s", activeSG.Description)
     start := time.Now()
 
+    // --- DYNAMIC PARAMETER RESOLUTION ---
+    // If the tool requires a URL (or similar) and we have a placeholder,
+    // use the Small LLM to extract it from the previous step's output.
+    if activeSG.ActionType == ActionExecuteTool || activeSG.ActionType == ActionResearch {
+        // Check if we need to resolve a URL
+        if activeSG.ToolName == "web_parse_unified" {
+            paramURL, ok := activeSG.Params["url"].(string)
+            if !ok || paramURL == "" || paramURL == "EXTRACT_FROM_PREVIOUS_STEP" {
+                // Find the most recent completed subgoal to use as context
+                var lastResult string
+                for i := len(g.SubGoals) - 1; i >= 0; i-- {
+                    if g.SubGoals[i].Status == SubGoalCompleted && g.SubGoals[i].Outcome != "" {
+                        lastResult = g.SubGoals[i].Outcome
+                        break
+                    }
+                }
+
+                if lastResult != "" && o.SmallLLM != nil {
+                    log.Printf("[Orchestrator] Resolving dynamic parameter (URL) via Small LLM...")
+                    extractPrompt := fmt.Sprintf(`Analyze the following text and extract the most relevant URL for the objective: "%s".
+                    If no URL is found, return "NONE".
+                    
+                    Text:
+                    %s
+                    
+                    Respond ONLY with the URL string.`, activeSG.Description, lastResult)
+                    
+                    resolvedURL, err := o.SmallLLM.GenerateText(ctx, extractPrompt)
+                    if err == nil && resolvedURL != "NONE" && resolvedURL != "" {
+                        if activeSG.Params == nil { activeSG.Params = make(map[string]interface{}) }
+                        activeSG.Params["url"] = strings.TrimSpace(resolvedURL)
+                        log.Printf("[Orchestrator] Resolved URL: %s", resolvedURL)
+                    } else {
+                        log.Printf("[Orchestrator] Failed to resolve URL from previous step.")
+                    }
+                }
+            }
+        }
+    }
+
     // Handle ActionPractice separately using SmallLLM
     if activeSG.ActionType == ActionPractice {
         if o.SmallLLM != nil {
