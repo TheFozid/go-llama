@@ -211,17 +211,47 @@ type parsedStep struct {
 
 // parseSExprPlan is a lightweight parser for the specific S-expr format.
 func parseSExprPlan(input string) ([]parsedStep, error) {
-    // Clean input: remove newlines/tabs for simpler regex, keep spaces for structure
+    // 1. Clean Input: Remove markdown code blocks if present
+    input = strings.TrimSpace(input)
+    if strings.HasPrefix(input, "```") {
+        // Remove opening ```lisp or ```
+        firstNewline := strings.Index(input, "\n")
+        if firstNewline != -1 {
+            input = input[firstNewline+1:]
+        }
+        // Remove closing ```
+        if idx := strings.LastIndex(input, "```"); idx != -1 {
+            input = input[:idx]
+        }
+    }
+    
+    // Normalize whitespace for simpler parsing
     input = strings.ReplaceAll(input, "\n", " ")
     input = strings.ReplaceAll(input, "\t", " ")
+
+    // 2. Find the root container. We prefer (plan) or (new_plan), but fall back to raw steps.
+    rootNode := ""
     
-    // Find the root (plan ...) or (new_plan ...)
-    rootNode := findNode(input, "plan")
-    if rootNode == "" {
-        rootNode = findNode(input, "new_plan")
+    // Try to find explicit roots first
+    if idx := strings.Index(input, "(plan"); idx != -1 {
+        rootNode = findNode(input, "plan")
     }
     if rootNode == "" {
-        return nil, fmt.Errorf("no (plan) or (new_plan) root found")
+        if idx := strings.Index(input, "(new_plan"); idx != -1 {
+            rootNode = findNode(input, "new_plan")
+        }
+    }
+    
+    // 3. Fallback: If no root found, treat the whole input as a container of steps
+    // This handles cases where LLM outputs just (step ...) (step ...)
+    if rootNode == "" {
+        // If we find (step, assume the input is a list of steps
+        if strings.Contains(input, "(step") {
+            // We create a fake root context for parseSteps to work on the whole string
+            rootNode = input 
+        } else {
+            return nil, fmt.Errorf("no valid S-expression structure found")
+        }
     }
 
     return parseSteps(rootNode)
@@ -230,7 +260,7 @@ func parseSExprPlan(input string) ([]parsedStep, error) {
 func parseSteps(input string) ([]parsedStep, error) {
     steps := []parsedStep{}
     
-    // Find all (step ...) occurrences at the current depth
+    // Find all (step ...) occurrences
     stepRegex := regexp.MustCompile(`\(step\s+`)
     indices := stepRegex.FindAllStringIndex(input, -1)
 
@@ -245,7 +275,6 @@ func parseSteps(input string) ([]parsedStep, error) {
         stepContent := input[start : end+1]
         step, err := parseSingleStep(stepContent)
         if err != nil {
-            // Log error but try to continue
             log.Printf("[TreeBuilder] Warn: failed to parse step: %v", err)
             continue
         }
@@ -288,13 +317,12 @@ func parseSingleStep(input string) (parsedStep, error) {
     // Parse Dependencies (list of strings)
     depsNode := findNode(input, "dependencies")
     if depsNode != "" {
-        // Extract content inside (dependencies ...)
         depsContent := strings.TrimSpace(depsNode)
         depsContent = strings.TrimPrefix(depsContent, "(dependencies")
         depsContent = strings.TrimSuffix(depsContent, ")")
         depsContent = strings.TrimSpace(depsContent)
         
-        // Split by space or just extract quoted strings
+        // Extract quoted strings
         if strings.Contains(depsContent, "\"") {
             re := regexp.MustCompile(`"([^"]*)"`)
             matches := re.FindAllStringSubmatch(depsContent, -1)
@@ -309,17 +337,15 @@ func parseSingleStep(input string) (parsedStep, error) {
     // Parse Params
     paramsNode := findNode(input, "params")
     if paramsNode != "" {
-        // Naive param parsing: (key "value")
         paramsContent := strings.TrimSpace(paramsNode)
         paramsContent = strings.TrimPrefix(paramsContent, "(params")
         paramsContent = strings.TrimSuffix(paramsContent, ")")
         
-        // Find key-value pairs
+        // Naive param parsing: (key "value")
         re := regexp.MustCompile(`\((\w+)\s+"([^"]*)"\)`)
         matches := re.FindAllStringSubmatch(paramsContent, -1)
         for _, m := range matches {
             if len(m) > 2 {
-                // Convert specific params if needed
                 if m[1] == "limit" {
                     if i, err := strconv.Atoi(m[2]); err == nil {
                         s.Params[m[1]] = i
@@ -350,12 +376,6 @@ func findNode(input, name string) string {
     if start == -1 {
         return ""
     }
-    
-    // We need the content including the name for recursive parsing, 
-    // but we rely on string index. 
-    // A simple heuristic: find the start, then match parens.
-    // However, string.Index might find a nested one first if we aren't careful.
-    // For this specific prompt output, simple search is usually sufficient.
     
     end := findMatchingParen(input, start)
     if end == -1 {
