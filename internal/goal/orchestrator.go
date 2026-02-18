@@ -283,8 +283,6 @@ func (o *Orchestrator) ExecuteCycle(ctx context.Context) error {
 // Refactored to accept pre-fetched lists and tools to optimize DB access
 func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*Goal, existing []*Goal, availableTools []string) error {
     for _, g := range proposed {
-        res := o.Validator.Validate(g, availableTools, existing)
-        
         // Step 1: Move from PROPOSED to VALIDATING
         if g.State == StateProposed {
             if err := o.StateManager.Transition(g, StateValidating); err != nil {
