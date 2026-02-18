@@ -101,7 +101,7 @@ func NewOrchestrator(
         Reviewer:         reviewer,
         Calculator:       calc,
         Monitor:          monitor,
-        Archive:          NewArchiveManager(repo),
+		Archive:          NewArchiveManager(repo, embedder),
         DerivationEngine: derivationEngine,
         TreeBuilder:      treeBuilder,
         EdgeCaseHandler:  NewEdgeCaseHandler(repo),
@@ -295,6 +295,46 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
         res := o.Validator.Validate(g, availableTools, existing)
         
         if res.IsValid {
+            // CRITICAL FIX: Handle PARENT_DEMOTION first.
+            // This action is valid, but requires absorbing an existing goal before queuing.
+            if res.Action == "PARENT_DEMOTION" {
+                if res.TargetGoalID == "" {
+                    o.Logger.LogError("ParentDemotionLogic", fmt.Errorf("missing TargetGoalID"), nil)
+                } else {
+                    // 1. Transition and Store the NEW (superior) goal
+                    if err := o.StateManager.Transition(g, StateQueued); err != nil {
+                        o.Logger.LogError("StateTransition", err, map[string]interface{}{"goal_id": g.ID})
+                    } else {
+                        // Estimate time score
+                        if o.TimeScorer != nil && g.TimeScore == 0 {
+                            score, _ := o.TimeScorer.EstimateTimeScore(ctx, g)
+                            g.TimeScore = score
+                        }
+                        o.Repo.Store(ctx, g)
+                    }
+
+                    // 2. Demote the EXISTING goal to a sub-goal of the new one
+                    existingGoal, err := o.Repo.Get(ctx, res.TargetGoalID)
+                    if err == nil {
+                        newSub := SubGoal{
+                            ID:          fmt.Sprintf("%d", len(g.SubGoals)+1),
+                            Title:       existingGoal.Title,
+                            Description: existingGoal.Description,
+                            Status:      SubGoalPending,
+                        }
+                        g.SubGoals = append(g.SubGoals, newSub)
+                        
+                        // Archive the old goal
+                        o.StateManager.Transition(existingGoal, StateArchived)
+                        existingGoal.ArchiveReason = ArchiveDuplicate
+                        o.Repo.Store(ctx, existingGoal)
+                        o.Repo.Store(ctx, g) // Save updated parent
+                        o.Logger.LogGoalDecision("PARENT_DEMOTION", "Demoted "+res.TargetGoalID+" to sub-goal of "+g.ID, nil)
+                    }
+                }
+                continue // Skip standard processing below
+            }
+
             // Step 3a: Optimization - Estimate TimeScore
             if o.TimeScorer != nil && g.TimeScore == 0 {
                 score, err := o.TimeScorer.EstimateTimeScore(ctx, g)

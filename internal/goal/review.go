@@ -60,6 +60,15 @@ func (r *ReviewProcessor) ExecuteReview(activeGoal *Goal, queuedGoals []*Goal) R
 
     // Case: Stagnation detected
     if isStagnant {
+        // SAFETY CHECK: Prevent infinite replanning.
+        // If we have replanned more than 3 times recently, Archive it.
+        if activeGoal.PlanVersion > 3 { // Arbitrary threshold
+             return ReviewOutcome{
+                Decision: "ARCHIVE",
+                Reason:   "Stagnation persists despite multiple replanning attempts.",
+            }
+        }
+        
         return ReviewOutcome{
             Decision: "REPLAN",
             Reason:   "Stagnation detected; strategy needs revision.",

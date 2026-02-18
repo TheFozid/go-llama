@@ -31,8 +31,10 @@ func (c *Calculator) ApplyDecay(g *Goal, cyclesElapsed int) {
     }
 
     newPriority := float64(g.CurrentPriority) - decayAmount
-    if newPriority < 10 {
-        newPriority = 10 // Floor for decay before archival
+    // FIX: Allow priority to drop below 10 so Orchestrator can archive it.
+    // We clamp at 0 strictly to avoid negative integers.
+    if newPriority < 0 {
+        newPriority = 0
     }
     g.CurrentPriority = int(newPriority)
 }
