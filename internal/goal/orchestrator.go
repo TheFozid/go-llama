@@ -318,7 +318,6 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
             // Handle specific validation actions
             switch res.Action {
             case "MERGE":
-                // Handle merging with existing goal
                 if res.TargetGoalID == "" {
                     o.Logger.LogError("MergeLogic", fmt.Errorf("missing TargetGoalID in MERGE result"), nil)
                 } else {
@@ -346,74 +345,69 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                 o.StateManager.Transition(g, StateArchived)
                 g.ArchiveReason = ArchiveDuplicate
                 o.Repo.Store(ctx, g)
-			}
-                
+
             case "SUBSUME":
-                // MDD 9.2: Add as sub-goal to existing parent.
                 if res.TargetGoalID == "" {
                     o.Logger.LogError("SubsumeLogic", fmt.Errorf("missing TargetGoalID in SUBSUME result"), nil)
-                    break
-                }
-                
-                parentGoal, err := o.Repo.Get(ctx, res.TargetGoalID)
-                if err != nil {
-                    o.Logger.LogError("SubsumeParentFetch", err, map[string]interface{}{"parent_id": res.TargetGoalID})
-                    // Fallback: Archive the proposal to avoid orphan goals
-                    o.StateManager.Transition(g, StateArchived)
-                    g.ArchiveReason = ArchiveValidationFailed
                 } else {
-                    // Create new SubGoal struct
-                    newSubGoal := SubGoal{
-                        ID:          fmt.Sprintf("%d.%d", len(parentGoal.SubGoals)+1, 0),
-                        Title:       g.Title,
-                        Description: g.Description,
-                        Status:      SubGoalPending,
-                    }
-                    
-                    parentGoal.SubGoals = append(parentGoal.SubGoals, newSubGoal)
-                    
-                    // Save updated parent
-                    if err := o.Repo.Store(ctx, parentGoal); err != nil {
-                        o.Logger.LogError("SubsumeStore", err, nil)
+                    parentGoal, err := o.Repo.Get(ctx, res.TargetGoalID)
+                    if err != nil {
+                        o.Logger.LogError("SubsumeParentFetch", err, map[string]interface{}{"parent_id": res.TargetGoalID})
+                        // Fallback: Archive the proposal to avoid orphan goals
+                        o.StateManager.Transition(g, StateArchived)
+                        g.ArchiveReason = ArchiveValidationFailed
                     } else {
-                        o.Logger.LogGoalDecision("SUBSUME_SUCCESS", "Added as sub-goal to "+res.TargetGoalID, []string{g.ID})
+                        // Create new SubGoal struct
+                        newSubGoal := SubGoal{
+                            ID:          fmt.Sprintf("%d.%d", len(parentGoal.SubGoals)+1, 0),
+                            Title:       g.Title,
+                            Description: g.Description,
+                            Status:      SubGoalPending,
+                        }
+                        
+                        parentGoal.SubGoals = append(parentGoal.SubGoals, newSubGoal)
+                        
+                        // Save updated parent
+                        if err := o.Repo.Store(ctx, parentGoal); err != nil {
+                            o.Logger.LogError("SubsumeStore", err, nil)
+                        } else {
+                            o.Logger.LogGoalDecision("SUBSUME_SUCCESS", "Added as sub-goal to "+res.TargetGoalID, []string{g.ID})
+                        }
+                        
+                        // Archive the proposal
+                        o.StateManager.Transition(g, StateArchived)
+                        g.ArchiveReason = ArchiveDuplicate
                     }
-                    
-                    // Archive the proposal
-                    o.StateManager.Transition(g, StateArchived)
-                    g.ArchiveReason = ArchiveDuplicate
                 }
                 o.Repo.Store(ctx, g)
 
             case "PARENT_DEMOTION":
-                // MDD 9.2: Proposed goal absorbs existing goal.
                 if res.TargetGoalID == "" {
                     o.Logger.LogError("ParentDemotionLogic", fmt.Errorf("missing TargetGoalID in PARENT_DEMOTION result"), nil)
-                    break
-                }
-
-                // 1. Create the new goal (it's valid).
-                g.State = StateQueued
-                o.Repo.Store(ctx, g)
-                
-                // 2. Find the existing goal and demote it.
-                existingGoal, err := o.Repo.Get(ctx, res.TargetGoalID)
-                if err == nil {
-                    // Demote existing goal to a sub-goal of the new goal
-                    newSub := SubGoal{
-                        ID:          fmt.Sprintf("%d", len(g.SubGoals)+1),
-                        Title:       existingGoal.Title,
-                        Description: existingGoal.Description,
-                        Status:      SubGoalPending,
-                    }
-                    g.SubGoals = append(g.SubGoals, newSub)
+                } else {
+                    // 1. Create the new goal (it's valid).
+                    g.State = StateQueued
+                    o.Repo.Store(ctx, g)
                     
-                    // Archive the old goal (now absorbed)
-                    o.StateManager.Transition(existingGoal, StateArchived)
-                    existingGoal.ArchiveReason = ArchiveDuplicate // Absorbed
-                    o.Repo.Store(ctx, existingGoal)
-                    o.Repo.Store(ctx, g) // Update new parent
-                    o.Logger.LogGoalDecision("PARENT_DEMOTION", "Demoted "+res.TargetGoalID+" to sub-goal of "+g.ID, nil)
+                    // 2. Find the existing goal and demote it.
+                    existingGoal, err := o.Repo.Get(ctx, res.TargetGoalID)
+                    if err == nil {
+                        // Demote existing goal to a sub-goal of the new goal
+                        newSub := SubGoal{
+                            ID:          fmt.Sprintf("%d", len(g.SubGoals)+1),
+                            Title:       existingGoal.Title,
+                            Description: existingGoal.Description,
+                            Status:      SubGoalPending,
+                        }
+                        g.SubGoals = append(g.SubGoals, newSub)
+                        
+                        // Archive the old goal (now absorbed)
+                        o.StateManager.Transition(existingGoal, StateArchived)
+                        existingGoal.ArchiveReason = ArchiveDuplicate // Absorbed
+                        o.Repo.Store(ctx, existingGoal)
+                        o.Repo.Store(ctx, g) // Update new parent
+                        o.Logger.LogGoalDecision("PARENT_DEMOTION", "Demoted "+res.TargetGoalID+" to sub-goal of "+g.ID, nil)
+                    }
                 }
 
             default: // "ARCHIVE" or other failures
