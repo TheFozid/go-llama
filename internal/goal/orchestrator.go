@@ -341,7 +341,7 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                         o.Logger.LogGoalDecision("MERGE", "Strengthened existing goal: "+res.TargetGoalID, nil)
                     }
                 }
-                
+}                
                 // Archive the new proposal as duplicate
                 o.StateManager.Transition(g, StateArchived)
                 g.ArchiveReason = ArchiveDuplicate
