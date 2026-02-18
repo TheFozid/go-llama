@@ -318,15 +318,21 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
             // Handle specific validation actions
             switch res.Action {
             case "MERGE":
-                // Strengthen the existing goal
-                for _, eg := range existing {
-                    if strings.Contains(res.Reason, eg.ID) {
-                        o.Calculator.ApplyStrengthening(eg)
-                        o.Repo.Store(ctx, eg)
-                        o.Logger.LogGoalDecision("MERGE", "Strengthened existing goal: "+eg.ID, nil)
-                        break
+                // Strengthen the existing goal using the ID from validation result
+                if res.TargetGoalID == "" {
+                    o.Logger.LogError("MergeLogic", fmt.Errorf("missing TargetGoalID in MERGE result"), nil)
+                } else {
+                    // Fetch the target goal to strengthen it
+                    targetGoal, err := o.Repo.Get(ctx, res.TargetGoalID)
+                    if err != nil {
+                        o.Logger.LogError("MergeTargetFetch", err, map[string]interface{}{"target_id": res.TargetGoalID})
+                    } else {
+                        o.Calculator.ApplyStrengthening(targetGoal)
+                        o.Repo.Store(ctx, targetGoal)
+                        o.Logger.LogGoalDecision("MERGE", "Strengthened existing goal: "+res.TargetGoalID, nil)
                     }
                 }
+                
                 // Archive the new proposal as duplicate
                 o.StateManager.Transition(g, StateArchived)
                 g.ArchiveReason = ArchiveDuplicate
