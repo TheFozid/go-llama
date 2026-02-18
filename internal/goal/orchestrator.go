@@ -659,6 +659,34 @@ case "DEMOTE":
     log.Printf("[Orchestrator] Executing SubGoal: %s", activeSG.Description)
     start := time.Now()
 
+    // --- DEFENSIVE TOOL CORRECTION ---
+    // LLMs may hallucinate tool names. We correct common hallucinations to valid tools.
+    toolName := activeSG.ToolName
+    if toolName == "browser" || toolName == "web_browser" || toolName == "open_browser" {
+        log.Printf("[Orchestrator] Correcting hallucinated tool '%s' to 'search'.", toolName)
+        toolName = "search"
+        activeSG.ToolName = "search" // Update the goal object for consistency
+    }
+    
+    // Ensure the tool actually exists in our registry
+    toolValid := false
+    for _, t := range o.availableTools {
+        if t == toolName {
+            toolValid = true
+            break
+        }
+    }
+    
+    if !toolValid {
+        // If tool is invalid and we can't correct it, we fail early with a clear message
+        errMsg := fmt.Sprintf("Invalid tool specified: %s. Available: %v", toolName, o.availableTools)
+        activeSG.Status = SubGoalFailed
+        activeSG.FailureReason = errMsg
+        o.Logger.LogSubGoalExecution(activeSG.ID, "FAILED: "+errMsg, 0)
+        o.Repo.Store(ctx, g)
+        return nil
+    }
+
     // --- DYNAMIC PARAMETER RESOLUTION (Heuristic: Search -> Parse) ---
     // If we are parsing a URL, check if the previous step was a Search.
     // If so, we ALWAYS prefer the URL from the search results over the planner's hallucination.
