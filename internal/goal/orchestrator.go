@@ -341,12 +341,12 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                         o.Logger.LogGoalDecision("MERGE", "Strengthened existing goal: "+res.TargetGoalID, nil)
                     }
                 }
-}                
+                
                 // Archive the new proposal as duplicate
                 o.StateManager.Transition(g, StateArchived)
                 g.ArchiveReason = ArchiveDuplicate
                 o.Repo.Store(ctx, g)
-                }
+                }}
                 
             case "SUBSUME":
                 // MDD 9.2: Add as sub-goal to existing parent.
