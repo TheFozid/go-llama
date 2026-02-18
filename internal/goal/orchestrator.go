@@ -659,42 +659,46 @@ case "DEMOTE":
     log.Printf("[Orchestrator] Executing SubGoal: %s", activeSG.Description)
     start := time.Now()
 
-    // --- DYNAMIC PARAMETER RESOLUTION ---
-    // If the tool requires a URL (or similar) and we have a placeholder,
-    // use the Small LLM to extract it from the previous step's output.
-    if activeSG.ActionType == ActionExecuteTool || activeSG.ActionType == ActionResearch {
-        // Check if we need to resolve a URL
-        if activeSG.ToolName == "web_parse_unified" {
-            paramURL, ok := activeSG.Params["url"].(string)
-            if !ok || paramURL == "" || paramURL == "EXTRACT_FROM_PREVIOUS_STEP" {
-                // Find the most recent completed subgoal to use as context
-                var lastResult string
-                for i := len(g.SubGoals) - 1; i >= 0; i-- {
-                    if g.SubGoals[i].Status == SubGoalCompleted && g.SubGoals[i].Outcome != "" {
-                        lastResult = g.SubGoals[i].Outcome
-                        break
-                    }
-                }
+    // --- DYNAMIC PARAMETER RESOLUTION (Heuristic: Search -> Parse) ---
+    // If we are parsing a URL, check if the previous step was a Search.
+    // If so, we ALWAYS prefer the URL from the search results over the planner's hallucination.
+    if activeSG.ToolName == "web_parse_unified" {
+        // Find the most recent completed subgoal
+        var lastResult string
+        var lastSubGoal *SubGoal
+        for i := len(g.SubGoals) - 1; i >= 0; i-- {
+            if g.SubGoals[i].Status == SubGoalCompleted && g.SubGoals[i].Outcome != "" {
+                lastResult = g.SubGoals[i].Outcome
+                lastSubGoal = &g.SubGoals[i]
+                break
+            }
+        }
 
-                if lastResult != "" && o.SmallLLM != nil {
-                    log.Printf("[Orchestrator] Resolving dynamic parameter (URL) via Small LLM...")
-                    extractPrompt := fmt.Sprintf(`Analyze the following text and extract the most relevant URL for the objective: "%s".
-                    If no URL is found, return "NONE".
-                    
-                    Text:
-                    %s
-                    
-                    Respond ONLY with the URL string.`, activeSG.Description, lastResult)
-                    
-                    resolvedURL, err := o.SmallLLM.GenerateText(ctx, extractPrompt)
-                    if err == nil && resolvedURL != "NONE" && resolvedURL != "" {
-                        if activeSG.Params == nil { activeSG.Params = make(map[string]interface{}) }
-                        activeSG.Params["url"] = strings.TrimSpace(resolvedURL)
-                        log.Printf("[Orchestrator] Resolved URL: %s", resolvedURL)
-                    } else {
-                        log.Printf("[Orchestrator] Failed to resolve URL from previous step.")
-                    }
-                }
+        // Heuristic: If previous step used 'search' tool, we extract the URL from those results
+        if lastSubGoal != nil && lastSubGoal.ToolName == "search" && lastResult != "" && o.SmallLLM != nil {
+            log.Printf("[Orchestrator] Detecting Search->Parse chain. Validating URL via Small LLM...")
+            
+            // Truncate context to prevent overloading small LLM
+            contextContent := lastResult
+            if len(contextContent) > 2000 {
+                contextContent = contextContent[:2000] + "..."
+            }
+
+            extractPrompt := fmt.Sprintf(`Analyze the search results below. Extract the single most relevant URL that matches the objective: "%s".
+            If the results are irrelevant or no good URL exists, return "NONE".
+            
+            Search Results:
+            %s
+            
+            Respond ONLY with the URL string.`, activeSG.Description, contextContent)
+
+            resolvedURL, err := o.SmallLLM.GenerateText(ctx, extractPrompt)
+            if err == nil && resolvedURL != "NONE" && resolvedURL != "" {
+                if activeSG.Params == nil { activeSG.Params = make(map[string]interface{}) }
+                activeSG.Params["url"] = strings.TrimSpace(resolvedURL)
+                log.Printf("[Orchestrator] Injected URL from search results: %s", resolvedURL)
+            } else {
+                log.Printf("[Orchestrator] URL extraction failed or not found in previous search. Using plan default (if any).")
             }
         }
     }
