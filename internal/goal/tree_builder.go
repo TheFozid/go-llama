@@ -162,7 +162,7 @@ func calculateDepth(sgs []SubGoal) int {
 
 // ReplanSubTree regenerates a specific branch of the goal tree after failure.
 // MDD 5.1 and Roadmap Step 13.
-func (t *TreeBuilder) ReplanSubTree(ctx context.Context, g *Goal, failedSubGoalID string, failureReason string) error {
+func (t *TreeBuilder) ReplanSubTree(ctx context.Context, g *Goal, failedSubGoalID string, failureReason string, availableTools []string) error {
     log.Printf("[TreeBuilder] Replanning branch starting at %s due to: %s", failedSubGoalID, failureReason)
 
     // 1. Identify failed branch
@@ -175,6 +175,9 @@ func (t *TreeBuilder) ReplanSubTree(ctx context.Context, g *Goal, failedSubGoalI
 Original Goal: %s
 Failed Step: %s
 Failure Reason: %s
+
+AVAILABLE TOOLS:
+You can ONLY use the following tools: [%s].
 
 Instructions:
 1. Analyze the failure.
@@ -192,7 +195,7 @@ Output JSON format:
       "action_type": "RESEARCH"
     }
   ]
-}`, g.Description, failedSubGoalID, failureReason, failedSubGoalID)
+}`, g.Description, failedSubGoalID, failureReason, strings.Join(availableTools, ", "))
 
     var response struct {
         NewPlan []struct {

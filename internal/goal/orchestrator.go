@@ -556,8 +556,28 @@ case "DEMOTE":
             // Activate next is handled in next cycle selection
         case "REPLAN":
             o.StateManager.Transition(g, StateActive)
-            // Clear sub-goals for replan
-            g.SubGoals = []SubGoal{}
+            
+            // MDD COMPLIANCE: Use TreeBuilder to replan specific branch rather than wiping all progress.
+            // Find the failed subgoal ID to pass to the builder.
+            var failedID string
+            for _, sg := range g.SubGoals {
+                if sg.Status == SubGoalFailed {
+                    failedID = sg.ID
+                    break
+                }
+            }
+
+            if o.TreeBuilder != nil && failedID != "" {
+                if err := o.TreeBuilder.ReplanSubTree(ctx, g, failedID, outcome.Reason, o.availableTools); err != nil {
+                    o.Logger.LogError("ReplanSubTree", err, map[string]interface{}{"goal_id": g.ID})
+                    // Fallback: If replan fails, clear the tree to force fresh decomposition next cycle
+                    g.SubGoals = []SubGoal{}
+                }
+            } else {
+                // Fallback if no failed ID found: Clear sub-goals for full replan
+                g.SubGoals = []SubGoal{}
+            }
+            
             // Analyze failure for principle modification (Step 20)
             if o.Principles != nil {
                 go o.Principles.ProposeFromGoal(g.ID, "failure_pattern: "+outcome.Reason)
