@@ -346,7 +346,6 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                 o.StateManager.Transition(g, StateArchived)
                 g.ArchiveReason = ArchiveDuplicate
                 o.Repo.Store(ctx, g)
-                    }
                 }
                 
                 // Archive the new proposal as duplicate
