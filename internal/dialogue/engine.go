@@ -164,6 +164,7 @@ skillRepo, err := memory.NewSkillRepository(qdrantClient, "skills", adapter)
         adapter, 
         timeScoreCalculator, 
         smallLLMAdapter,
+        mainLLMAdapter, // ADDED: Pass the main LLM for complex tasks
     )
     
     // Post-Initialization Wiring

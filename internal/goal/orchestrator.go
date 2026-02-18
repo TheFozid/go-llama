@@ -29,8 +29,9 @@ type Orchestrator struct {
     Calculator   *Calculator
     Monitor      *ProgressMonitor
     Archive      *ArchiveManager
-    TimeScorer   *LLMEnhancedCalculator // ADDED: For Small LLM Time Estimation
-    SmallLLM     LLMService             // ADDED: For Practice Simulations
+    TimeScorer   *LLMEnhancedCalculator // For Small LLM Time Estimation
+    SmallLLM     LLMService             // For fast tasks
+    MainLLM      LLMService             // For complex tasks (Practice, Derivation, Tree Building)
 
     // Intelligence (Milestone 3)
     DerivationEngine *DerivationEngine
@@ -77,8 +78,9 @@ func NewOrchestrator(
     derivationEngine *DerivationEngine,
     treeBuilder *TreeBuilder,
     embedder Embedder,
-    timeScorer *LLMEnhancedCalculator, // ADDED
-    smallLLM LLMService,               // ADDED
+    timeScorer *LLMEnhancedCalculator,
+    smallLLM LLMService,
+    mainLLM LLMService, // ADDED: For complex reasoning tasks
 ) *Orchestrator {
     // Initialize Logger (Step 23)
     logger := NewGoalSystemLogger()
@@ -101,13 +103,14 @@ func NewOrchestrator(
         Reviewer:         reviewer,
         Calculator:       calc,
         Monitor:          monitor,
-		Archive:          NewArchiveManager(repo, embedder),
+        Archive:          NewArchiveManager(repo, embedder),
         DerivationEngine: derivationEngine,
         TreeBuilder:      treeBuilder,
         EdgeCaseHandler:  NewEdgeCaseHandler(repo),
         Logger:           logger,
-        TimeScorer:       timeScorer, // ADDED
-        SmallLLM:         smallLLM,   // ADDED
+        TimeScorer:       timeScorer,
+        SmallLLM:         smallLLM,
+        MainLLM:          mainLLM, // ADDED
     }
 }
 
@@ -696,14 +699,15 @@ case "DEMOTE":
         }
     }
 
-    // Handle ActionPractice separately using SmallLLM
+    // Handle ActionPractice separately using MainLLM (Requires complex reasoning)
     if activeSG.ActionType == ActionPractice {
-        if o.SmallLLM != nil {
-            log.Printf("[Orchestrator] Running Practice Simulation via Small LLM")
+        // Use MainLLM for Practice because SmallLLM (350m) cannot handle the complex JSON structure reliably
+        if o.MainLLM != nil {
+            log.Printf("[Orchestrator] Running Practice Simulation via Main LLM")
             simEnv := NewPracticeEnvironment()
             
             // Run simulation (objective is the sub-goal description)
-            result, err := simEnv.RunSimulation(ctx, o.SmallLLM, "Autonomous Practice", activeSG.Description)
+            result, err := simEnv.RunSimulation(ctx, o.MainLLM, "Autonomous Practice", activeSG.Description)
             duration := time.Since(start)
 
             if err != nil {
