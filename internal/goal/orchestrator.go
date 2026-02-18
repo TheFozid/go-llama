@@ -318,18 +318,34 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
             // Handle specific validation actions
             switch res.Action {
             case "MERGE":
-                // Strengthen the existing goal using the ID from validation result
+                // Handle merging with existing goal
                 if res.TargetGoalID == "" {
                     o.Logger.LogError("MergeLogic", fmt.Errorf("missing TargetGoalID in MERGE result"), nil)
                 } else {
-                    // Fetch the target goal to strengthen it
                     targetGoal, err := o.Repo.Get(ctx, res.TargetGoalID)
                     if err != nil {
                         o.Logger.LogError("MergeTargetFetch", err, map[string]interface{}{"target_id": res.TargetGoalID})
                     } else {
                         o.Calculator.ApplyStrengthening(targetGoal)
+                        
+                        // CRITICAL FIX: If the target goal is ARCHIVED, Revive it to QUEUED
+                        if targetGoal.State == StateArchived {
+                            if err := o.StateManager.Transition(targetGoal, StateQueued); err != nil {
+                                o.Logger.LogError("ReviveFailed", err, map[string]interface{}{"goal_id": targetGoal.ID})
+                            } else {
+                                targetGoal.ArchiveReason = "" // Clear archive reason
+                                o.Logger.LogGoalDecision("GOAL_REVIVED", "Revived archived goal via merge: "+targetGoal.ID, nil)
+                            }
+                        }
                         o.Repo.Store(ctx, targetGoal)
                         o.Logger.LogGoalDecision("MERGE", "Strengthened existing goal: "+res.TargetGoalID, nil)
+                    }
+                }
+                
+                // Archive the new proposal as duplicate
+                o.StateManager.Transition(g, StateArchived)
+                g.ArchiveReason = ArchiveDuplicate
+                o.Repo.Store(ctx, g)
                     }
                 }
                 
