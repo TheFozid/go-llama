@@ -318,6 +318,31 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
             // Handle specific validation actions
             switch res.Action {
             case "MERGE":
+                // DEFENSIVE CHECK: Handle self-match bug (Goal finds itself in DB)
+                if res.TargetGoalID == g.ID {
+                    o.Logger.LogGoalDecision("SELF_MERGE_IGNORED", "Goal matched itself in duplicate check. Proceeding as valid.", []string{g.ID})
+                    
+                    // Treat as a Valid, Unique goal
+                    if o.TimeScorer != nil && g.TimeScore == 0 {
+                        score, err := o.TimeScorer.EstimateTimeScore(ctx, g)
+                        if err != nil {
+                            g.TimeScore = 10 // Fallback
+                        } else {
+                            g.TimeScore = score
+                            o.Logger.LogGoalDecision("TIME_SCORE_ESTIMATED", fmt.Sprintf("Assigned score %d", score), []string{g.ID})
+                        }
+                    }
+
+                    if err := o.StateManager.Transition(g, StateQueued); err != nil {
+                        o.Logger.LogError("StateTransition", err, map[string]interface{}{"goal_id": g.ID, "target": "QUEUED"})
+                    } else {
+                        o.Logger.LogGoalDecision("GOAL_ACTIVATED", "Self-matching goal moved to QUEUED", []string{g.ID})
+                    }
+                    o.Repo.Store(ctx, g)
+                    continue // Skip the rest of the merge logic (don't archive!)
+                }
+
+                // STANDARD MERGE LOGIC
                 if res.TargetGoalID == "" {
                     o.Logger.LogError("MergeLogic", fmt.Errorf("missing TargetGoalID in MERGE result"), nil)
                 } else {
@@ -327,7 +352,7 @@ func (o *Orchestrator) processValidationQueue(ctx context.Context, proposed []*G
                     } else {
                         o.Calculator.ApplyStrengthening(targetGoal)
                         
-                        // CRITICAL FIX: If the target goal is ARCHIVED, Revive it to QUEUED
+                        // REVIVE: If the target goal is ARCHIVED, Revive it to QUEUED
                         if targetGoal.State == StateArchived {
                             if err := o.StateManager.Transition(targetGoal, StateQueued); err != nil {
                                 o.Logger.LogError("ReviveFailed", err, map[string]interface{}{"goal_id": targetGoal.ID})

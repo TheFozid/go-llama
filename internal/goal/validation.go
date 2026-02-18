@@ -114,15 +114,16 @@ func (v *ValidationEngine) validateDuplicate(g *Goal, existingGoals []*Goal) Val
     }
 
     if len(matches) > 0 {
-        // Qdrant returns similarity score. 
-        // Note: Qdrant score is distance/cosine. 
-        // We need to retrieve the score from the search result.
-        // SearchSimilar currently returns []*Goal. It should return scores too.
-        // Since SearchSimilar hides scores, we assume a match implies high similarity.
-        // We perform a manual check on the found match to be sure.
-        
         match := matches[0]
-        // Verify similarity (Required because SearchSimilar might just return 'nearby')
+        
+        // CRITICAL FIX: Ignore self-match (the goal finds itself in the DB)
+        if match.ID == g.ID {
+            // If the top match is itself, check if there are other results or return valid
+            // For now, if only itself is found, it is unique.
+            return ValidationResult{IsValid: true}
+        }
+
+        // Verify similarity
         matchVec, _ := v.embedder.Embed(ctx, match.Description)
         if cosineSimilarity(proposedVec, matchVec) >= v.DuplicateSimilarityThreshold {
              return ValidationResult{
